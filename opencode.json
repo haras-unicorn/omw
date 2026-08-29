@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "README.md",
+    "CONTRIBUTING.md",
+    "flake.nix",
+    "src/omw/src/main.rs",
+    "src/omw/src/lib.rs",
+    "src/omw/src/nix.rs"
+  ]
+}

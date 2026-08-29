@@ -1,0 +1,33 @@
+name: release
+on:
+  push:
+    tags:
+      - "v[0-9]+.*"
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64-linux
+            runner: ubuntu-latest
+          - arch: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v15
+        with:
+          name: haras
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+      - run: |
+          nix build --show-trace .#unwrapped
+          mkdir -p release
+          cp -L result/bin/omw release/omw-${{ matrix.arch }}
+          tar -czf omw-${{ matrix.arch }}.tar.gz -C release omw-${{ matrix.arch }}
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" omw-${{ matrix.arch }}.tar.gz --clobber
