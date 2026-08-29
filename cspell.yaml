@@ -12,3 +12,17 @@ ignoreWords:
   - pkgs
   - cachix
   - substituters
+  - rhai
+  - bindgen
+  - wasip
+  - mdbook
+  - kanal
+  - nixfmt
+  - clippy
+  - taplo
+  - wasmtime
+  - wasi
+  - strftime
+  - envsubst
+  - rmcp
+  - modelcontextprotocol

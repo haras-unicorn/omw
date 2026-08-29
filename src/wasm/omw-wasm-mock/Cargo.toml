@@ -1,0 +1,15 @@
+[package]
+name = "omw-wasm-mock"
+version = "0.1.0"
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen.workspace = true

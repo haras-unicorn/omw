@@ -9,4 +9,11 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
-fn main() {}
+pub mod agent;
+pub mod bindings;
+pub mod config;
+pub mod host;
+pub mod log;
+pub mod provider;
+pub mod runtime;
+pub mod tooling;
