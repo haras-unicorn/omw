@@ -44,6 +44,7 @@ impl Runtime for WasmRuntime {
 }
 
 #[cfg(test)]
+#[cfg(feature = "mock")]
 mod tests {
   use serial_test::serial;
   use std::collections::HashMap;

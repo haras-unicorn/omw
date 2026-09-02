@@ -1,7 +1,7 @@
-[[package]]
-name = "omw"
-changelog_path = "./src/native/omw/CHANGELOG.md"
+[workspace]
+release = false
 
 [[package]]
-name = "omw-rhai-wasm-interpreter"
-changelog_path = "./src/wasm/omw-rhai-wasm-interpreter/CHANGELOG.md"
+name = "omw"
+release = true
+git_tag_name = "v{{ version }}"

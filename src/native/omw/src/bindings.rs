@@ -9,7 +9,7 @@
 
 wasmtime::component::bindgen!({
     world: "omw",
-    path: "../../wit",
+    path: "wit",
     with: {
         "omw:omw/provider.provider": crate::provider::ProviderEntry,
         "omw:omw/tooling.tooling": crate::tooling::ToolingEntry,

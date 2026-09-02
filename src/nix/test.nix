@@ -211,6 +211,7 @@ in
             services.omw = {
               enable = true;
               mode = lib.mkDefault "run";
+              variant = lib.mkDefault "rhai";
             };
           };
         };

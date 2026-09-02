@@ -1,6 +1,7 @@
 {
   services.omw = {
     enable = true;
+    variant = "rhai";
     user = "omw";
     group = "omw";
     stateDir = "omw";

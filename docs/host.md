@@ -1,10 +1,10 @@
 # The host interface
 
-The `host` interface (`host` in `src/wit/omw.wit`) exposes the static, baked-in
-capabilities of the runtime to an agent brain: logging, wall-clock and timer
-helpers, inter-agent messaging, event receipt, and UUID generation. It is
-imported by every brain (wasm components and the bundled rhai interpreter alike)
-and implemented 1:1 by the host's `host::imports` module.
+The `host` interface (`host` in `src/native/omw/wit/omw.wit`) exposes the
+static, baked-in capabilities of the runtime to an agent brain: logging,
+wall-clock and timer helpers, inter-agent messaging, event receipt, and UUID
+generation. It is imported by every brain (wasm components and the bundled rhai
+interpreter alike) and implemented 1:1 by the host's `host::imports` module.
 
 This page describes the WIT surface from the guest's point of view. The actor
 mechanics that back it are covered in [actor](./actor.md).

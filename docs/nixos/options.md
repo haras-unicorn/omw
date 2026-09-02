@@ -148,3 +148,17 @@ _Default:_
 ```nix
 null
 ```
+
+## services\.omw\.variant
+
+Which package flavor to run: `default` (the crates\.io-equivalent build, without
+the rhai runtime) or `rhai` (adds the bundled rhai interpreter via the
+`omw-rhai` package)\. Overridable with `package`。
+
+_Type:_ one of “default”, “rhai”
+
+_Default:_
+
+```nix
+"default"
+```

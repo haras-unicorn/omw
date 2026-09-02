@@ -1,22 +1,30 @@
-//! Build script: cross-compiles the bundled guests for `wasm32-wasip2`,
-//! wraps the resulting core module into a WASM component
-//! with `wasm-tools`, and embeds it into the `omw` binary.
+//! Build script: for the `rhai` and `mock` features, cross-compiles the bundled
+//! guests for `wasm32-wasip2`, wraps the resulting core module into a WASM
+//! component with `wasm-tools`, and embeds it into the `omw` binary.
 //!
 //! The guests are intentionally *not* a `[dependencies]` of `omw`: their `export!`
 //! ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the host
-//! target. Instead we build it on any machine as part of `omw`'s own build.
+//! target. Instead we build it as part of `omw`'s own build, only when the
+//! `rhai` (the embedded rhai interpreter) or `mock` (a test-only wasm mock
+//! brain) feature is enabled. A featureless build runs no wasm tooling at all,
+//! so `cargo publish` (the default crate) verifies without `wasm-tools` or a
+//! `wasm32-wasip2` target.
 //!
 //! The nested `cargo` build uses a dedicated `--target-dir` (under `OUT_DIR`)
 //! so that it does not contend for the global build lock held by the outer
-//! `cargo` invocation (which would otherwise deadlock).
+//! `cargo` invocation (which would otherwise deadlock)。
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-  compile_guest("omw-wasm-mock");
-  compile_guest("omw-rhai-wasm-interpreter");
+  if env::var_os("CARGO_FEATURE_RHAI").is_some() {
+    compile_guest("omw-rhai-wasm-interpreter");
+  }
+  if env::var_os("CARGO_FEATURE_MOCK").is_some() {
+    compile_guest("omw-wasm-mock");
+  }
 }
 
 fn compile_guest(guest: &str) {
@@ -56,9 +64,9 @@ fn compile_guest(guest: &str) {
     .join("wasm32-wasip2")
     .join(profile)
     .join(guest_wasm);
-  let component_wasm = out_dir.join("component.wasm");
-  let component_native = out_dir.join("component.cwasm");
-  let component_wat = out_dir.join("component.wat");
+  let component_wasm = out_dir.join(format!("{guest}.component.wasm"));
+  let component_native = out_dir.join(format!("{guest}.component.cwasm"));
+  let component_wat = out_dir.join(format!("{guest}.component.wat"));
 
   // Rebuild when the guest source or the WIT contract changes.
   println!(
@@ -68,7 +76,7 @@ fn compile_guest(guest: &str) {
   println!("cargo:rerun-if-changed={}", guest_dir.join("src").display());
   println!(
     "cargo:rerun-if-changed={}",
-    workspace_root.join("src").join("wit").display()
+    manifest_dir.join("wit").display()
   );
 
   // 1. Cross-compile the guest for wasm32-wasip2.

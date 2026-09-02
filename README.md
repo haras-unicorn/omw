@@ -29,8 +29,10 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
 - **Tooling** is MCP tool servers. They expose callable _tools_ and readable
   _resources_; resource subscriptions deliver change events.
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
-  component; the `rhai` runtime evaluates a script on a bundled interpreter.
-  Both see the same `omw` host interface.
+  component; the `rhai` runtime evaluates a script on an interpreter that ships
+  as an opt-in flavor. The default `omw` package/binary (crates.io-equivalent,
+  no rhai feature), vs the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
+  (`--features rhai`). Both see the same `omw` host interface.
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 
@@ -51,13 +53,24 @@ nix build github:haras-unicorn/omw
 ### Releases
 
 Prebuilt binaries for `x86_64-linux` and `aarch64-linux` are attached to each
-[GitHub release] as tarballs containing the `omw` binary.
+[GitHub release] as tarballs containing the `omw` binary. The default
+`omw-<arch>.tar.gz` ships no rhai runtime; grab the `omw-rhai-<arch>.tar.gz`
+tarball (or the rhai Nix package) when your brains are rhai scripts:
 
 ```sh
 curl -L -o omw.tar.gz \
   https://github.com/haras-unicorn/omw/releases/latest/download/omw-x86_64-linux.tar.gz
 tar -xzf omw.tar.gz
 ./omw-x86_64-linux
+```
+
+The rhai flavor is the same shape, with the `-rhai` name:
+
+```sh
+curl -L -o omw-rhai.tar.gz \
+  https://github.com/haras-unicorn/omw/releases/latest/download/omw-rhai-x86_64-linux.tar.gz
+tar -xzf omw-rhai.tar.gz
+./omw-rhai-x86_64-linux
 ```
 
 [GitHub release]: https://github.com/haras-unicorn/omw/releases
@@ -134,18 +147,6 @@ secrets never live in the Nix store:
 
 See [The NixOS module] in the documentation for the full option set, including
 `settings` vs `settingsFile`, `mode`, `user`/`group`, and `stateDir`.
-
-### home-manager
-
-There is no home-manager module — omw is typically a system-level agent service.
-home-manager users simply add the package:
-
-```nix
-{ pkgs, ... }:
-{
-  home.packages = [ pkgs.omw ];
-}
-```
 
 ## Binary cache
 

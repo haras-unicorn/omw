@@ -6,6 +6,11 @@ on the bundled rhai interpreter — itself a wasm component compiled into the ho
 at build time — whose `omw.*` host imports route to the very same global
 provider / tooling / bus as every other runtime.
 
+The interpreter ships in the `omw-rhai` package/binary (`nix run .#omw-rhai` or
+the `omw-rhai-<arch>.tar.gz` release tarball); the default `omw` binary doesn't
+include it. With the `--features rhai` build flag it is compiled into the host
+at build time instead.
+
 [rhai]: https://rhai.rs
 
 ## Configuration

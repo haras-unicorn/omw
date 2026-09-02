@@ -158,15 +158,15 @@ impl WasmEngine {
   }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 pub const WASM_MOCK_COMPONENT_WAT: &[u8] =
   include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_WAT"));
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 pub const WASM_MOCK_COMPONENT_WASM: &[u8] =
   include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_WASM"));
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 pub const WASM_MOCK_COMPONENT_NATIVE: &[u8] =
   include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_NATIVE"));
 
@@ -184,6 +184,7 @@ mod tests {
 
   /// A minimal context; the mock brain calls no host imports, so `script` is
   /// unused by these tests.
+  #[cfg(feature = "mock")]
   fn test_ctx() -> anyhow::Result<AgentContext> {
     let bus = Arc::new(MessageBus::new());
     Ok(AgentContext::new(
@@ -197,12 +198,14 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "mock")]
   fn from_native_bytes_loads_mock_component() -> anyhow::Result<()> {
     let _engine = WasmEngine::from_native_bytes(WASM_MOCK_COMPONENT_NATIVE)?;
     Ok(())
   }
 
   #[test]
+  #[cfg(feature = "mock")]
   fn from_native_path_loads_mock_component() -> anyhow::Result<()> {
     let dir = tempdir()?;
 
@@ -245,6 +248,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "mock")]
   fn from_path_dispatch_loads_native_component() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let native = dir.path().join("brain.cwasm");
@@ -255,6 +259,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn from_path_dispatch_loads_wasm_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
@@ -268,6 +273,7 @@ mod tests {
     Ok(())
   }
 
+  #[cfg(feature = "mock")]
   fn enabled_non_native() -> bool {
     std::env::var_os("OMW_TEST_WASM_ENGINE_NON_NATIVE")
       .is_some_and(|value| value != "0")
@@ -275,6 +281,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn from_wat_bytes_loads_mock_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
@@ -287,6 +294,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn from_wasm_bytes_loads_mock_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
@@ -299,6 +307,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn from_wat_path_loads_mock_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
@@ -315,6 +324,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn from_wasm_path_loads_mock_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
@@ -331,6 +341,7 @@ mod tests {
 
   #[test]
   #[serial(non_native)]
+  #[cfg(feature = "mock")]
   fn run_returns_none_for_mock_component() -> anyhow::Result<()> {
     if !enabled_non_native() {
       eprintln!("skipping: OMW_TEST_WASM_ENGINE_NON_NATIVE not set");
