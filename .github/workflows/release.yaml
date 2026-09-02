@@ -31,7 +31,10 @@ jobs:
           mkdir -p release
           cp -L result/bin/omw release/omw-${{ matrix.arch }}
           tar -czf omw-${{ matrix.arch }}.tar.gz -C release omw-${{ matrix.arch }}
+          nix build --show-trace .#omw-rhai-unwrapped
+          cp -L result/bin/omw release/omw-rhai-${{ matrix.arch }}
+          tar -czf omw-rhai-${{ matrix.arch }}.tar.gz -C release omw-rhai-${{ matrix.arch }}
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" omw-${{ matrix.arch }}.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" omw-${{ matrix.arch }}.tar.gz omw-rhai-${{ matrix.arch }}.tar.gz --clobber

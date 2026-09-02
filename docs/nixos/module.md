@@ -59,6 +59,10 @@ Two things follow from this:
 `mode` selects `run` (every agent once) or `loop` (keep agents running,
 restarting on failure — the default, suited to a service).
 
+`variant` selects which package flavor runs: `default` (the crates.io-equivalent
+build, no rhai runtime)) or `rhai` (the `omw-rhai` package, which compiles the
+bundled rhai interpreter in). Overridable entirely with `package`.
+
 ## Users and state
 
 By default the service runs under a systemd _dynamic user_ (no `user` /

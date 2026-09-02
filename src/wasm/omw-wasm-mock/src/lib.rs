@@ -19,7 +19,7 @@
 
 wit_bindgen::generate!({
     world: "omw",
-    path: "../../wit",
+    path: "../../native/omw/wit",
 });
 
 /// The `runtime` interface is our export.

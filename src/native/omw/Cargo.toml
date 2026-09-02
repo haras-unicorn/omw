@@ -8,6 +8,11 @@ license.workspace = true
 readme.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+rhai = []
+mock = []
+
 [dependencies]
 anyhow = "1.0.104"
 async-trait = "0.1.92"

@@ -17,9 +17,26 @@ let
       options.services.omw = {
         enable = lib.mkEnableOption "the omw agent runtime";
 
+        variant = lib.mkOption {
+          type = lib.types.enum [
+            "default"
+            "rhai"
+          ];
+          default = "default";
+          description = ''
+            Which package flavor to run: `default` (the crates.io-equivalent
+            build, without the rhai runtime) or `rhai` (adds the bundled rhai
+            interpreter via the `omw-rhai` package). Overridable with `package`。
+          '';
+        };
+
         package = lib.mkOption {
           type = lib.types.package;
-          default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          default =
+            if cfg.variant == "rhai" then
+              self.packages.${pkgs.stdenv.hostPlatform.system}.omw-rhai
+            else
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           description = "The omw package to run.";
         };
 

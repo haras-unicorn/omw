@@ -46,8 +46,6 @@ let
           };
         in
         {
-          inherit default;
-
           dev = default // {
             OMW_TEST_WASM_ENGINE_NON_NATIVE = "1";
             OMW_TEST_WASM_RUNTIME_NON_NATIVE = "1";
@@ -132,6 +130,35 @@ let
           {
             omw-unwrapped = unwrapped;
           };
+
+      rhai-unwrapped = craneLib.buildPackage (
+        depArgs
+        // {
+          cargoArtifacts = craneLib.buildDepsOnly depArgs;
+          cargoExtraArgs = "-p omw --features rhai";
+          pname = "omw-rhai";
+          meta.mainProgram = "omw";
+        }
+      );
+
+      rhai-package =
+        pkgs.callPackage
+          (
+            {
+              symlinkJoin,
+              omw-rhai-unwrapped,
+            }:
+            symlinkJoin {
+              name = "omw-rhai";
+              paths = [
+                omw-rhai-unwrapped
+              ];
+              meta.mainProgram = "omw";
+            }
+          )
+          {
+            omw-rhai-unwrapped = rhai-unwrapped;
+          };
     in
     {
       inherit
@@ -142,6 +169,8 @@ let
         shellHook
         unwrapped
         package
+        rhai-unwrapped
+        rhai-package
         ;
     };
 in
@@ -161,6 +190,8 @@ in
         {
           omw = packages.package;
           omw-unwrapped = packages.unwrapped;
+          omw-rhai = packages.rhai-package;
+          omw-rhai-unwrapped = packages.rhai-unwrapped;
         };
     in
     {
@@ -344,6 +375,8 @@ in
           app = makeApp packages.package "OMW = OpenAI + MCP + WASM";
 
           unwrapped = makeApp packages.unwrapped "OMW = OpenAI + MCP + WASM (unwrapped)";
+          rhai = makeApp packages.rhai-package "OMW = OpenAI + MCP + WASM (rhai)";
+          rhai-unwrapped = makeApp packages.rhai-unwrapped "OMW = OpenAI + MCP + WASM (rhai, unwrapped)";
         in
         {
           default = app;
@@ -351,6 +384,9 @@ in
 
           omw = app;
           omw-unwrapped = unwrapped;
+
+          omw-rhai = rhai;
+          omw-rhai-unwrapped = rhai-unwrapped;
         };
 
       packages =
@@ -408,6 +444,9 @@ in
 
           omw = packages.package;
           omw-unwrapped = packages.unwrapped;
+
+          omw-rhai = packages.rhai-package;
+          omw-rhai-unwrapped = packages.rhai-unwrapped;
         };
     };
 }

@@ -1,6 +1,7 @@
 //! Runtime abstractions: how an agent brain is loaded and driven.
 
 pub mod engine;
+#[cfg(feature = "rhai")]
 pub mod rhai;
 pub mod wasm;
 
@@ -30,13 +31,14 @@ pub trait Runtime: Send + Sync {
 }
 
 /// Build a runtime from the agent's kind and the runtime's impl config (which
-/// is optional — e.g. the rhai runtime falls back to the bundled interpreter).
+/// is optional — e.g. the rhai runtime falls back to the bundled interpreter)。
 pub fn build(
   kind: &str,
   impl_cfg: Option<&ImplConfig>,
 ) -> anyhow::Result<Arc<dyn Runtime>> {
   match kind {
     "wasm" => wasm::build(impl_cfg),
+    #[cfg(feature = "rhai")]
     "rhai" => rhai::build(impl_cfg),
     other => anyhow::bail!("unsupported runtime kind {other:?}"),
   }
@@ -49,8 +51,9 @@ mod tests {
   #[test]
   fn factory_builds_known_kinds() -> anyhow::Result<()> {
     // `kind()` is static and not callable on a trait object, so assert only
-    // that dispatch succeeds for each known kind.
+    // that dispatch succeeds for each known kind。
     assert!(build("wasm", None).is_ok());
+    #[cfg(feature = "rhai")]
     assert!(build("rhai", None).is_ok());
     Ok(())
   }
