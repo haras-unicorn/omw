@@ -1,3 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["src/*"]
+members = ["src/native/*", "src/wasm/*"]
+default-members = ["src/native/*"]
+
+[workspace.package]
+description = "OMW = OpenAI + MCP + WASM"
+repository = "https://github.com/haras-unicorn/omw"
+authors = ["haras-unicorn <github@haras-unicorn.net>"]
+license = "MIT"
+readme = "./README.md"
+edition = "2024"
+
+[workspace.dependencies]
+wit-bindgen = "0.61.1"
+wasmtime = { version = "48.0.1", features = ["component-model"] }
+wasmtime-wasi = "48.0.1"
+wat = { version = "1.258.0", features = ["component-model"] }

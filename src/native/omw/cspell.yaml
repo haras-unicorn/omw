@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/streetsidesoftware/cspell/refs/heads/main/cspell.schema.json
+useGitignore: true
+version: "0.2"
+language: en
+ignoreWords:
+  - wasmtime
+  - kanal
+  - reqwest
+  - chrono
+  - serde
+  - wasi
+  - wasip
+  - cabi
+  - schemars
+  - rmcp
+  - streamable
+  - streamable-http
+  - hyper-util
+  - duplex
+  - modelcontextprotocol
+  - roundtrips
+  - cwasm
+  - impls
+  - ggml
+  - gguf
+  - llamacpp
+  - oneshot

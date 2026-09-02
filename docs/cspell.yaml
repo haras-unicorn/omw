@@ -2,3 +2,38 @@
 useGitignore: true
 version: "0.2"
 language: en
+ignoreWords:
+  - omw
+  - rhai
+  - openai
+  - mcp
+  - wasm
+  - wasip
+  - wasmtime
+  - wasi
+  - mdbook
+  - kanal
+  - strftime
+  - tokio
+  - reqwest
+  - envsubst
+  - uuid
+  - cwasm
+  - systemd
+  - nixpkgs
+  - nixos
+  - stdio
+  - serde
+  - mime
+  - aarch64
+  - x86
+  - gguf
+  - fnptr
+  - submodule
+  - attrset
+  - multithread
+  - chat
+  - deltas
+  - streamable
+  - rmcp
+  - modelcontextprotocol

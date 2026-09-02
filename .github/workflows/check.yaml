@@ -7,9 +7,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes auto-allocate-uids cgroups
+            auto-allocate-uids = true
       - uses: cachix/cachix-action@v15
         with:
           name: haras
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      - run: nix develop . --command bash -c "NIX_BUILD_TOP='' dev lint"
-      - run: nix flake check --show-trace
+      - run: nix develop .#ci --command bash -c "NIX_BUILD_TOP='' dev lint"
+      - run: nix flake check --show-trace --all-systems

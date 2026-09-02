@@ -1,0 +1,16 @@
+[package]
+name = "omw-rhai-wasm-interpreter"
+version = "0.1.0"
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rhai_rt = { package = "rhai", version = "1.26.0" }
+wit-bindgen.workspace = true

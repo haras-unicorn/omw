@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "OMW configuration.",
+  "type": "object",
+  "properties": {
+    "agents": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AgentConfig"
+      }
+    },
+    "providers": {
+      "description": "Named provider implementations.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ImplConfig"
+      },
+      "default": {}
+    },
+    "runtime": {
+      "description": "Named runtime implementations.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ImplConfig"
+      },
+      "default": {}
+    },
+    "tooling": {
+      "description": "Named tooling implementations.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ImplConfig"
+      },
+      "default": {}
+    }
+  },
+  "$defs": {
+    "AgentConfig": {
+      "description": "A single agent wiring itself to the globals above.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Which named runtime implementation this agent's brain uses.",
+          "type": "string"
+        },
+        "script": {
+          "description": "The agent's brain script.",
+          "type": "string"
+        }
+      },
+      "required": ["name", "runtime", "script"]
+    },
+    "ImplConfig": {
+      "description": "A single configured implementation: which kind plus opaque params.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Which implementation this is.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": ["kind"]
+    }
+  }
+}
