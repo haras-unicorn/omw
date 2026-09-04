@@ -117,7 +117,7 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
       let out = "";
       loop {
         let e = omw::host::recv();
-        if e.id == id && e.kind == "delta" { out += e.payload.content; }
+        if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
         if e.id == id && e.kind == "stream-end" { break; }
       }
       let t = omw::tooling::get("mcp");

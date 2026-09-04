@@ -3,6 +3,7 @@
 //! resource notification) eventually pushes into an agent's inbox.
 
 use crate::provider::ChatDelta;
+use crate::tooling::ResourceContent;
 
 /// A strongly-typed event delivered into an agent's inbox.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,13 +15,13 @@ pub enum Event {
   /// A timer (timestamp / duration / cron wait) fired.
   Timer,
   /// A chat-stream delta.
-  Delta(ChatDelta),
+  ChatDelta(ChatDelta),
   /// A chat stream finished.
   StreamEnd,
-  /// A subscribed resource list changed.
-  ResourceChanged,
-  /// A subscribed resource updated in place.
-  ResourceUpdated,
+  /// The subscribed resource list changed.
+  ResourceListUpdated(Vec<crate::tooling::ResourceInfo>),
+  /// A subscribed resource updated in place; carries the freshly read content.
+  ResourceUpdated(ResourceContent),
 }
 
 /// An event tagged with the UUID of its subscribed source.

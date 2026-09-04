@@ -68,7 +68,7 @@ _Default:_
 
 ## services\.omw\.group
 
-Group the service runs as\. When both `services.omw.user` and
+The group the service runs as\. When both `services.omw.user` and
 `services.omw.group` are null, a dynamic user is allocated\.
 
 _Type:_ null or string
@@ -94,11 +94,11 @@ _Default:_
 
 ## services\.omw\.settings
 
-The omw configuration as an attribute set, rendered to TOML at build time\.
-Mutually exclusive with `services.omw.settingsFile`\. Environment variables of
-the form `$VAR` or `${VAR}` are substituted into the config before omw reads it
-(see `services.omw.environment`), which is the intended way to supply API keys
-and other secrets at runtime\.
+The omw configuration provided as an attribute set, rendered to TOML at build
+time\. Mutually exclusive with `services.omw.settingsFile`\. Environment
+variables of the form `$VAR` or `${VAR}` are substituted into the config before
+omw reads it (see `services.omw.environment`), which is the intended way to
+supply API keys and other secrets at runtime\.
 
 _Type:_ null or TOML value
 
@@ -138,7 +138,7 @@ null
 
 ## services\.omw\.user
 
-User the service runs as\. When both `services.omw.user` and
+The user the service runs as\. When both `services.omw.user` and
 `services.omw.group` are null, a dynamic user is allocated\.
 
 _Type:_ null or string
@@ -153,7 +153,7 @@ null
 
 Which package flavor to run: `default` (the crates\.io-equivalent build, without
 the rhai runtime) or `rhai` (adds the bundled rhai interpreter via the
-`omw-rhai` package)\. Overridable with `package`。
+`omw-rhai` package)\. Overridable with `package`\.
 
 _Type:_ one of “default”, “rhai”
 

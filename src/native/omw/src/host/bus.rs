@@ -33,6 +33,9 @@ struct BusInner {
   inboxes: HashMap<String, AgentChannels>,
   /// `(subscriber, source) -> subscription uuid`.
   subscriptions: HashMap<(String, String), String>,
+  /// `subscription uuid` -> `(subscriber, source)` reverse index, so
+  /// `unsubscribe` can remove by handle instead of re-deriving the pair.
+  subscriptions_by_uuid: HashMap<String, (String, String)>,
 }
 
 impl MessageBus {
@@ -49,6 +52,9 @@ impl MessageBus {
     inner
       .subscriptions
       .insert((subscriber.to_string(), source.to_string()), uuid.clone());
+    inner
+      .subscriptions_by_uuid
+      .insert(uuid.clone(), (subscriber.to_string(), source.to_string()));
     tracing::debug!(
       subscriber,
       source,
@@ -56,6 +62,25 @@ impl MessageBus {
       "agent subscribed to another agent"
     );
     uuid
+  }
+
+  /// Remove `subscriber`'s subscription identified by `uuid`, if any. Returns
+  /// whether anything was actually removed. A foreign `uuid` handle for another
+  /// subscriber is left untouched.
+  pub fn unsubscribe(&self, subscriber: &str, uuid: &str) -> bool {
+    let mut inner = lock(&self.inner);
+    let Some((sub, src)) = inner.subscriptions_by_uuid.remove(uuid) else {
+      return false;
+    };
+    if sub != subscriber {
+      inner
+        .subscriptions_by_uuid
+        .insert(uuid.to_string(), (sub, src));
+      return false;
+    }
+    inner.subscriptions.remove(&(sub, src.clone()));
+    tracing::debug!(subscriber, source = %src, uuid = %uuid, "agent unsubscribed from another agent");
+    true
   }
 
   /// Deliver `payload` from `caller` to `dest`'s inbox, tagged with the UUID of
@@ -195,6 +220,29 @@ mod tests {
     assert_eq!(two.id, sub2);
     assert_eq!(one.event, Event::Message("x".to_string()));
     assert_eq!(two.event, Event::Message("y".to_string()));
+    Ok(())
+  }
+
+  #[test]
+  fn unsubscribe_stops_deliveries() -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let sub = bus.subscribe("alice", "bob");
+    assert!(bus.unsubscribe("alice", &sub));
+    bus.send("bob", "alice", "hello".to_string());
+    assert_eq!(bus.try_recv("alice")?, None);
+    Ok(())
+  }
+
+  #[test]
+  fn unsubscribe_rejects_foreign_handles() -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let sub = bus.subscribe("alice", "bob");
+    assert!(!bus.unsubscribe("carol", &sub));
+    bus.send("bob", "alice", "hello".to_string());
+    let envelope = bus
+      .try_recv("alice")?
+      .unwrap_or_else(|| panic!("expected a delivered envelope"));
+    assert_eq!(envelope.id, sub);
     Ok(())
   }
 

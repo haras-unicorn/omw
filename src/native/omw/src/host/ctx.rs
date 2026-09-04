@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 
 use crate::host::bus::MessageBus;
+use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
 use crate::tooling::ToolingEntry;
@@ -28,12 +29,20 @@ pub struct AgentContext {
   pub bus: Arc<MessageBus>,
   /// Registry of this agent's open chat streams, keyed by UUID.
   pub streams: Arc<StreamRegistry>,
+  /// Registry of this agent's pending timers, keyed by UUID.
+  pub timers: Arc<CancelRegistry>,
+  /// Registry of this agent's open resource subscriptions, keyed by UUID.
+  pub resources: Arc<CancelRegistry>,
   /// The tokio runtime used to bridge synchronous wasm host calls to the
   /// async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
 }
 
 impl AgentContext {
+  #[allow(
+    clippy::too_many_arguments,
+    reason = "aggregating the per-agent registries into a struct is left to a ctx refactor"
+  )]
   pub fn new(
     name: String,
     script: PathBuf,
@@ -41,6 +50,8 @@ impl AgentContext {
     tooling: HashMap<String, ToolingEntry>,
     bus: Arc<MessageBus>,
     streams: Arc<StreamRegistry>,
+    timers: Arc<CancelRegistry>,
+    resources: Arc<CancelRegistry>,
   ) -> anyhow::Result<Self> {
     Ok(Self {
       name,
@@ -49,6 +60,8 @@ impl AgentContext {
       tooling,
       bus,
       streams,
+      timers,
+      resources,
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()

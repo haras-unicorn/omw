@@ -1,6 +1,6 @@
 //! Host-side chat-stream pumps. Each `provider.chat` call opens a stream
 //! registered by UUID in a [`StreamRegistry`]; a pump task on the bridge
-//! runtime reads the provider's stream and delivers `delta` events into the
+//! runtime reads the provider's stream and delivers `chat-delta` events into the
 //! requesting agent's inbox, then a terminal `stream-end` (or an `error` on
 //! failure) event closes it. `is-open`/`cancel` go through the registry, which
 //! doubles as the cancel signal: dropping an entry's sender wakes its pump's
@@ -24,11 +24,15 @@ use crate::tooling::Tool;
 
 /// Registry of open chat streams, keyed by UUID. Each entry holds the cancel
 /// signal for its pump; an entry's presence means the stream is still open.
-
 #[derive(Default)]
 pub struct StreamRegistry {
   open: Mutex<HashMap<String, oneshot::Sender<()>>>,
 }
+
+/// The generic cancel-signal registry behind every cancellable host source (chat
+/// streams, timers, resource subscriptions). An entry doubles as the cancel
+/// signal, and dropping its sender wakes its pump's cancel receiver.
+pub type CancelRegistry = StreamRegistry;
 
 impl StreamRegistry {
   pub fn new() -> Self {
@@ -78,7 +82,7 @@ impl StreamRegistry {
 )]
 /// Spawn a pump task on `rt` that drains `provider.chat(...)` and delivers its
 /// deltas into `name`'s inbox tagged with `uuid`. The pump runs to a terminal
-/// `stream-end` event on natural end (or an `error` event on failure)and then
+/// `stream-end` event on natural end (or an `error` event on failure) and then
 /// deregisters its stream.
 
 pub fn spawn_pump(
@@ -124,7 +128,7 @@ pub fn spawn_pump(
               finish_reason = delta.finish_reason.as_deref(),
               "chat delta delivered"
             );
-            bus.deliver(&name,&uuid, Event::Delta(delta))
+            bus.deliver(&name,&uuid, Event::ChatDelta(delta))
           }
           Some(Err(e)) => {
             tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed");
@@ -188,12 +192,12 @@ mod tests {
     );
     let first = bus.recv("alice", Duration::from_secs(5))?;
     match first.event {
-      Event::Delta(d) => assert_eq!(d.content.as_deref(), Some("Hello")),
+      Event::ChatDelta(d) => assert_eq!(d.content.as_deref(), Some("Hello")),
       other => anyhow::bail!("expected a delta, got {other:?}"),
     }
     let second = bus.recv("alice", Duration::from_secs(5))?;
     match second.event {
-      Event::Delta(d) => assert_eq!(d.content.as_deref(), Some(", world")),
+      Event::ChatDelta(d) => assert_eq!(d.content.as_deref(), Some(", world")),
       other => anyhow::bail!("expected a delta, got {other:?}"),
     }
     let end = bus.recv("alice", Duration::from_secs(5))?;

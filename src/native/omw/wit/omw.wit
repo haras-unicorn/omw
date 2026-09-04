@@ -1,110 +1,142 @@
-package omw:omw@0.1.0;
+package omw:omw;
 
 /// Shared records across the provider and tooling interfaces, so a `tool`
 /// returned by tooling can be handed straight to provider `chat`.
 interface types {
-    /// The sender of a chat message.
-    variant role {
-        system,
-        user,
-        assistant,
-        tool,
-    }
+  /// The sender of a chat message.
+  variant role {
+    /// System role for system prompts.
+    system,
 
-    /// A request for the model to invoke one named tool with opaque JSON
-    /// arguments.
-    record tool-call {
-        id: string,
-        name: string,
-        arguments: string,
-    }
+    /// User role for user messages.
+    user,
 
-    /// A single message in a chat conversation.
-    record chat-message {
-        /// The sender of this message.
-        role: role,
+    /// Assistant role for assistant messages.
+    assistant,
 
-        /// Optional text content; absent on messages bearing only a tool call.
-        content: option<string>,
+    /// Tool role for tool call results.
+    tool,
+  }
 
-        /// Optional tool call attached to this message.
-        tool-call: option<tool-call>,
-    }
+  /// A request for the model to invoke one named tool with opaque JSON
+  /// arguments.
+  record tool-call {
+    /// Tool call identifier.
+    id: string,
 
-    /// One incremental chunk of a streaming chat response.
-    record chat-delta {
-        /// Optional text content produced by this chunk.
-        content: option<string>,
+    /// Tool name.
+    name: string,
 
-        /// Optional tool call announced by this chunk.
-        tool-call: option<tool-call>,
+    /// Tool arguments as opaque JSON string.
+    arguments: string,
+  }
 
-        /// Optional terminal reason the stream stopped (`"stop"`, `"length"`,
-        /// `"tool_calls"`, …).
-        finish-reason: option<string>,
-    }
+  /// A single message in a chat conversation.
+  record chat-message {
+    /// The sender of this message.
+    role: role,
 
-    /// A callable tool exposed by tooling and offered to the model.
-    record tool {
-        /// The tool's name, as passed to `call-tool`.
-        name: string,
+    /// Optional text content; absent on messages bearing only a tool call.
+    content: option<string>,
 
-        /// Optional human-readable description of what the tool does.
-        description: option<string>,
+    /// Optional tool call attached to this message.
+    tool-call: option<tool-call>,
+  }
 
-        /// The tool's JSON-schema document describing its expected arguments.
-        input-schema: string,
-    }
+  /// One incremental chunk of a streaming chat response.
+  record chat-delta {
+    /// Optional text content produced by this chunk.
+    content: option<string>,
 
-    /// An MCP resource: a URI-addressed, readable data value exposed by a
-    /// tooling. Named `resource-info` to avoid the reserved `resource` keyword
-    /// (already used for this file's component-model resource handles).
-    record resource-info {
-        /// The URI of this resource (e.g. `file:///path/to/file`).
-        uri: string,
+    /// Optional tool call announced by this chunk.
+    tool-call: option<tool-call>,
 
-        /// The programmatic name of the resource.
-        name: string,
+    /// Optional terminal reason the stream stopped (`"stop"`, `"length"`,
+    /// `"tool_calls"`, …).
+    finish-reason: option<string>,
+  }
 
-        /// Optional description of what this resource represents.
-        description: option<string>,
+  /// A callable tool exposed by tooling and offered to the model.
+  record tool {
+    /// The tool's name, as passed to `call-tool`.
+    name: string,
 
-        /// The MIME type of the resource, if known.
-        mime-type: option<string>,
-    }
+    /// Optional human-readable description of what the tool does.
+    description: option<string>,
 
-    /// A strongly-typed event payload delivered into an agent's inbox. The
-    /// guest matches an event against the UUID handles it holds via
-    /// `event-envelope.id`.
-    variant event {
-        /// A message from a subscribed agent.
-        message(string),
+    /// The tool's JSON-schema document describing its expected arguments.
+    input-schema: string,
+  }
 
-        /// A failed I/O surfaced to the guest.
-        error(string),
+  /// A tooling resource: a URI-addressed, readable data value exposed by a
+  /// tooling. Named `resource-info` to avoid the reserved `resource` keyword
+  /// (already used for this file's component-model resource handles).
+  record resource-info {
+    /// The URI of this resource (e.g. `file:///path/to/file`).
+    uri: string,
 
-        /// A timer (timestamp / duration / cron wait) fired.
-        timer,
+    /// The programmatic name of the resource.
+    name: string,
 
-        /// A chat-stream delta.
-        delta(chat-delta),
+    /// Optional description of what this resource represents.
+    description: option<string>,
 
-        /// A chat stream finished.
-        stream-end,
+    /// The MIME type of the resource, if known.
+    mime-type: option<string>,
+  }
 
-        /// A subscribed resource list changed.
-        resource-changed,
+  /// The content of a single resource, read at the moment its
+  /// `resource-updated` notification fired. `content` holds the actual text
+  /// for textual formats and base64-encoded bytes for anything else; match on
+  /// `mime-type` to tell the two apart.
+  record resource-content {
+    /// The URI of the resource the content belongs to.
+    uri: string,
 
-        /// A subscribed resource updated in place.
-        resource-updated,
-    }
+    /// The MIME type of the resource, if known.
+    mime-type: option<string>,
 
-    /// An event tagged with the UUID of its subscribed source.
-    record event-envelope {
-        /// UUID handle of the subscribed source this event came from.
-        id: string,
-        event: event,
-    }
+    /// The resource's content: plain text for textual formats, base64 for
+    /// anything else (determined by `mime-type`).
+    content: string,
+  }
+
+  /// A strongly-typed event payload delivered into an agent's inbox. The
+  /// guest matches an event against the UUID handles it holds via
+  /// `event-envelope.id`.
+  variant event {
+    /// A message from a subscribed agent.
+    message(string),
+
+    /// A failed I/O surfaced to the guest.
+    error(string),
+
+    /// A timer (timestamp / duration / cron wait) fired.
+    timer,
+
+    /// A chat-stream delta.
+    chat-delta(chat-delta),
+
+    /// A chat stream finished.
+    stream-end,
+
+    /// The subscribed resource list changed; carries the freshly fetched
+    /// list of resources.
+    resource-list-updated(list<resource-info>),
+
+    /// A subscribed resource updated in place; carries the freshly read
+    /// resource content.
+    resource-updated(resource-content),
+  }
+
+  /// An event tagged with the UUID of its subscribed source.
+  record event-envelope {
+    /// UUID handle of the subscribed source this event came from.
+    id: string,
+
+    /// Event payload.
+    event: event,
+  }
 }
 
 /// A provider instance from the global providers map, addressed by name.
@@ -112,142 +144,158 @@ interface types {
 /// `get` looks up a configured instance and hands back a handle; all further
 /// calls go through the handle so callers never repeat the name.
 interface provider {
-    use types.{role, tool-call, chat-message, tool};
+  use types.{role, tool-call, chat-message, tool};
 
-    /// One configured provider instance.
-    resource provider {
-        /// The configured name of this instance.
-        name: func() -> string;
+  /// One configured provider instance.
+  resource provider {
+    /// The configured name of this instance.
+    name: func() -> string;
 
-        /// Which implementation this is; lets the guest break
-        /// the abstraction when it chooses to.
-        kind: func() -> string;
+    /// Which implementation this is; lets the guest break
+    /// the abstraction when it chooses to.
+    kind: func() -> string;
 
-        /// Model names this provider exposes.
-        models: func() -> list<string>;
+    /// Model names this provider exposes.
+    models: func() -> list<string>;
 
-        /// Open a streaming chat response. Returns a UUID handle; deltas flow
-        /// into the agent's inbox as `"delta"` events until a terminal
-        /// `"stream-end"` (or `"error"`) event closes the stream.
-        chat: func(
-            model: string,
-            messages: list<chat-message>,
-            tools: list<tool>,
-        ) -> result<string, string>;
+    /// Open a streaming chat response. Returns a UUID handle; deltas flow
+    /// into the agent's inbox as `"chat-delta"` events until a terminal
+    /// `"stream-end"` (or `"error"`) event closes the stream.
+    chat: func(
+      model: string,
+      messages: list<chat-message>,
+      tools: list<tool>,
+    ) -> result<string, string>;
 
-        /// Whether a chat stream is still open.
-        is-open: func(uuid: string) -> bool;
+    /// Whether a chat stream is still open.
+    is-open: func(uuid: string) -> bool;
 
-        /// Cancel an open stream by UUID.
-        cancel: func(uuid: string);
-    }
+    /// Cancel an open stream by UUID.
+    cancel: func(uuid: string);
+  }
 
-    /// Look up a configured provider instance by name.
-    get: func(name: string) -> result<provider, string>;
+  /// Look up a configured provider instance by name.
+  get: func(name: string) -> result<provider, string>;
 }
 
 /// A tooling instance from the global tooling map, addressed by name.
 interface tooling {
-    use types.{tool, resource-info};
+  use types.{tool, resource-info};
 
-    /// One configured tooling instance.
-    resource tooling {
-        /// The configured name of this instance.
-        name: func() -> string;
+  /// One configured tooling instance.
+  resource tooling {
+    /// The configured name of this instance.
+    name: func() -> string;
 
-        /// Which implementation this is.
-        kind: func() -> string;
+    /// Which implementation this is.
+    kind: func() -> string;
 
-        /// Every tool this tooling exposes, callable via `call-tool`.
-        list-tools: func() -> result<list<tool>, string>;
+    /// Every tool this tooling exposes, callable via `call-tool`.
+    list-tools: func() -> result<list<tool>, string>;
 
-        /// Invoke a tool by name with opaque JSON arguments; returns the tool's
-        /// JSON result.
-        call-tool: func(name: string, arguments: string) -> result<string, string>;
+    /// Invoke a tool by name with opaque JSON arguments; returns the tool's
+    /// JSON result.
+    call-tool: func(name: string, arguments: string) -> result<string, string>;
 
-        /// Enumerate every resource this tooling exposes.
-        list-resources: func() -> result<list<resource-info>, string>;
+    /// Enumerate every resource this tooling exposes.
+    list-resources: func() -> result<list<resource-info>, string>;
 
-        /// Subscribe to the resource *list* changing; the fired `"resource-changed"`
-        /// event is tagged with the returned UUID.
-        subscribe-resource-list: func() -> result<string, string>;
+    /// Subscribe to the resource *list* changing; the fired `"resource-list-updated"`
+    /// event is tagged with the returned UUID.
+    subscribe-resource-list: func() -> result<string, string>;
 
-        /// Subscribe to one resource's updates; the fired `"resource-updated"` event
-        /// is tagged with the returned UUID.
-        subscribe-resource: func(uri: string) -> result<string, string>;
-    }
+    /// Cancel a resource-list subscription by the UUID `subscribe-resource-list`
+    /// returned. No further `"resource-list-updated"` events are delivered.
+    unsubscribe-resource-list: func(uuid: string);
 
-    /// Look up a configured tooling instance by name.
-    get: func(name: string) -> result<tooling, string>;
+    /// Subscribe to one resource's updates; the fired `"resource-updated"` event
+    /// is tagged with the returned UUID.
+    subscribe-resource: func(uri: string) -> result<string, string>;
+
+    /// Cancel a single-resource subscription by the UUID `subscribe-resource`
+    /// returned. No further `"resource-updated"` events are delivered.
+    unsubscribe-resource: func(uuid: string);
+  }
+
+  /// Look up a configured tooling instance by name.
+  get: func(name: string) -> result<tooling, string>;
 }
 
 /// Static helpers baked into the host module. Not extensible.
 interface host {
-    use types.{event-envelope};
+  use types.{event-envelope};
 
-    /// level is one of "trace" | "debug" | "info" | "warn" | "error".
-    log: func(level: string, message: string);
+  /// level is one of "trace" | "debug" | "info" | "warn" | "error".
+  log: func(level: string, message: string);
 
-    /// Current wall clock as ticks (milliseconds since epoch).
-    now: func() -> u64;
+  /// Current wall clock as ticks (milliseconds since epoch).
+  now: func() -> u64;
 
-    /// Add `ms` milliseconds to a timestamp.
-    timestamp-add: func(ts: u64, ms: u64) -> u64;
+  /// Add `ms` milliseconds to a timestamp.
+  timestamp-add: func(ts: u64, ms: u64) -> u64;
 
-    /// Subtract `ms` milliseconds from a timestamp.
-    timestamp-sub: func(ts: u64, ms: u64) -> u64;
+  /// Subtract `ms` milliseconds from a timestamp.
+  timestamp-sub: func(ts: u64, ms: u64) -> u64;
 
-    /// Milliseconds between `a` and `b` (signed; `a - b`).
-    timestamp-diff: func(a: u64, b: u64) -> s64;
+  /// Milliseconds between `a` and `b` (signed; `a - b`).
+  timestamp-diff: func(a: u64, b: u64) -> s64;
 
-    /// Format a timestamp using a strftime-ish format string.
-    timestamp-format: func(ts: u64, format: string) -> string;
+  /// Format a timestamp using a strftime-ish format string.
+  timestamp-format: func(ts: u64, format: string) -> string;
 
-    /// Wait until a timestamp fires. Errors if `ts <= now`; the fired `timer`
-    /// event is tagged with the returned UUID.
-    wait-timestamp: func(ts: u64) -> result<string, string>;
+  /// Wait until a timestamp fires. Errors if `ts <= now`; the fired `timer`
+  /// event is tagged with the returned UUID.
+  wait-timestamp: func(ts: u64) -> result<string, string>;
 
-    /// Wait for `ms` milliseconds; the fired `timer` event is tagged with the
-    /// returned UUID.
-    wait-duration: func(ms: u64) -> result<string, string>;
+  /// Wait for `ms` milliseconds; the fired `timer` event is tagged with the
+  /// returned UUID.
+  wait-duration: func(ms: u64) -> result<string, string>;
 
-    /// Wait until the next fire of a cron spec; the fired `timer` event is
-    /// tagged with the returned UUID.
-    wait-cron: func(spec: string) -> result<string, string>;
+  /// Wait until the next fire of a cron spec; the fired `timer` event is
+  /// tagged with the returned UUID.
+  wait-cron: func(spec: string) -> result<string, string>;
 
-    /// Subscribe to messages from another agent. Returns a UUID handle;
-    /// events from that agent arrive tagged with it. Nothing arrives without
-    /// a subscription.
-    subscribe: func(agent: string) -> result<string, string>;
+  /// Cancel a pending wait (`wait-timestamp` / `wait-duration` / `wait-cron`) by
+  /// the UUID handle it returned. No further `"timer"` event is delivered.
+  cancel: func(uuid: string);
 
-    /// Send a payload to another agent. The sender is taken from the calling
-    /// agent's context; the message lands in the recipient's inbox only if it
-    /// subscribed to the sender, tagged with the subscription's UUID.
-    send: func(agent: string, payload: string);
+  /// Subscribe to messages from another agent. Returns a UUID handle;
+  /// events from that agent arrive tagged with it. Nothing arrives without
+  /// a subscription.
+  subscribe: func(agent: string) -> result<string, string>;
 
-    /// Blocking receive (with a host-side timeout) of the next event from this
-    /// agent's single inbox.
-    recv: func() -> result<event-envelope, string>;
+  /// Unsubscribe from another agent's messages by the UUID handle `subscribe`
+  /// returned. No further `"message"` events are delivered on that handle.
+  unsubscribe: func(uuid: string);
 
-    /// Non-blocking poll of the next event.
-    try-recv: func() -> result<option<event-envelope>, string>;
+  /// Send a payload to another agent. The sender is taken from the calling
+  /// agent's context; the message lands in the recipient's inbox only if it
+  /// subscribed to the sender, tagged with the subscription's UUID.
+  send: func(agent: string, payload: string);
 
-    /// A fresh v4 UUID string (also used internally for every handle).
-    new-uuid: func() -> string;
+  /// Blocking receive (with a host-side timeout) of the next event from this
+  /// agent's single inbox.
+  recv: func() -> result<event-envelope, string>;
+
+  /// Non-blocking poll of the next event.
+  try-recv: func() -> result<option<event-envelope>, string>;
+
+  /// A fresh v4 UUID string (also used internally for every handle).
+  new-uuid: func() -> string;
 }
 
-/// The agent brain: invoked once per iteration by the host.
+/// The agent runtime: invoked once per iteration by the host.
 interface runtime {
-    /// Which brain implementation this is.
-    kind: func() -> string;
+  /// Which runtime implementation this is.
+  kind: func() -> string;
 
-    /// Run one iteration over the agent's brain script. Returns the terminal
-    /// message if the brain chose to exit.
-    run: func(script: string) -> result<option<string>, string>;
+  /// Run one iteration over the agent's brain script. Returns the terminal
+  /// message if the brain chose to exit.
+  run: func(script: string) -> result<option<string>, string>;
 }
 
 /// The single world: host-owned registries and helpers are imported; the
-/// brain's runtime is exported.
+/// runtime is exported.
 world omw {
     import types;
     import provider;

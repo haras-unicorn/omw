@@ -5,10 +5,9 @@ pub mod engine;
 pub mod rhai;
 pub mod wasm;
 
-use std::sync::Arc;
-
-use crate::config::ImplConfig;
 use crate::host::ctx::AgentContext;
+use serde_json::Value;
+use std::sync::Arc;
 
 /// The terminal result of one agent run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +16,15 @@ pub enum RunOutcome {
   Completed,
   /// The brain terminated itself with a message.
   Exited(String),
+}
+
+/// A configured runtime instance: the impl plus its config-derived name and
+/// static kind.
+#[derive(Clone)]
+pub struct RuntimeEntry {
+  pub name: String,
+  pub kind: String,
+  pub runtime: Arc<dyn Runtime>,
 }
 
 /// A runtime loads an agent brain and drives it for one iteration.
@@ -30,36 +38,42 @@ pub trait Runtime: Send + Sync {
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome>;
 }
 
-/// Build a runtime from the agent's kind and the runtime's impl config (which
-/// is optional — e.g. the rhai runtime falls back to the bundled interpreter)。
+/// Build a runtime from the agent's kind and the runtime's impl config.
 pub fn build(
+  name: &str,
   kind: &str,
-  impl_cfg: Option<&ImplConfig>,
-) -> anyhow::Result<Arc<dyn Runtime>> {
-  match kind {
-    "wasm" => wasm::build(impl_cfg),
+  params: &Value,
+) -> anyhow::Result<RuntimeEntry> {
+  let runtime = match kind {
+    "wasm" => wasm::build(name, params),
     #[cfg(feature = "rhai")]
-    "rhai" => rhai::build(impl_cfg),
+    "rhai" => rhai::build(name, params),
     other => anyhow::bail!("unsupported runtime kind {other:?}"),
-  }
+  }?;
+
+  Ok(RuntimeEntry {
+    name: name.to_owned(),
+    kind: kind.to_owned(),
+    runtime,
+  })
 }
 
 #[cfg(test)]
 mod tests {
+  use serde_json::Map;
+
   use super::*;
 
   #[test]
   fn factory_builds_known_kinds() -> anyhow::Result<()> {
-    // `kind()` is static and not callable on a trait object, so assert only
-    // that dispatch succeeds for each known kind。
-    assert!(build("wasm", None).is_ok());
+    assert!(build("wasm", "wasm", &Value::Object(Map::new())).is_ok());
     #[cfg(feature = "rhai")]
-    assert!(build("rhai", None).is_ok());
+    assert!(build("rhai", "rhai", &Value::Object(Map::new())).is_ok());
     Ok(())
   }
 
   #[test]
   fn factory_rejects_unknown_kind() {
-    assert!(build("nope", None).is_err());
+    assert!(build("nope", "nope", &Value::Object(Map::new())).is_err());
   }
 }

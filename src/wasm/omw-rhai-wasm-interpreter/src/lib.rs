@@ -82,6 +82,12 @@ fn install_omw(engine: &mut Engine) {
     tooling_subscribe_resource_list,
   );
   engine.register_fn("tooling_subscribe_resource", tooling_subscribe_resource);
+  engine.register_fn(
+    "tooling_unsubscribe_resource_list",
+    tooling_unsubscribe_resource_list,
+  );
+  engine
+    .register_fn("tooling_unsubscribe_resource", tooling_unsubscribe_resource);
 
   let mut provider = Module::new();
   provider.set_native_fn("get", provider_get);
@@ -99,7 +105,9 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("wait_timestamp", host_wait_timestamp);
   host.set_native_fn("wait_duration", host_wait_duration);
   host.set_native_fn("wait_cron", host_wait_cron);
+  host.set_native_fn("cancel", host_cancel);
   host.set_native_fn("subscribe", host_subscribe);
+  host.set_native_fn("unsubscribe", host_unsubscribe);
   host.set_native_fn("send", host_send);
   host.set_native_fn("recv", host_recv);
   host.set_native_fn("try_recv", host_try_recv);
@@ -245,18 +253,36 @@ fn tooling_list_resources(handle: Map) -> Result<Array, Box<EvalAltResult>> {
     .map_err(to_error)?;
   let mut arr = Array::new();
   for r in resources {
-    let mut m = Map::new();
-    m.insert("uri".into(), r.uri.into());
-    m.insert("name".into(), r.name.into());
-    if let Some(desc) = r.description {
-      m.insert("description".into(), desc.into());
-    }
-    if let Some(mime) = r.mime_type {
-      m.insert("mime_type".into(), mime.into());
-    }
-    arr.push(m.into());
+    arr.push(resource_to_map(r).into());
   }
   Ok(arr)
+}
+
+/// Map one `types::ResourceInfo` into a rhai map so scripts can read `uri`,
+/// `name`, `description` and `mime_type` off a resource.
+fn resource_to_map(r: types::ResourceInfo) -> Map {
+  let mut m = Map::new();
+  m.insert("uri".into(), r.uri.into());
+  m.insert("name".into(), r.name.into());
+  if let Some(desc) = r.description {
+    m.insert("description".into(), desc.into());
+  }
+  if let Some(mime) = r.mime_type {
+    m.insert("mime_type".into(), mime.into());
+  }
+  m
+}
+
+/// Map one `types::ResourceContent` into a rhai map so scripts can read `uri`,
+/// `mime_type` and `content` off a `resource-updated` event.
+fn resource_content_to_map(c: types::ResourceContent) -> Map {
+  let mut m = Map::new();
+  m.insert("uri".into(), c.uri.into());
+  if let Some(mime) = c.mime_type {
+    m.insert("mime_type".into(), mime.into());
+  }
+  m.insert("content".into(), c.content.into());
+  m
 }
 
 fn tooling_subscribe_resource_list(
@@ -278,6 +304,28 @@ fn tooling_subscribe_resource(
     .map_err(to_error)?
     .subscribe_resource(uri)
     .map_err(to_error)
+}
+
+fn tooling_unsubscribe_resource_list(
+  handle: Map,
+  uuid: &str,
+) -> Result<(), Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  tooling::get(&name)
+    .map_err(to_error)?
+    .unsubscribe_resource_list(uuid);
+  Ok(())
+}
+
+fn tooling_unsubscribe_resource(
+  handle: Map,
+  uuid: &str,
+) -> Result<(), Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  tooling::get(&name)
+    .map_err(to_error)?
+    .unsubscribe_resource(uuid);
+  Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -329,13 +377,23 @@ fn host_wait_cron(spec: &str) -> Result<String, Box<EvalAltResult>> {
   host::wait_cron(spec).map_err(to_error)
 }
 
-/// Convert a rhai `i64` to a WIT `u64`, rejecting negatives.
-fn to_u64(v: i64) -> Result<u64, Box<EvalAltResult>> {
-  u64::try_from(v).map_err(|_| to_error("expected a non-negative integer"))
+fn host_cancel(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::cancel(uuid);
+  Ok(())
 }
 
 fn host_subscribe(agent: &str) -> Result<String, Box<EvalAltResult>> {
   host::subscribe(agent).map_err(to_error)
+}
+
+fn host_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::unsubscribe(uuid);
+  Ok(())
+}
+
+/// Convert a rhai `i64` to a WIT `u64`, rejecting negatives.
+fn to_u64(v: i64) -> Result<u64, Box<EvalAltResult>> {
+  u64::try_from(v).map_err(|_| to_error("expected a non-negative integer"))
 }
 
 fn host_send(agent: &str, payload: &str) -> Result<(), Box<EvalAltResult>> {
@@ -370,10 +428,20 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
     types::Event::Message(payload) => ("message", payload.into()),
     types::Event::Error(message) => ("error", message.into()),
     types::Event::Timer => ("timer", ().into()),
-    types::Event::Delta(delta) => ("delta", delta_to_map(delta).into()),
+    types::Event::ChatDelta(delta) => {
+      ("chat-delta", delta_to_map(delta).into())
+    }
     types::Event::StreamEnd => ("stream-end", ().into()),
-    types::Event::ResourceChanged => ("resource-changed", ().into()),
-    types::Event::ResourceUpdated => ("resource-updated", ().into()),
+    types::Event::ResourceListUpdated(resources) => {
+      let mut arr = Array::new();
+      for r in resources {
+        arr.push(resource_to_map(r).into());
+      }
+      ("resource-list-updated", arr.into())
+    }
+    types::Event::ResourceUpdated(content) => {
+      ("resource-updated", resource_content_to_map(content).into())
+    }
   };
   m.insert("kind".into(), kind.into());
   m.insert("payload".into(), payload);
@@ -381,7 +449,7 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
 }
 
 /// Map a `types::ChatDelta` into a rhai map so scripts can read `content`,
-/// `tool_call` and `finish_reason` off a `"delta"` event's payload.
+/// `tool_call` and `finish_reason` off a `"chat-delta"` event's payload.
 fn delta_to_map(delta: types::ChatDelta) -> Map {
   let mut m = Map::new();
   if let Some(content) = delta.content {

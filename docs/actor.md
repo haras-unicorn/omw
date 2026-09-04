@@ -17,9 +17,9 @@ Nothing is routed to the brain directly — chat deltas, tool results, timers, a
 messages from other agents all land in the same inbox as an
 [`EventEnvelope`][events] carrying:
 
-- `id` — the UUID of the _subscribed source_ the event came from, and
-- `event` — the strongly-typed payload (`message`, `error`, `timer`, `delta`,
-  `stream-end`, `resource-changed`, `resource-updated`).
+- `id` — the UUID of the _subscribed source_ the event came from.
+- `event` — the strongly-typed payload (`message`, `error`, `timer`,
+  `chat-delta`, `stream-end`, `resource-list-updated`, `resource-updated`).
 
 The brain consumes events with `host.recv` (a blocking receive with a 60 second
 host-side timeout) or `host.try-recv` (a non-blocking poll). Because every event
@@ -34,6 +34,7 @@ Inter-agent messaging is subscription-based. An agent does not receive anything
 from another agent unless it explicitly subscribed:
 
 - `host.subscribe(agent)` returns a new UUID handle for that source.
+- `host.unsubscribe(uuid)` removes a subscription by handle.
 - `host.send(agent, payload)` delivers the message only if the _recipient_
   subscribed to the _sender_. Each recipient's message is tagged with the UUID
   of _its own_ subscription to the sender, not a global topic, so a sender
@@ -50,13 +51,17 @@ runtime (the `AgentContext.rt` tokio runtime), which pushes events into the
 inbox:
 
 - a `provider.chat` call spawns a [chat-stream pump][streams] that delivers
-  `delta` events as chunks arrive and a terminal `stream-end` (or `error`) event
-  when the stream closes;
+  `chat-delta` events as chunks arrive and a terminal `stream-end` (or `error`)
+  event when the stream closes.
 - a `tooling.subscribe-resource-list` / `subscribe-resource` call spawns a
-  [resource pump][resources] that delivers `resource-changed` /
-  `resource-updated` events;
+  [resource pump][resources] that delivers `resource-list-updated` /
+  `resource-updated` events.
 - a `host.wait-timestamp` / `wait-duration` / `wait-cron` call schedules a
   [timer][time] that pushes a `Timer` event at the deadline.
+
+Every pump holds a cancel signal keyed by its UUID handle: `provider.cancel`,
+`host.cancel`, and the `tooling.unsubscribe-*` calls can drop it early, stopping
+further deliveries before the source naturally ends.
 
 Pull-style calls (`models`, `list-tools`, `call-tool`, `list-resources`) are far
 shorter, so the host runs them to completion with `rt.block_on` instead of

@@ -194,6 +194,8 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?)
   }
 
