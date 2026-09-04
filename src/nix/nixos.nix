@@ -26,7 +26,7 @@ let
           description = ''
             Which package flavor to run: `default` (the crates.io-equivalent
             build, without the rhai runtime) or `rhai` (adds the bundled rhai
-            interpreter via the `omw-rhai` package). Overridable with `package`。
+            interpreter via the `omw-rhai` package). Overridable with `package`.
           '';
         };
 
@@ -56,8 +56,9 @@ let
           type = lib.types.nullOr settingsFormat.type;
           default = null;
           description = ''
-            The omw configuration as an attribute set, rendered to TOML at build
-            time. Mutually exclusive with `services.omw.settingsFile`. Environment
+            The omw configuration provided as an attribute set, rendered to TOML
+            at build time. Mutually exclusive with `services.omw.settingsFile`.
+            Environment
             variables of the form `$VAR` or `''${VAR}` are substituted into the config
             before omw reads it (see `services.omw.environment`), which is the
             intended way to supply API keys and other secrets at runtime.
@@ -101,7 +102,7 @@ let
           type = lib.types.nullOr lib.types.str;
           default = null;
           description = ''
-            User the service runs as. When both `services.omw.user` and
+            The user the service runs as. When both `services.omw.user` and
             `services.omw.group` are null, a dynamic user is allocated.
           '';
         };
@@ -110,7 +111,7 @@ let
           type = lib.types.nullOr lib.types.str;
           default = null;
           description = ''
-            Group the service runs as. When both `services.omw.user` and
+            The group the service runs as. When both `services.omw.user` and
             `services.omw.group` are null, a dynamic user is allocated.
           '';
         };

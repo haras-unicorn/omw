@@ -5,7 +5,6 @@
     "README.md",
     "CONTRIBUTING.md",
     "flake.nix",
-    "docs/REFACTOR.md",
     "src/native/omw/src/main.rs",
     "src/native/omw/src/lib.rs"
   ]

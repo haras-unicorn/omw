@@ -3,19 +3,29 @@
 
 use std::sync::Arc;
 
-use anyhow::Context as _;
-
-use crate::config::ImplConfig;
 use crate::host::ctx::AgentContext;
 use crate::runtime::engine::WasmEngine;
 use crate::runtime::{RunOutcome, Runtime};
+use anyhow::Context as _;
+use serde::Deserialize;
+use serde::de::IntoDeserializer;
+use serde_json::Value;
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Config {}
 
 /// Loads the agent's wasm brain from `ctx.script` and runs it.
 #[derive(Clone, Default)]
-pub struct WasmRuntime;
+pub struct WasmRuntime {
+  pub name: String,
+  pub config: Config,
+}
 
-pub fn build(_cfg: Option<&ImplConfig>) -> anyhow::Result<Arc<dyn Runtime>> {
-  Ok(Arc::new(WasmRuntime))
+pub fn build(name: &str, params: &Value) -> anyhow::Result<Arc<dyn Runtime>> {
+  Ok(Arc::new(WasmRuntime {
+    name: name.to_owned(),
+    config: Config::deserialize(params.into_deserializer())?,
+  }))
 }
 
 #[async_trait::async_trait]
@@ -68,9 +78,11 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?;
 
-    let runtime = WasmRuntime;
+    let runtime = WasmRuntime::default();
     let rt = tokio::runtime::Builder::new_multi_thread()
       .enable_all()
       .build()?;

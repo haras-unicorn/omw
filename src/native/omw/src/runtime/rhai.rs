@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use serde::Deserialize;
+use serde::de::IntoDeserializer;
+use serde_json::Value;
 
-use crate::config::ImplConfig;
 use crate::host::ctx::AgentContext;
 use crate::runtime::engine::WasmEngine;
 use crate::runtime::{RunOutcome, Runtime};
@@ -16,61 +18,48 @@ use crate::runtime::{RunOutcome, Runtime};
 const RHAI_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
   include_bytes!(env!("OMW_RHAI_WASM_INTERPRETER_COMPONENT_NATIVE"));
 
+/// Impl-specific configuration for the Rhai runtime.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Config {
+  #[serde(default)]
+  pub interpreter: Option<PathBuf>,
+}
+
 /// Wraps a [`WasmEngine`] pointed at the rhai interpreter component.
 #[derive(Clone)]
 pub struct RhaiWasmRuntime {
+  #[allow(dead_code, reason = "to keep it consistent")]
+  name: String,
+  #[allow(dead_code, reason = "to keep it consistent")]
+  config: Config,
   wasm: WasmEngine,
 }
 
 impl RhaiWasmRuntime {
-  /// Load a rhai evaluator component from an explicit path (custom override).
-  pub fn new(interpreter_path: PathBuf) -> anyhow::Result<Self> {
-    tracing::info!(path = %interpreter_path.display(), "loading rhai interpreter from an explicit path");
-    Ok(Self {
-      wasm: WasmEngine::from_path(&interpreter_path)?,
-    })
-  }
-
-  /// Use the rhai evaluator compiled into the `omw` binary by `build.rs`.
-  pub fn embedded() -> anyhow::Result<Self> {
-    tracing::info!("loading the embedded rhai interpreter");
-    Ok(Self {
-      wasm: WasmEngine::from_native_bytes(
-        RHAI_WASM_INTERPRETER_COMPONENT_NATIVE,
-      )?,
-    })
-  }
-}
-
-pub fn build(
-  impl_cfg: Option<&ImplConfig>,
-) -> anyhow::Result<Arc<dyn Runtime>> {
-  if let Some(path) = custom_interpreter_path(impl_cfg)? {
-    Ok(Arc::new(RhaiWasmRuntime::new(path)?))
-  } else {
-    Ok(Arc::new(RhaiWasmRuntime::embedded()?))
+  /// Load a rhai evaluator component.
+  pub fn new(name: String, config: Config) -> anyhow::Result<Self> {
+    tracing::info!(name = %name, config = ?config, "loading rhai interpreter");
+    if let Some(interpreter) = config.interpreter.clone() {
+      Ok(Self {
+        name,
+        config,
+        wasm: WasmEngine::from_path(&interpreter)?,
+      })
+    } else {
+      Ok(Self {
+        name,
+        config,
+        wasm: WasmEngine::from_native_bytes(
+          RHAI_WASM_INTERPRETER_COMPONENT_NATIVE,
+        )?,
+      })
+    }
   }
 }
 
-/// Resolve an explicit interpreter path override from config or env, if any.
-///
-/// If neither is present, the bundled (embedded) interpreter is used.
-fn custom_interpreter_path(
-  impl_cfg: Option<&ImplConfig>,
-) -> anyhow::Result<Option<PathBuf>> {
-  if let Some(cfg) = impl_cfg
-    && let Some(interpreter) = cfg
-      .params
-      .get("interpreter")
-      .and_then(serde_json::Value::as_str)
-  {
-    return Ok(Some(PathBuf::from(interpreter)));
-  }
-  Ok(
-    std::env::var("OMW_RHAI_INTERPRETER")
-      .ok()
-      .map(PathBuf::from),
-  )
+pub fn build(name: &str, params: &Value) -> anyhow::Result<Arc<dyn Runtime>> {
+  let config = Config::deserialize(params.into_deserializer())?;
+  Ok(Arc::new(RhaiWasmRuntime::new(name.to_owned(), config)?))
 }
 
 #[async_trait::async_trait]
@@ -140,6 +129,8 @@ mod tests {
       tooling,
       bus,
       Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?)
   }
 
@@ -156,6 +147,8 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?)
   }
 
@@ -166,7 +159,7 @@ mod tests {
     std::fs::write(&path, "1 + 2")?;
     let ctx = test_ctx(path, HashMap::new(), HashMap::new())?;
 
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
 
     // `1 + 2` evaluates to `3`, surfaced as the brain's terminal message.
@@ -203,7 +196,7 @@ mod tests {
       let out = "";
       loop {
         let e = omw::host::recv();
-        if e.id == id && e.kind == "delta" { out += e.payload.content; }
+        if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
         if e.id == id && e.kind == "stream-end" { break; }
       }
       let t = omw::tooling::get("mock-tooling");
@@ -216,7 +209,7 @@ mod tests {
     std::fs::write(&path, script)?;
     let ctx = test_ctx(path, providers, tooling_map)?;
 
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
     assert_eq!(outcome, RunOutcome::Exited("|".to_string()));
 
@@ -254,7 +247,7 @@ mod tests {
       let out = "";
       loop {
         let e = omw::host::recv();
-        if e.id == id && e.kind == "delta" { out += e.payload.content; }
+        if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
         if e.id == id && e.kind == "stream-end" { break; }
       }
       out
@@ -264,7 +257,7 @@ mod tests {
     std::fs::write(&path, script)?;
     let ctx = test_ctx(path, providers, HashMap::new())?;
 
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
     assert_eq!(
       outcome,
@@ -285,7 +278,7 @@ mod tests {
     // deliveries from bob will be tagged with.
     let subscribe_path = dir.path().join("subscribe.rhai");
     std::fs::write(&subscribe_path, r#"omw::host::subscribe("bob")"#)?;
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let alice = test_ctx_with_bus("alice", subscribe_path, Arc::clone(&bus))?;
     let outcome = run(&runtime, &alice)?;
     let sub_id = match outcome {
@@ -311,7 +304,7 @@ mod tests {
     let outcome = run(&runtime, &bob)?;
     assert_eq!(outcome, RunOutcome::Completed);
 
-    // Alice recv()s the envelope; its id matches the subscription UUID.
+    // Alice calls recv() to receive the envelope; its id matches the subscription UUID.
     let recv_path = dir.path().join("recv.rhai");
     std::fs::write(
       &recv_path,
@@ -338,7 +331,7 @@ mod tests {
     )?;
 
     let ctx = test_ctx_with_bus("test-agent", path, bus)?;
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
     assert_eq!(
       outcome,
@@ -351,7 +344,8 @@ mod tests {
   #[test]
   fn tooling_resource_subscriptions_deliver_resource_events()
   -> anyhow::Result<()> {
-    let tooling = MockTooling::noop();
+    let tooling =
+      MockTooling::with_resource_content("file:///a", "hello-resource");
 
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
@@ -371,12 +365,12 @@ mod tests {
         let t = omw::tooling::get("mock-tooling");
         let rid = t.subscribe_resource("file:///a");
         let e = omw::host::recv();
-        (e.id == rid) + "|" + e.kind
+        (e.id == rid) + "|" + e.kind + "|" + e.payload.content
       "#,
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
 
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
     let msg = match outcome {
       RunOutcome::Exited(msg) => msg,
@@ -386,9 +380,9 @@ mod tests {
       msg.starts_with("true|"),
       "expected a resource-updated event, got {msg:?}"
     );
-    assert!(
-      msg.ends_with("resource-updated"),
-      "expected kind resource-updated, got {msg:?}"
+    assert_eq!(
+      msg, "true|resource-updated|hello-resource",
+      "expected resource-updated with payload content, got {msg:?}"
     );
     Ok(())
   }
@@ -414,7 +408,7 @@ mod tests {
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
 
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
     // The noop mock has no resources, so the list is an empty array.
     assert_eq!(outcome, RunOutcome::Exited("[]".to_string()));
@@ -431,7 +425,7 @@ mod tests {
     std::fs::write(&path, r#"omw::host::wait_timestamp(1)"#)?;
 
     let ctx = test_ctx_with_bus("test-agent", path, bus)?;
-    let runtime = RhaiWasmRuntime::embedded()?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let result = run(&runtime, &ctx);
     assert!(
       result.is_err(),

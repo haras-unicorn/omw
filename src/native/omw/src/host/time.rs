@@ -12,6 +12,7 @@ use chrono::{TimeZone, Utc};
 
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
+use crate::host::streams::CancelRegistry;
 
 /// Milliseconds between the Unix epoch and `now`.
 pub fn now_ticks() -> u64 {
@@ -59,6 +60,7 @@ fn chrono_from_ticks(ts: u64) -> Option<chrono::DateTime<Utc>> {
 pub fn wait_timestamp(
   bus: &Arc<MessageBus>,
   rt: &Arc<tokio::runtime::Runtime>,
+  timers: &Arc<CancelRegistry>,
   name: &str,
   uuid: &str,
   ts: u64,
@@ -72,6 +74,7 @@ pub fn wait_timestamp(
   schedule(
     bus.clone(),
     rt.clone(),
+    timers.clone(),
     name.to_string(),
     uuid.to_string(),
     delay,
@@ -84,6 +87,7 @@ pub fn wait_timestamp(
 pub fn wait_duration(
   bus: &Arc<MessageBus>,
   rt: &Arc<tokio::runtime::Runtime>,
+  timers: &Arc<CancelRegistry>,
   name: &str,
   uuid: &str,
   ms: u64,
@@ -92,6 +96,7 @@ pub fn wait_duration(
   schedule(
     bus.clone(),
     rt.clone(),
+    timers.clone(),
     name.to_string(),
     uuid.to_string(),
     delay,
@@ -103,6 +108,7 @@ pub fn wait_duration(
 pub fn wait_cron(
   bus: &Arc<MessageBus>,
   rt: &Arc<tokio::runtime::Runtime>,
+  timers: &Arc<CancelRegistry>,
   name: &str,
   uuid: &str,
   spec: &str,
@@ -121,6 +127,7 @@ pub fn wait_cron(
   schedule(
     bus.clone(),
     rt.clone(),
+    timers.clone(),
     name.to_string(),
     uuid.to_string(),
     delay,
@@ -133,10 +140,12 @@ pub fn wait_cron(
 fn schedule(
   bus: Arc<MessageBus>,
   rt: Arc<tokio::runtime::Runtime>,
+  timers: Arc<CancelRegistry>,
   name: String,
   uuid: String,
   delay: Duration,
 ) {
+  let mut cancel = timers.open(uuid.clone());
   tracing::debug!(
     agent = %name,
     uuid = %uuid,
@@ -144,9 +153,17 @@ fn schedule(
     "timer registered"
   );
   rt.spawn(async move {
-    tokio::time::sleep(delay).await;
-    tracing::trace!(agent = %name, uuid = %uuid, "timer fired");
-    bus.deliver(&name, &uuid, Event::Timer);
+    tokio::select! {
+      biased;
+      _ = &mut cancel => {
+        tracing::debug!(agent = %name, uuid = %uuid, "timer cancelled");
+      }
+      _ = tokio::time::sleep(delay) => {
+        timers.remove(&uuid);
+        tracing::trace!(agent = %name, uuid = %uuid, "timer fired");
+        bus.deliver(&name, &uuid, Event::Timer);
+      }
+    }
   });
 }
 
@@ -186,10 +203,36 @@ mod tests {
   fn wait_timestamp_rejects_the_past() -> anyhow::Result<()> {
     let rt = Arc::new(tokio::runtime::Builder::new_current_thread().build()?);
     let bus = Arc::new(MessageBus::new());
-    let err = wait_timestamp(&bus, &rt, "alice", "uuid", 1)
-      .err()
-      .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
+    let err = wait_timestamp(
+      &bus,
+      &rt,
+      &Arc::new(CancelRegistry::new()),
+      "alice",
+      "uuid",
+      1,
+    )
+    .err()
+    .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
     assert!(err.contains("future"), "{err}");
+    Ok(())
+  }
+
+  #[test]
+  fn cancel_suppresses_the_timer_event() -> anyhow::Result<()> {
+    let rt = Arc::new(
+      tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?,
+    );
+    let bus = Arc::new(MessageBus::new());
+    let timers = Arc::new(CancelRegistry::new());
+    let uuid = crate::host::bus::new_uuid();
+    wait_duration(&bus, &rt, &timers, "alice", &uuid, 0);
+    timers.cancel(&uuid);
+    rt.block_on(async {
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    });
+    assert_eq!(bus.try_recv("alice")?, None);
     Ok(())
   }
 }

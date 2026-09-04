@@ -1,108 +1,132 @@
 # AGENTS.md
 
-OMW = OpenAI + MCP + WASM. `omw` is an agent runtime:it loads an agent "brain"
-(a WASM component, currently a rhai-script evaluator), drives it through a host
-layer that bridges an OpenAI-family chat provider and MCP tool servers, and runs
-it for one iteration.
+OMW = OpenAI + MCP + WASM. `omw` is an agent runtime: it loads an agent "brain"
+(a WASM component, or a Rhai script evaluator), drives it through a host layer
+that bridges an OpenAI-family chat provider and MCP tool servers, and runs it
+for one iteration or loops it.
 
 ## Layout
 
 A Cargo workspace with three crates plus a single WIT contract.
 
 - `src/native/omw` — the `omw` host binary. A thin `main.rs` entrypoint plus a
-  library (`lib.rs`)that contains the runtime logic., and a build script
-  (`build.rs`)plus the vendored WIT contract under `wit/`.
+  library (`lib.rs`) that contains the runtime logic and a build script
+  (`build.rs`) plus the vendored WIT contract under `wit/`.
   - `agent.rs` — bootstrap: turns a parsed config into provider + tooling +
-    bus + `AgentContext`, then runs the agent's runtime for one iteration.
+    bus + `AgentContext`, then runs the agent's runtime for one iteration or
+    loops it.
 
-  - `config.rs` —the TOML config (default `omw.toml`, overridable with the
+  - `config.rs` — the TOML config (default `omw.toml`, overridable with the
     `--config` flag or layered from `OMW__`-prefixed environment variables):
     global provider/tooling/runtime maps (each an impl-agnostic `kind` + opaque
     params) plus per-agent wiring.
 
-  - `log.rs` —initializes the structured, leveled JSON tracing subscriber
+  - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
 
-  - `provider/` —the `Provider` abstraction over an OpenAI-family chat stream,
-    implemented for OpenAI in `openai.rs`;the `build` factory dispatches on the
+  - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
+    implemented for OpenAI in `openai.rs`. The `build` factory dispatches on the
     configured `kind`.
 
-  - `tooling/` —the `Tooling` abstraction over MCP-style tool servers,
-    implemented as a stdio JSON-RPC client in `mcp.rs`;the `build` factory
+  - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
+    implemented as a stdio JSON-RPC client in `mcp.rs`. The `build` factory
     dispatches on the configured `kind`.
 
-  - `runtime/` —the `Runtime` abstraction (`Runtime::run(&AgentContext)`),with
-    `engine.rs` (the generic component loader + a generic `run` that calls the
-    exported `runtime.run`), `wasm.rs` (loads the agent's `.wasm` brain)and
-    `rhai.rs` (the bundled rhai evaluator; enabled by the `rhai` feature)。
-  - `host/` —the host side of the wasm contract.
+  - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`) with
+    `engine.rs` (the generic WASM component loader + a generic `run` that calls
+    the exported `runtime.run`), `wasm.rs` (loads the agent's `.wasm` or `.wat`
+    brain) and `rhai.rs` (the bundled Rhai evaluator that loads `.rhai` brains
+    enabled by the `rhai` feature).
 
-`imports.rs` implements the generated WIT `Host` traits, bridging the
-synchronous wasm engine to the async provider/tooling/bus; `bus.rs` is the
-per-agent inbox + subscription registry that fans messages out tagged with a
-subscription UUID; `events.rs` is the `Event`/`EventEnvelope` type every I/O
-source pushes; `time.rs` is the tick/timer helpers + timer pump; `streams.rs` is
-the chat-stream pump registry keyed by UUID that delivers `delta`/`stream-end`
-events into inboxes; `resources.rs` is the resource-subscription pump that
-delivers `resource-changed`/`resource-updated` events into inboxes; `ctx.rs` is
-`AgentContext`.
+  - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
+    types.
 
-- `bindings.rs` —the single `bindgen!` for the `omw` world, mapped onto host
-  types。
+  - `build.rs` — for the `rhai` and `mock` features, cross-compiles the bundled
+    guests for `wasm32-wasip2`, wraps them into components with `wasm-tools`,
+    and embeds them via `include_bytes!`. A featureless build runs no wasm
+    tooling (so crates.io `cargo publish` of `omw` verifies standalone).
 
-- `build.rs` —for the `rhai` and `mock` features, cross-compiles-the bundled
-  guests for `wasm32-wasip2`, wraps them into components with `wasm-tools`, and
-  embeds them via `include_bytes!`. A featureless build runs no wasm tooling (so
-  crates.io `cargo publish` of `omw` verifies standalone)。
+  - `host/` — the host side of the WASM contract.
+    - `imports.rs` implements the generated WIT `Host` traits, bridging the
+      synchronous wasm engine to the async provider/tooling/bus.
 
-- `src/wasm/omw-rhai-wasm-interpreter` —the guest component (`#![no_main]`),
-  compiled to `wasm32-wasip2`. Exports the `runtime` interface (`kind` +
-  `run(script)`)and registers the `omw` static module whose `provider`/
-  `tooling`/`host` functions route to the host。
+    - `bus.rs` is the per-agent inbox + subscription registry that fans messages
+      out tagged with a subscription UUID (and unsubscribes by handle).
 
-- `src/wasm/omw-wasm-mock` —the test-only wasm mock brain, cross-compiled by the
-  `mock` feature for the engine/wasm runtime tests (not shipped to crates.io;
-  its manifest carries `publish = false`)。
-- `src/native/omw/wit/omw.wit` —the single WIT contract, used by host
-  (`bindgen!`)and guests (`wit-bindgen::generate!`). Changes here ripple into
-  both crates。
+    - `events.rs` is the `Event`/`EventEnvelope` type every I/O source pushes.
 
-- `docs/` — mdbook documentation, published to GitHub Pages。
+    - `time.rs` is the tick/timer helpers + cancellable timer pump.
+
+    - `streams.rs` is the chat-stream pump registry keyed by UUID that delivers
+      `chat-delta`/`stream-end` events into inboxes (its `CancelRegistry` alias
+      also backs timer/resource pumps).
+
+    - `resources.rs` is the cancellable resource-subscription pump that delivers
+      `resource-list-updated`/`resource-updated` events into inboxes.
+
+    - `ctx.rs` is `AgentContext`.
+
+- `src/wasm/omw-rhai-wasm-interpreter` — the Rhai guest component
+  (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
+  (`kind` + `run(script)`) and registers the `omw` static module whose
+  `provider`/ `tooling`/`host` functions route to the host.
+
+- `src/wasm/omw-wasm-mock` — the test-only wasm mock brain, cross-compiled by
+  the `mock` feature for the engine/wasm runtime tests (not shipped to
+  crates.io; its manifest carries `publish = false`).
+
+- `src/native/omw/wit/omw.wit` — the single WIT contract, used by host
+  (`bindgen!`) and guests (`wit-bindgen::generate!`). Changes here ripple into
+  both crates.
+
+- `docs/` — mdbook documentation, published to GitHub Pages.
+
+- `src/nix/nixos.nix` — the NixOS module exposing `services.omw` — a systemd
+  unit that `envsubst`s a config (from `settings` or `settingsFile`) into
+  `omw --config /dev/stdin`, with `environment`/`environmentFile`, `mode`,
+  `extraArgs`, `user`/`group` (or dynamic user), `stateDir` options and a
+  `variant` option selecting the `default` or `rhai` package flavor. Its option
+  reference is generated by the `omw-options` flake package.
 
 ## Conventions
 
-- Edition 2024; 2-space indentation enforced by rustfmt and prettier.
+- Rust edition 2024.
+
+- 2-space indentation enforced by rustfmt and prettier with maximum line length
+  of 80. Tabs are never used and line endings are `lf`.
+
 - Host crates deny `unsafe_code`, `unwrap`/`expect`/`panic`/`unreachable`,
-  `arithmetic_side_effects`, `todo`,and un-reasoned `#[allow]`. The guest crate
-  cannot deny `unsafe_code` (the exported component ABI requires it)。
-- Errors are `anyhow::Result`; async abstractions use `async_trait`。
+  `arithmetic_side_effects`, `todo` and un-reasoned `#[allow]`. The guest crates
+  cannot deny `unsafe_code` (the exported component ABI requires it).
 
-- Structured JSON logging via `tracing` (see `log.rs`。 Level discipline:
-  `trace` = wire/delta level, `debug` = flow/transitions, `info` = lifecycle
-  milestones, `warn` = recoverable anomalies, `error` = failures。 Every
-  guest-invoked operation carries the agent name as a structured field:the
-  per-agent `run_agent`/`engine.run` spans cover the synchronous run,and spawned
-  pump tasks (chat streams, timers, resource subscriptions) pass `agent = %name`
-  explicitly. Secrets are never logged: `api_key` (openai)and `auth_token` (mcp)
-  are redacted via custom `Debug`/helpers,and config debug output goes through
-  `redacted_config`。
-- The wasm engine is synchronous and runs on a `spawn_blocking` thread,,not a
-  tokio worker。 Async is bridged through a dedicated tokio runtime held in
-  `AgentContext` (`ctx.rt`): `provider.chat` spawns a chat-stream pump on `rt`
-  that delivers `delta`/`stream-end` events into the inbox via `bus.deliver`
-  (using `futures_util` + `tokio::select!`), and the `tooling.*`/`host.try-recv`
-  imports use `rt.block_on`. `kanal` is used only for the per-agent `MessageBus`
-  inboxes。
+- Results are `anyhow::Result`.
 
-- `nixos/module.nix` —the NixOS module exposing `services.omw`:a systemd unit
-  that `envsubst`s a config (from `settings` or `settingsFile`)into
-  `omw --config /dev/stdin`,with `environment`/`environmentFile`, `mode`,
-  `extraArgs`, `user`/`group` (or dynamic user),and `stateDir` options, plus a
-  `variant` option selecting the `default` or `rhai` package flavor。 Its option
-  reference is generated by the `omw-options` flake package。
+- Async abstractions use `async_trait`.
 
-- Keep the `omw` WIT world(s) in sync with `bindings.rs` (host)and `install_omw`
-  (guest)。
+- Structured JSON logging via `tracing` (see `src/native/omw/src/log.rs`).
+  - Level discipline: `trace` = wire/delta level, `debug` = flow/transitions,
+    `info` = lifecycle milestones, `warn` = recoverable anomalies, `error` =
+    failures.
+
+  - Every guest-invoked operation carries the agent name as a structured field.
+    The per-agent `run_agent`/`engine.run` spans cover the synchronous run and
+    spawned pump tasks (chat streams, timers, resource subscriptions) pass
+    `agent = %name` explicitly.
+
+  - Secrets are never logged: `api_key` (openai) and `auth_token` (mcp) are
+    redacted via custom `Debug` helpers and config debug output goes through
+    `redacted_config`.
+
+- The wasm engine is synchronous and runs on a `spawn_blocking` thread, not a
+  tokio worker. Async is bridged through a dedicated tokio runtime held in
+  `AgentContext` (`ctx.rt`). `provider.chat` spawns a chat-stream pump on `rt`
+  that delivers `chat-delta`/`stream-end` events into the inbox via
+  `bus.deliver` (using `futures_util` + `tokio::select!`), and the
+  `tooling.*`/`host.try-recv` imports use `rt.block_on`. `kanal` is used only
+  for the per-agent `MessageBus` inboxes.
+
+- Keep the `omw` WIT world(s) in sync with `bindings.rs` (host) and
+  `install_omw` (Rhai guest).
 
 ## Development
 
@@ -110,21 +134,21 @@ Assume you are in the default development shell. Commands go through the `dev`
 wrapper (written in `flake.nix`):
 
 - `dev run` — `cargo run --bin omw`
-- `dev format` — prettier,,nixfmt, cargo fmt,,then `cargo clippy --fix`
+- `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`
 - `dev test` — `cargo clippy --all-features -- -D warnings` and
   `cargo test --all-features`
 - `dev test fast` — like `dev test` but with extra environment that tells tests
   to ignore heavier tests (tests that require `testcontainers` or WASM
   compilation)
-- `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks,,then `dev test`
-  — CI (`check.yaml`)runs `dev lint` and `nix flake check`
+- `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then `dev test`
+  — CI (`check.yaml`) runs `dev lint` and `nix flake check`
 
 Do not use any shell commands other than the ones provided by `dev`. Please
 prefer `dev test fast` over `dev test` if you don't need to test stuff that
-touches WASM compilation,,MCP servers or OpenAI API servers。 Even in those
-cases you should try to use `dev test fast` as much as possible for fast
-iteration until you need to do a final pass on all tests。
+touches WASM compilation, MCP servers or OpenAI API servers. Even in those cases
+you should try to use `dev test fast` as much as possible for fast iteration
+until you need to do a final pass on all tests.
 
 Because `build.rs` cross-compiles the bundled guests (for the `rhai`/`mock`
 features) for `wasm32-wasip2`, building with those features needs that target
-and `wasm-tools` on PATH ((both provided by the dev shell)。
+and `wasm-tools` on PATH (both provided by the dev shell).

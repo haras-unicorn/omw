@@ -46,9 +46,12 @@ content is dropped.
 subscription modes map onto `rmcp` subscription filters:
 
 - `subscribe-resource-list()` subscribes to list-changed notifications and
-  delivers `resource-changed` events;
-- `subscribe-resource(uri)` subscribes to a single resource and delivers
-  `resource-updated` events.
+  delivers `resource-list-updated` events carrying the freshly fetched list;
+- `subscribe-resource(uri)` subscribes to a single resource and, at each update,
+  the host reads the resource back (`resources/read`) and delivers a
+  `resource-updated` event carrying the content. Textual resource content is
+  passed through as-is; binary content arrives base64-encoded, so match on the
+  content's `mime-type` to decide whether to decode it.
 
 Both return `BoxStream`s; the host's resource pump drains them and pushes tagged
 events into the agent inbox, and dropping the stream cancels the subscription.

@@ -83,11 +83,20 @@ async fn run_agent(
     shared.tooling.clone(),
     Arc::clone(&shared.bus),
     Arc::new(StreamRegistry::new()),
+    Arc::new(crate::host::streams::CancelRegistry::new()),
+    Arc::new(crate::host::streams::CancelRegistry::new()),
   )?;
 
-  let runtime =
-    crate::runtime::build(&agent.runtime, cfg.runtime.get(&agent.runtime))?;
-  let outcome = runtime.run(&ctx).await.inspect_err(|e| {
+  let runtime_config = cfg.runtime.get(&agent.runtime).ok_or_else(|| {
+    anyhow::anyhow!("unknown agent runtime {}", agent.runtime)
+  })?;
+
+  let runtime_entry = crate::runtime::build(
+    &agent.runtime,
+    &runtime_config.kind,
+    &runtime_config.params,
+  )?;
+  let outcome = runtime_entry.runtime.run(&ctx).await.inspect_err(|e| {
     tracing::error!(agent = %agent.name, error = %e, "agent run failed");
   })?;
   tracing::info!(?outcome, agent = %agent.name, "agent run finished");

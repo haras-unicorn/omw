@@ -5,7 +5,7 @@
 //! Because the wasm engine runs synchronously here, async work is bridged two
 //! ways:
 //!   * `provider.chat` spawns a pump task (see `host/streams.rs`) on the
-//!     shared tokio runtime that delivers `delta` / `stream-end` events into the
+//!     shared tokio runtime that delivers `chat-delta` / `stream-end` events into the
 //!     agent's inbox.
 
 //!   * `tooling.*` and `host.*` results are obtained with
@@ -26,7 +26,7 @@ use crate::bindings::omw::omw::types as types_bindings;
 use crate::host::ctx::AgentContext;
 use crate::host::events::Event;
 use crate::provider::{ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall};
-use crate::tooling::{ResourceInfo, Tool, ToolingEntry};
+use crate::tooling::{ResourceContent, ResourceInfo, Tool, ToolingEntry};
 
 /// The store-side host that satisfies all three import interfaces. It also
 /// implements [`WasiView`] so the guest's implicit `wasi:cli/environment`
@@ -245,10 +245,12 @@ impl tooling_bindings::HostTooling for Host {
       "subscribing to the resource list"
     );
     crate::host::resources::spawn_pump(
+      Arc::clone(&self.ctx.resources),
       rt,
       Arc::clone(&self.ctx.bus),
       self.ctx.name.clone(),
       uuid.clone(),
+      tooling,
       stream,
     );
     Ok(uuid)
@@ -274,13 +276,43 @@ impl tooling_bindings::HostTooling for Host {
       "subscribing to a resource"
     );
     crate::host::resources::spawn_pump(
+      Arc::clone(&self.ctx.resources),
       rt,
       Arc::clone(&self.ctx.bus),
       self.ctx.name.clone(),
       uuid.clone(),
+      tooling,
       stream,
     );
     Ok(uuid)
+  }
+
+  fn unsubscribe_resource_list(
+    &mut self,
+    self_: Resource<ToolingEntry>,
+    uuid: String,
+  ) {
+    let _ = self_;
+    self.ctx.resources.cancel(&uuid);
+    tracing::debug!(
+      agent = %self.ctx.name,
+      uuid = %uuid,
+      "cancelling a resource-list subscription"
+    );
+  }
+
+  fn unsubscribe_resource(
+    &mut self,
+    self_: Resource<ToolingEntry>,
+    uuid: String,
+  ) {
+    let _ = self_;
+    self.ctx.resources.cancel(&uuid);
+    tracing::debug!(
+      agent = %self.ctx.name,
+      uuid = %uuid,
+      "cancelling a resource subscription"
+    );
   }
 
   fn drop(&mut self, self_: Resource<ToolingEntry>) -> wasmtime::Result<()> {
@@ -326,6 +358,7 @@ impl host_bindings::Host for Host {
     crate::host::time::wait_timestamp(
       &self.ctx.bus,
       &self.ctx.rt(),
+      &self.ctx.timers,
       &self.ctx.name,
       &uuid,
       ts,
@@ -338,6 +371,7 @@ impl host_bindings::Host for Host {
     crate::host::time::wait_duration(
       &self.ctx.bus,
       &self.ctx.rt(),
+      &self.ctx.timers,
       &self.ctx.name,
       &uuid,
       ms,
@@ -350,6 +384,7 @@ impl host_bindings::Host for Host {
     crate::host::time::wait_cron(
       &self.ctx.bus,
       &self.ctx.rt(),
+      &self.ctx.timers,
       &self.ctx.name,
       &uuid,
       &spec,
@@ -366,6 +401,21 @@ impl host_bindings::Host for Host {
     let uuid = self.ctx.bus.subscribe(&self.ctx.name, &agent);
     tracing::info!(agent = %self.ctx.name, source = %agent, uuid = %uuid, "host subscribe");
     Ok(uuid)
+  }
+
+  fn unsubscribe(&mut self, uuid: String) {
+    let removed = self.ctx.bus.unsubscribe(&self.ctx.name, &uuid);
+    tracing::debug!(
+      agent = %self.ctx.name,
+      uuid = %uuid,
+      removed,
+      "host unsubscribe"
+    );
+  }
+
+  fn cancel(&mut self, uuid: String) {
+    self.ctx.timers.cancel(&uuid);
+    tracing::debug!(agent = %self.ctx.name, uuid = %uuid, "host cancel");
   }
 
   fn recv(&mut self) -> Result<host_bindings::EventEnvelope, String> {
@@ -410,10 +460,16 @@ fn out_event(event: Event) -> types_bindings::Event {
     Event::Message(payload) => types_bindings::Event::Message(payload),
     Event::Error(message) => types_bindings::Event::Error(message),
     Event::Timer => types_bindings::Event::Timer,
-    Event::Delta(d) => types_bindings::Event::Delta(out_msg(d)),
+    Event::ChatDelta(d) => types_bindings::Event::ChatDelta(out_msg(d)),
     Event::StreamEnd => types_bindings::Event::StreamEnd,
-    Event::ResourceChanged => types_bindings::Event::ResourceChanged,
-    Event::ResourceUpdated => types_bindings::Event::ResourceUpdated,
+    Event::ResourceListUpdated(resources) => {
+      types_bindings::Event::ResourceListUpdated(
+        resources.into_iter().map(ResourceInfo::into).collect(),
+      )
+    }
+    Event::ResourceUpdated(content) => {
+      types_bindings::Event::ResourceUpdated(content.into())
+    }
   }
 }
 
@@ -477,6 +533,16 @@ impl From<crate::tooling::ResourceInfo> for tooling_bindings::ResourceInfo {
   }
 }
 
+impl From<ResourceContent> for types_bindings::ResourceContent {
+  fn from(c: ResourceContent) -> Self {
+    Self {
+      uri: c.uri,
+      mime_type: c.mime_type,
+      content: c.content,
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
@@ -496,6 +562,8 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?;
     Ok(Host {
       ctx,

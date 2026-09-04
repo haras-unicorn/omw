@@ -16,7 +16,8 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use futures_util::stream::BoxStream;
 use rmcp::model::{
-  CallToolRequestParams, ServerNotification, SubscriptionFilter,
+  CallToolRequestParams, ReadResourceRequestParams, ResourceContents,
+  ServerNotification, SubscriptionFilter,
 };
 use rmcp::service::RoleClient;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -25,7 +26,10 @@ use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{ResourceInfo, ResourceNotification, Tool, Tooling, ToolingEntry};
+use super::{
+  ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
+  ToolingEntry,
+};
 
 /// Which client transport to use for a single MCP server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -241,6 +245,48 @@ impl Tooling for MCPTooling {
       .collect();
     tracing::debug!(count = resources.len(), "mcp resources/list returned");
     Ok(resources)
+  }
+
+  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
+    tracing::debug!(uri, "mcp resources/read");
+    let result = self
+      .peer
+      .read_resource(ReadResourceRequestParams::new(uri.to_string()))
+      .await
+      .context("MCP resources/read failed")?;
+    let mut content = Vec::new();
+    let mut mime_type = None;
+    for c in &result.contents {
+      match c {
+        ResourceContents::TextResourceContents {
+          text,
+          mime_type: mt,
+          ..
+        }
+        | ResourceContents::BlobResourceContents {
+          blob: text,
+          mime_type: mt,
+          ..
+        } => {
+          content.push(text.clone());
+          if mime_type.is_none() {
+            mime_type = mt.clone();
+          }
+        }
+        _ => {}
+      }
+    }
+    let content = content.join("\n");
+    tracing::trace!(
+      uri,
+      content_bytes = content.len(),
+      "mcp resources/read returned"
+    );
+    Ok(ResourceContent {
+      uri: uri.to_string(),
+      mime_type,
+      content,
+    })
   }
 
   async fn subscribe_resource_list(

@@ -12,7 +12,7 @@
 //!
 //! The nested `cargo` build uses a dedicated `--target-dir` (under `OUT_DIR`)
 //! so that it does not contend for the global build lock held by the outer
-//! `cargo` invocation (which would otherwise deadlock)。
+//! `cargo` invocation (which would otherwise deadlock).
 
 use std::env;
 use std::path::{Path, PathBuf};

@@ -34,6 +34,16 @@ pub struct ResourceInfo {
   pub mime_type: Option<String>,
 }
 
+/// The freshly read content of a single resource. `content` holds the actual
+/// text for textual formats and base64-encoded bytes for anything else; the
+/// guest decides which by inspecting `mime_type`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ResourceContent {
+  pub uri: String,
+  pub mime_type: Option<String>,
+  pub content: String,
+}
+
 /// A server-initiated resource notification delivered on a subscription stream.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +87,8 @@ pub trait Tooling: Send + Sync {
   async fn call_tool(&self, name: &str, args: Value) -> anyhow::Result<String>;
   /// Every resource visible on this instance.
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>>;
+  /// Read one resource's current content by URI.
+  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent>;
   /// Subscribe to the resource *list* changing;yielded notifications arrive
   /// on the returned stream (dropping the stream cancels the subscription).
   async fn subscribe_resource_list(
