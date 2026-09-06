@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use futures_util::StreamExt as _;
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 
@@ -51,6 +52,15 @@ pub struct ChatDelta {
   pub finish_reason: Option<String>,
 }
 
+/// The in-band result of a blocking `chat` call:the concatenated text, the
+/// fully-reassembled tool calls,and the terminal finish reason、
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatResult {
+  pub content: Option<String>,
+  pub tool_calls: Vec<ToolCall>,
+  pub finish_reason: Option<String>,
+}
+
 /// A configured provider instance: the impl plus its config-derived name and
 /// static kind. This is what the host stores in its registry and hands the
 /// guest as a `provider` resource.
@@ -72,8 +82,9 @@ impl std::fmt::Debug for ProviderEntry {
 
 /// A provider is anything that can run a chat conversation.
 ///
-/// `chat` always streams; dropping the returned stream aborts the in-flight
-/// request.
+/// `chat_stream` always streams; dropping the returned stream aborts the in-flight
+/// request. `chat` blocks on `chat_stream` to completion by default,and
+/// returns the accumulated [`ChatResult`] in-band.
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
   /// Which implementation this is; known statically, not bound to an instance.
@@ -84,15 +95,65 @@ pub trait Provider: Send + Sync {
   /// The model names this provider exposes to agents at runtime.
   async fn models(&self) -> Vec<String>;
 
-  /// Run a chat and stream the deltas. Implementations must return an error
-  /// (rather than an empty stream) on transport/auth failures before the
-  /// first delta.
   async fn chat(
     &self,
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+  ) -> anyhow::Result<ChatResult> {
+    let mut stream = self.chat_stream(model, messages, tools).await?;
+    let mut content = String::new();
+    let mut tool_calls = Vec::new();
+    let mut finish_reason = None;
+    while let Some(delta) = stream.next().await {
+      let delta = delta.map_err(anyhow::Error::msg)?;
+      if let Some(chunk) = delta.content {
+        content.push_str(&chunk);
+      }
+      if let Some(tc) = delta.tool_call {
+        merge_tool_call(&mut tool_calls, tc);
+      }
+      if delta.finish_reason.is_some() {
+        finish_reason = delta.finish_reason;
+      }
+    }
+    Ok(ChatResult {
+      content: if content.is_empty() {
+        None
+      } else {
+        Some(content)
+      },
+      tool_calls,
+      finish_reason,
+    })
+  }
+
+  /// Run a chat and stream the deltas. Implementations must return an error
+  /// (rather than an empty stream) on transport/auth failures before the
+  /// first delta.
+  async fn chat_stream(
+    &self,
+    model: &str,
+    messages: Vec<ChatMessage>,
+    tools: Vec<Tool>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>>;
+}
+
+/// Merge one streaming ToolCall (whose arguments may be fragmented or
+/// repeated across chunks) into the accumulated list, keyed by id in
+/// first-seen order形式 A delta whose arguments extend the previous ones replaces
+/// them; any other non-empty fragment is appended。
+fn merge_tool_call(tool_calls: &mut Vec<ToolCall>, incoming: ToolCall) {
+  if let Some(existing) = tool_calls.iter_mut().find(|c| c.id == incoming.id) {
+    let args = &incoming.arguments;
+    if args.starts_with(&existing.arguments) {
+      existing.arguments = args.clone();
+    } else if !args.is_empty() {
+      existing.arguments.push_str(args);
+    }
+  } else {
+    tool_calls.push(incoming);
+  }
 }
 
 /// Build a provider instance from an impl-agnostic config entry.

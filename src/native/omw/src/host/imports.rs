@@ -4,7 +4,7 @@
 //!
 //! Because the wasm engine runs synchronously here, async work is bridged two
 //! ways:
-//!   * `provider.chat` spawns a pump task (see `host/streams.rs`) on the
+//!   * `provider.chat-stream` spawns a pump task (see `host/streams.rs`) on the
 //!     shared tokio runtime that delivers `chat-delta` / `stream-end` events into the
 //!     agent's inbox.
 
@@ -87,6 +87,29 @@ impl provider_bindings::HostProvider for Host {
   }
 
   fn chat(
+    &mut self,
+    self_: Resource<ProviderEntry>,
+    model: String,
+    messages: Vec<provider_bindings::ChatMessage>,
+    tools: Vec<tooling_bindings::Tool>,
+  ) -> Result<types_bindings::ChatResult, String> {
+    let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
+    let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
+    let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
+    let provider = Arc::clone(&entry.provider);
+    let rt = Arc::clone(&self.ctx.rt());
+    tracing::debug!(
+      agent = %self.ctx.name,
+      provider = %entry.name,
+      "running a blocking chat"
+    );
+    let result = rt
+      .block_on(provider.chat(&model, msgs, tools))
+      .map_err(|e| e.to_string())?;
+    Ok(out_chat_result(result))
+  }
+
+  fn chat_stream(
     &mut self,
     self_: Resource<ProviderEntry>,
     model: String,
@@ -199,6 +222,47 @@ impl tooling_bindings::HostTooling for Host {
       tooling = %entry.name,
       tool = %name,
       arg_bytes = arguments.len(),
+      "queuing a tool call"
+    );
+    let uuid = crate::host::bus::new_uuid();
+    crate::host::tool_calls::spawn_pump(
+      tooling,
+      self.ctx.rt(),
+      Arc::clone(&self.ctx.bus),
+      Arc::clone(&self.ctx.tool_calls),
+      agent,
+      uuid.clone(),
+      name,
+      args,
+    );
+    Ok(uuid)
+  }
+
+  fn is_open(&mut self, _self_: Resource<ToolingEntry>, uuid: String) -> bool {
+    self.ctx.tool_calls.is_open(&uuid)
+  }
+
+  fn cancel(&mut self, _self_: Resource<ToolingEntry>, uuid: String) {
+    self.ctx.tool_calls.cancel(&uuid);
+    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"cancelling a tool call");
+  }
+
+  fn call_tool_blocking(
+    &mut self,
+    self_: Resource<ToolingEntry>,
+    name: String,
+    arguments: String,
+  ) -> Result<tooling_bindings::ToolResult, String> {
+    let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
+    let tooling = Arc::clone(&entry.tooling);
+    let agent = self.ctx.name.clone();
+    let args =
+      serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
+    tracing::trace!(
+      agent = %agent,
+      tooling = %entry.name,
+      tool = %name,
+      arg_bytes = arguments.len(),
       "calling a tool"
     );
     let rt = Arc::clone(&self.ctx.rt());
@@ -212,7 +276,11 @@ impl tooling_bindings::HostTooling for Host {
       result_bytes = result.len(),
       "tool call returned"
     );
-    Ok(result)
+    Ok(tooling_bindings::ToolResult {
+      name,
+      arguments,
+      value: result,
+    })
   }
 
   fn list_resources(
@@ -224,6 +292,19 @@ impl tooling_bindings::HostTooling for Host {
     let rt = Arc::clone(&self.ctx.rt());
     rt.block_on(tooling.list_resources())
       .map(|resources| resources.into_iter().map(ResourceInfo::into).collect())
+      .map_err(|e| e.to_string())
+  }
+
+  fn read_resource(
+    &mut self,
+    self_: Resource<ToolingEntry>,
+    uri: String,
+  ) -> Result<tooling_bindings::ResourceContent, String> {
+    let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
+    let tooling = Arc::clone(&entry.tooling);
+    let rt = Arc::clone(&self.ctx.rt());
+    rt.block_on(tooling.read_resource(&uri))
+      .map(tooling_bindings::ResourceContent::from)
       .map_err(|e| e.to_string())
   }
 
@@ -415,7 +496,26 @@ impl host_bindings::Host for Host {
 
   fn cancel(&mut self, uuid: String) {
     self.ctx.timers.cancel(&uuid);
-    tracing::debug!(agent = %self.ctx.name, uuid = %uuid, "host cancel");
+    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"host cancel");
+  }
+
+  fn sleep_duration(&mut self, ms: u64) {
+    tracing::debug!(agent = %self.ctx.name,ms,"host sleep-duration");
+    crate::host::time::sleep_duration(&self.ctx.rt(), ms);
+  }
+
+  fn sleep_timestamp(&mut self, ts: u64) -> Result<(), String> {
+    crate::host::time::sleep_timestamp(&self.ctx.rt(), ts).map_err(|error| {
+      tracing::warn!(agent = %self.ctx.name,error,ts,"host sleep-timestamp rejected");
+      error
+    })
+  }
+
+  fn sleep_cron(&mut self, spec: String) -> Result<(), String> {
+    crate::host::time::sleep_cron(&self.ctx.rt(), &spec).map_err(|error| {
+      tracing::warn!(agent = %self.ctx.name,error,spec = %spec,"host sleep-cron rejected");
+      error
+    })
   }
 
   fn recv(&mut self) -> Result<host_bindings::EventEnvelope, String> {
@@ -462,6 +562,13 @@ fn out_event(event: Event) -> types_bindings::Event {
     Event::Timer => types_bindings::Event::Timer,
     Event::ChatDelta(d) => types_bindings::Event::ChatDelta(out_msg(d)),
     Event::StreamEnd => types_bindings::Event::StreamEnd,
+    Event::ToolResult(r) => {
+      types_bindings::Event::ToolResult(types_bindings::ToolResult {
+        name: r.name,
+        arguments: r.arguments,
+        value: r.result,
+      })
+    }
     Event::ResourceListUpdated(resources) => {
       types_bindings::Event::ResourceListUpdated(
         resources.into_iter().map(ResourceInfo::into).collect(),
@@ -508,6 +615,24 @@ fn out_msg(d: ChatDelta) -> types_bindings::ChatDelta {
       arguments: tc.arguments,
     }),
     finish_reason: d.finish_reason,
+  }
+}
+
+fn out_chat_result(
+  r: crate::provider::ChatResult,
+) -> types_bindings::ChatResult {
+  types_bindings::ChatResult {
+    content: r.content,
+    tool_calls: r.tool_calls.into_iter().map(out_tool_call).collect(),
+    finish_reason: r.finish_reason,
+  }
+}
+
+fn out_tool_call(tc: crate::provider::ToolCall) -> types_bindings::ToolCall {
+  types_bindings::ToolCall {
+    id: tc.id,
+    name: tc.name,
+    arguments: tc.arguments,
   }
 }
 
@@ -562,6 +687,7 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
     )?;

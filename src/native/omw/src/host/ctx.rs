@@ -33,6 +33,8 @@ pub struct AgentContext {
   pub timers: Arc<CancelRegistry>,
   /// Registry of this agent's open resource subscriptions, keyed by UUID.
   pub resources: Arc<CancelRegistry>,
+  /// Registry of this agent's in-flight tool calls, keyed by UUID.
+  pub tool_calls: Arc<CancelRegistry>,
   /// The tokio runtime used to bridge synchronous wasm host calls to the
   /// async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
@@ -52,6 +54,7 @@ impl AgentContext {
     streams: Arc<StreamRegistry>,
     timers: Arc<CancelRegistry>,
     resources: Arc<CancelRegistry>,
+    tool_calls: Arc<CancelRegistry>,
   ) -> anyhow::Result<Self> {
     Ok(Self {
       name,
@@ -62,6 +65,7 @@ impl AgentContext {
       streams,
       timers,
       resources,
+      tool_calls,
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()

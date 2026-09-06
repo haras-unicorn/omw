@@ -113,7 +113,7 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
     &brain,
     r#"
       let p = omw::provider::get("openai");
-      let id = p.chat("gpt-test", [ #{ role: "user", content: "hi" } ], []);
+      let id = p.chat_stream("gpt-test", [ #{ role: "user", content: "hi" } ], []);
       let out = "";
       loop {
         let e = omw::host::recv();
@@ -121,7 +121,13 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
         if e.id == id && e.kind == "stream-end" { break; }
       }
       let t = omw::tooling::get("mcp");
-      let tool_res = t.call_tool("echo", #{ input: "hi" });
+      let tid = t.call_tool("echo", #{ input: "hi" });
+      let tool_res = "";
+      loop {
+        let e = omw::host::recv();
+        if e.id == tid && e.kind == "tool-result" { tool_res = e.payload.value; break; }
+        if e.kind == "error" { throw e.payload; }
+      }
       out + "|" + tool_res
     "#,
   )?;

@@ -1,4 +1,4 @@
-//! Host-side chat-stream pumps. Each `provider.chat` call opens a stream
+//! Host-side chat-stream pumps. Each `provider.chat-stream` call opens a stream
 //! registered by UUID in a [`StreamRegistry`]; a pump task on the bridge
 //! runtime reads the provider's stream and delivers `chat-delta` events into the
 //! requesting agent's inbox, then a terminal `stream-end` (or an `error` on
@@ -80,7 +80,7 @@ impl StreamRegistry {
   clippy::too_many_arguments,
   reason = "aggregating the bridge handles into a struct is left to a streams refactor"
 )]
-/// Spawn a pump task on `rt` that drains `provider.chat(...)` and delivers its
+/// Spawn a pump task on `rt` that drains `provider.chat_stream(...)` and delivers its
 /// deltas into `name`'s inbox tagged with `uuid`. The pump runs to a terminal
 /// `stream-end` event on natural end (or an `error` event on failure) and then
 /// deregisters its stream.
@@ -100,7 +100,7 @@ pub fn spawn_pump(
   tracing::info!(agent = %name, uuid = %uuid, model = %model, "chat stream opened");
   rt.spawn(async move {
     let agent = name.clone();
-    let mut stream = match provider.chat(&model, messages, tools).await {
+    let mut stream = match provider.chat_stream(&model, messages, tools).await {
       Ok(stream) => stream,
       Err(e) => {
         tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed to open");

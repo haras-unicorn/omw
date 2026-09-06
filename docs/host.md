@@ -17,25 +17,31 @@ with two fields:
 - `id` — the UUID handle of the subscribed source the event came from, and
 - `event` — one of the following variant payloads:
 
-| variant                  | payload               | meaning                                                                   |
-| ------------------------ | --------------------- | ------------------------------------------------------------------------- |
-| `message(string)`        | the text              | a message from a subscribed agent                                         |
-| `error(string)`          | the error text        | a failed I/O surfaced to the guest                                        |
-| `timer`                  | —                     | a timestamp / duration / cron timer fired                                 |
-| `chat-delta(chat-delta)` | a stream chunk        | a chat-stream delta                                                       |
-| `stream-end`             | —                     | an open chat stream finished                                              |
-| `resource-list-updated`  | `list<resource-info>` | a subscribed resource _list_ changed, with the new list                   |
-| `resource-updated`       | `resource-content`    | a subscribed resource was updated in place, with its freshly read content |
+| variant                    | payload                      | meaning                                                                   |
+| -------------------------- | ---------------------------- | ------------------------------------------------------------------------- |
+| `message(string)`          | the text                     | a message from a subscribed agent                                         |
+| `error(string)`            | the error text               | a failed I/O surfaced to the guest                                        |
+| `timer`                    | —                            | a timestamp / duration / cron timer fired                                 |
+| `chat-delta(chat-delta)`   | a stream chunk               | a chat-stream delta                                                       |
+| `stream-end`               | —                            | an open chat stream finished                                              |
+| `tool-result(tool-result)` | `{ name, arguments, value }` | a queued tool invocation returned                                         |
+| `resource-list-updated`    | `list<resource-info>`        | a subscribed resource _list_ changed, with the new list                   |
+| `resource-updated`         | `resource-content`           | a subscribed resource was updated in place, with its freshly read content |
 
 A `chat-delta` carries `content`, a `tool-call`, and a `finish-reason`, all
 optional, so a chunk may carry text, a partial tool call, or a terminal reason.
+
+A `tool-result` event's payload carries the tool's `name`, its `arguments`,and
+its `value` — the text result queued `call-tool` returned.
+
 A `resource-updated` event's `resource-content` carries the resource's `uri`, an
 optional `mime-type`, and the `content` itself — actual text for textual
 formats, base64 for anything else (match on `mime-type` to tell which).
 
 The guest correlates an envelope with a specific source by matching `id` against
-the UUID the opening call returned — for example the UUID from `provider.chat`,
-a `host.wait-*` call, or `tooling.subscribe-*`.
+the UUID the opening call returned — for example the UUID from
+`provider.chat-stream`, a `host.wait-*` call, `tooling.call-tool`, or
+`tooling.subscribe-*`.
 
 ## Message flow
 
@@ -65,11 +71,22 @@ calls:
 - `wait-duration(ms)` — wait for `ms` milliseconds.
 - `wait-cron(spec)` — wait until the next fire of a cron spec.
 - `cancel(uuid)` — cancel a pending wait by the UUID its `wait-*` call returned.
+- `sleep-duration(ms)` — blocking wait for `ms` milliseconds; returns once the
+  delay elapses. Unlike `wait-duration`, no `timer` event is scheduled and the
+  call blocks the brain until it returns; there is no handle to cancel..
+- `sleep-timestamp(ts)` — blocking wait until a future timestamp fires; errors
+  if `ts` is not in the future. Unlike `wait-timestamp`, no `timer` event is
+  scheduled.
+- `sleep-cron(spec)` — blocking wait until the next fire of a cron spec. Unlike
+  `wait-cron`, no `timer` event is scheduled.`
 
 Each `wait-*` call returns a UUID immediately; when the deadline passes, a
 `timer` event tagged with that UUID is delivered to the inbox. The brain reads
 it back with `recv`/`try-recv` and matches `id` to know which timer fired. A
-pending wait can be cancelled at any time with `cancel(uuid)`.
+pending wait can be cancelled at any time with `cancel(uuid)`. The `sleep-*`
+variants are the blocking mirror — they hold the brain until the wait finishes
+and return directly (no `timer` event, no cancel handle, and an error is
+reported in-band).
 
 ## Logging
 

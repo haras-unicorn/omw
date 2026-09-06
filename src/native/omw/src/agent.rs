@@ -85,6 +85,7 @@ async fn run_agent(
     Arc::new(StreamRegistry::new()),
     Arc::new(crate::host::streams::CancelRegistry::new()),
     Arc::new(crate::host::streams::CancelRegistry::new()),
+    Arc::new(crate::host::streams::CancelRegistry::new()),
   )?;
 
   let runtime_config = cfg.runtime.get(&agent.runtime).ok_or_else(|| {

@@ -5,3 +5,4 @@ pub mod imports;
 pub mod resources;
 pub mod streams;
 pub mod time;
+pub mod tool_calls;

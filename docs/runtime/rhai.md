@@ -38,19 +38,22 @@ The bundled guest (`omw-rhai-wasm-interpreter`) exports the `runtime` interface
 `omw` world. On startup it registers an `omw` static module with three
 sub-modules that expose the WIT interfaces to the script:
 
-- `omw::provider::get(name)` — returns a provider handle map whose `chat`,
-  `is-open`, `cancel`, `models`, and `kind` entries are methods.
+- `omw::provider::get(name)` — returns a provider handle map whose blocking
+  `chat`, streaming `chat_stream`, `is-open`, `cancel`, `models`, and `kind`
+  entries are methods.
 - `omw::tooling::get(name)` — returns a tooling handle map whose `list-tools`,
-  `call-tool`, `list-resources`, `subscribe-resource-list`,
-  `subscribe-resource`, `unsubscribe-resource-list`, `unsubscribe-resource`, and
-  `kind` entries are methods.
+  `call-tool`, `is-open`, `cancel`, `call-tool-blocking`, `list-resources`,
+  `read-resource`, `subscribe-resource-list`, `subscribe-resource`,
+  `unsubscribe-resource-list`, `unsubscribe-resource`, and `kind` entries are
+  methods.
 - `omw::host::*` — the host helpers: `log`, `now`, `timestamp_add`,
   `timestamp_sub`, `timestamp_diff`, `timestamp_format`, `wait_timestamp`,
   `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`, `send`,
-  `recv`, `try_recv`, `new_uuid`.
+  `recv`, `try_recv`, `new_uuid`, `sleep_duration`, `sleep_timestamp`, and
+  `sleep_cron`.
 
 Handles are Rhai maps. Methods are `FnPtr`s stored on them, so scripts call them
-method-style (`provider.chat(...)`, `tooling.call-tool(...)`). The time
+method-style (`provider.chat_stream(...)`, `tooling.call-tool(...)`). The time
 functions take plain integer literals: the interpreter converts rhai's `i64`
 integers to the WIT `u64` tick type at the boundary (rejecting negatives).
 
@@ -60,20 +63,20 @@ Events come back as maps shaped `#{ id, kind, payload }`:
 
 - `id` — the envelope's UUID;
 - `kind` — one of `message`, `error`, `timer`, `chat-delta`, `stream-end`,
-  `resource-list-updated`, `resource-updated`;
+  `tool-result`, `resource-list-updated`, `resource-updated`;
 - `payload` — the text for `message`/`error`, a map for `chat-delta` (with
-  `content`, `tool_call` `{ id, name, arguments }`, and `finish_reason`), a list
-  of resource maps (`{ uri, name, description?, mime_type? }`) for
-  `resource-list-updated`, a resource-content map
-  (`{ uri, mime_type?, content }`) for `resource-updated`, and unit otherwise.
-  The `content` field holds actual text for textual formats and base64 for
-  anything else — match on `mime_type` to tell which.
+  `content`, `tool_call` `{ id, name, arguments }`, and `finish_reason`), a map
+  for `tool-result` (`{ name, arguments, value }`), a list of resource maps
+  (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
+  resource-content map (`{ uri, mime_type?, content }`) for `resource-updated`,
+  and unit otherwise. The `content` field holds actual text for textual formats
+  and base64 for anything else — match on `mime_type` to tell which.
 
 ## Example brain
 
 ```rhai
 let p = omw::provider::get("openai");
-p.chat("gpt-4o", [
+p.chat_stream("gpt-4o", [
   #{ role: "user", content: "say hi" },
 ], []);
 

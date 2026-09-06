@@ -5,6 +5,17 @@
 use crate::provider::ChatDelta;
 use crate::tooling::ResourceContent;
 
+/// The result of a single tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResult {
+  /// The tool's name, as passed to `call-tool`.
+  pub name: String,
+  /// The tool's arguments, as opaque JSON passed to `call-tool`.
+  pub arguments: String,
+  /// The tool's JSON result.
+  pub result: String,
+}
+
 /// A strongly-typed event delivered into an agent's inbox.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -18,6 +29,8 @@ pub enum Event {
   ChatDelta(ChatDelta),
   /// A chat stream finished.
   StreamEnd,
+  /// A queued tool invocation returned; carries the tool result.
+  ToolResult(ToolResult),
   /// The subscribed resource list changed.
   ResourceListUpdated(Vec<crate::tooling::ResourceInfo>),
   /// A subscribed resource updated in place; carries the freshly read content.

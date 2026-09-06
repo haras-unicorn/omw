@@ -24,8 +24,9 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
 
 ## How it works
 
-- **Providers** are OpenAI-family chat services. `provider.chat` opens a
-  _streaming_ response whose deltas arrive as events in the agent's inbox.
+- **Providers** are OpenAI-family chat services. `provider.chat-stream` opens a
+  _streaming_ response whose deltas arrive as events in the agent's inbox; the
+  in-band `provider.chat` blocks for the full result.
 - **Tooling** is MCP tool servers. They expose callable _tools_ and readable
   _resources_; resource subscriptions deliver change events.
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled

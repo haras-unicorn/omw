@@ -76,7 +76,7 @@ impl Provider for MockProvider {
     vec!["mock-model".to_string()]
   }
 
-  async fn chat(
+  async fn chat_stream(
     &self,
     model: &str,
     messages: Vec<ChatMessage>,

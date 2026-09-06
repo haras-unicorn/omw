@@ -69,14 +69,19 @@ fn eval_rhai(script: &str) -> Result<Option<String>, String> {
 /// sub-modules with the engine, plus the handle method implementations.
 fn install_omw(engine: &mut Engine) {
   engine.register_fn("provider_chat", provider_chat);
+  engine.register_fn("provider_chat_stream", provider_chat_stream);
   engine.register_fn("provider_is_open", provider_is_open);
   engine.register_fn("provider_cancel", provider_cancel);
   engine.register_fn("provider_models", provider_models);
   engine.register_fn("provider_kind", provider_kind);
   engine.register_fn("tooling_list_tools", tooling_list_tools);
   engine.register_fn("tooling_call_tool", tooling_call_tool);
+  engine.register_fn("tooling_call_tool_blocking", tooling_call_tool_blocking);
+  engine.register_fn("tooling_is_open", tooling_is_open);
+  engine.register_fn("tooling_cancel", tooling_cancel);
   engine.register_fn("tooling_kind", tooling_kind);
   engine.register_fn("tooling_list_resources", tooling_list_resources);
+  engine.register_fn("tooling_read_resource", tooling_read_resource);
   engine.register_fn(
     "tooling_subscribe_resource_list",
     tooling_subscribe_resource_list,
@@ -105,6 +110,9 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("wait_timestamp", host_wait_timestamp);
   host.set_native_fn("wait_duration", host_wait_duration);
   host.set_native_fn("wait_cron", host_wait_cron);
+  host.set_native_fn("sleep_duration", host_sleep_duration);
+  host.set_native_fn("sleep_timestamp", host_sleep_timestamp);
+  host.set_native_fn("sleep_cron", host_sleep_cron);
   host.set_native_fn("cancel", host_cancel);
   host.set_native_fn("subscribe", host_subscribe);
   host.set_native_fn("unsubscribe", host_unsubscribe);
@@ -130,6 +138,7 @@ fn provider_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
   let mut m = Map::new();
   m.insert("name".into(), name.into());
   m.insert("chat".into(), method("provider_chat")?.into());
+  m.insert("chat_stream".into(), method("provider_chat_stream")?.into());
   m.insert("is_open".into(), method("provider_is_open")?.into());
   m.insert("cancel".into(), method("provider_cancel")?.into());
   m.insert("models".into(), method("provider_models")?.into());
@@ -137,7 +146,7 @@ fn provider_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
   Ok(m)
 }
 
-fn provider_chat(
+fn provider_chat_stream(
   handle: Map,
   model: &str,
   messages: Array,
@@ -155,7 +164,30 @@ fn provider_chat(
     .map(tool_from_dynamic)
     .collect::<Result<Vec<_>, _>>()
     .map_err(to_error)?;
-  p.chat(model, &msgs, &tls).map_err(to_error)
+  let result = p.chat_stream(model, &msgs, &tls);
+  result.map_err(to_error)
+}
+
+fn provider_chat(
+  handle: Map,
+  model: &str,
+  messages: Array,
+  tools: Array,
+) -> Result<Map, Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  let p = provider::get(&name).map_err(to_error)?;
+  let msgs = messages
+    .into_iter()
+    .map(msg_from_dynamic)
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(to_error)?;
+  let tls = tools
+    .into_iter()
+    .map(tool_from_dynamic)
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(to_error)?;
+  let result = p.chat(model, &msgs, &tls)?;
+  Ok(chat_result_to_map(result))
 }
 
 fn provider_is_open(
@@ -194,10 +226,20 @@ fn tooling_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
   m.insert("name".into(), name.into());
   m.insert("list_tools".into(), method("tooling_list_tools")?.into());
   m.insert("call_tool".into(), method("tooling_call_tool")?.into());
+  m.insert(
+    "call_tool_blocking".into(),
+    method("tooling_call_tool_blocking")?.into(),
+  );
+  m.insert("is_open".into(), method("tooling_is_open")?.into());
+  m.insert("cancel".into(), method("tooling_cancel")?.into());
   m.insert("kind".into(), method("tooling_kind")?.into());
   m.insert(
     "list_resources".into(),
     method("tooling_list_resources")?.into(),
+  );
+  m.insert(
+    "read_resource".into(),
+    method("tooling_read_resource")?.into(),
   );
   m.insert(
     "subscribe_resource_list".into(),
@@ -240,6 +282,32 @@ fn tooling_call_tool(
   t.call_tool(tool, &arguments).map_err(to_error)
 }
 
+fn tooling_call_tool_blocking(
+  handle: Map,
+  tool: &str,
+  args: Map,
+) -> Result<Map, Box<EvalAltResult>> {
+  let instance = handle_name(&handle)?;
+  let t = tooling::get(&instance).map_err(to_error)?;
+  let arguments = json_from_map(&args).map_err(to_error)?;
+  let result = t.call_tool_blocking(tool, &arguments).map_err(to_error)?;
+  Ok(tool_result_to_map(result))
+}
+
+fn tooling_is_open(
+  handle: Map,
+  uuid: &str,
+) -> Result<bool, Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  Ok(tooling::get(&name).map_err(to_error)?.is_open(uuid))
+}
+
+fn tooling_cancel(handle: Map, uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  tooling::get(&name).map_err(to_error)?.cancel(uuid);
+  Ok(())
+}
+
 fn tooling_kind(handle: Map) -> Result<String, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
   Ok(tooling::get(&name).map_err(to_error)?.kind())
@@ -258,8 +326,20 @@ fn tooling_list_resources(handle: Map) -> Result<Array, Box<EvalAltResult>> {
   Ok(arr)
 }
 
+fn tooling_read_resource(
+  handle: Map,
+  uri: &str,
+) -> Result<Map, Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  let content = tooling::get(&name)
+    .map_err(to_error)?
+    .read_resource(uri)
+    .map_err(to_error)?;
+  Ok(resource_content_to_map(content))
+}
+
 /// Map one `types::ResourceInfo` into a rhai map so scripts can read `uri`,
-/// `name`, `description` and `mime_type` off a resource.
+/// `name`, `description`, and `mime_type` off a resource.
 fn resource_to_map(r: types::ResourceInfo) -> Map {
   let mut m = Map::new();
   m.insert("uri".into(), r.uri.into());
@@ -269,6 +349,38 @@ fn resource_to_map(r: types::ResourceInfo) -> Map {
   }
   if let Some(mime) = r.mime_type {
     m.insert("mime_type".into(), mime.into());
+  }
+  m
+}
+
+/// Map one `types::ToolResult` into a rhai map so scripts can read `name`,
+/// `arguments` and `value` off a tool-call result.
+fn tool_result_to_map(r: types::ToolResult) -> Map {
+  let mut m = Map::new();
+  m.insert("name".into(), r.name.into());
+  m.insert("arguments".into(), r.arguments.into());
+  m.insert("value".into(), r.value.into());
+  m
+}
+
+/// Map a `types::ChatResult` into a rhai map so scripts can read `content`,
+/// `tool_calls`, and `finish_reason` off a blocking `chat` result.
+fn chat_result_to_map(r: types::ChatResult) -> Map {
+  let mut m = Map::new();
+  if let Some(content) = r.content {
+    m.insert("content".into(), content.into());
+  }
+  let mut calls = Array::new();
+  for tc in r.tool_calls {
+    let mut t = Map::new();
+    t.insert("id".into(), tc.id.into());
+    t.insert("name".into(), tc.name.into());
+    t.insert("arguments".into(), tc.arguments.into());
+    calls.push(t.into());
+  }
+  m.insert("tool_calls".into(), calls.into());
+  if let Some(finish_reason) = r.finish_reason {
+    m.insert("finish_reason".into(), finish_reason.into());
   }
   m
 }
@@ -377,6 +489,19 @@ fn host_wait_cron(spec: &str) -> Result<String, Box<EvalAltResult>> {
   host::wait_cron(spec).map_err(to_error)
 }
 
+fn host_sleep_duration(ms: i64) -> Result<(), Box<EvalAltResult>> {
+  host::sleep_duration(to_u64(ms)?);
+  Ok(())
+}
+
+fn host_sleep_timestamp(ts: i64) -> Result<(), Box<EvalAltResult>> {
+  host::sleep_timestamp(to_u64(ts)?).map_err(to_error)
+}
+
+fn host_sleep_cron(spec: &str) -> Result<(), Box<EvalAltResult>> {
+  host::sleep_cron(spec).map_err(to_error)
+}
+
 fn host_cancel(uuid: &str) -> Result<(), Box<EvalAltResult>> {
   host::cancel(uuid);
   Ok(())
@@ -432,6 +557,9 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
       ("chat-delta", delta_to_map(delta).into())
     }
     types::Event::StreamEnd => ("stream-end", ().into()),
+    types::Event::ToolResult(result) => {
+      ("tool-result", tool_result_to_map(result).into())
+    }
     types::Event::ResourceListUpdated(resources) => {
       let mut arr = Array::new();
       for r in resources {
