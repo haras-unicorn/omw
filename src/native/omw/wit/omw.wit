@@ -101,6 +101,32 @@ interface types {
     content: string,
   }
 
+  /// The result of a single tool invocation.
+  record tool-result {
+    /// The tool's name, as passed to `call-tool`.
+    name: string,
+
+    /// The tool's arguments, as opaque JSON passed to `call-tool`.
+    arguments: string,
+
+    /// The tool's JSON result.
+    value: string,
+  }
+
+  /// The full result of a blocking `chat` call.
+  record chat-result {
+    /// The concatenated text content of the response; absent if the response
+    /// carried only tool calls.
+    content: option<string>,
+
+    /// The fully-reassembled tool calls the model made, in first-seen order.
+    tool-calls: list<tool-call>,
+
+    /// Optional terminal reason the response stopped (`"stop"`, `"length"`,
+    /// `"tool_calls"`, …).
+    finish-reason: option<string>,
+  }
+
   /// A strongly-typed event payload delivered into an agent's inbox. The
   /// guest matches an event against the UUID handles it holds via
   /// `event-envelope.id`.
@@ -119,6 +145,9 @@ interface types {
 
     /// A chat stream finished.
     stream-end,
+
+    /// A queued tool invocation returned; carries the tool result.
+    tool-result(tool-result),
 
     /// The subscribed resource list changed; carries the freshly fetched
     /// list of resources.
@@ -144,7 +173,7 @@ interface types {
 /// `get` looks up a configured instance and hands back a handle; all further
 /// calls go through the handle so callers never repeat the name.
 interface provider {
-  use types.{role, tool-call, chat-message, tool};
+  use types.{role, tool-call, chat-message, chat-result, tool};
 
   /// One configured provider instance.
   resource provider {
@@ -158,10 +187,19 @@ interface provider {
     /// Model names this provider exposes.
     models: func() -> list<string>;
 
+    /// Run a chat conversation to completion and return the full result in-band.
+    /// Unlike `chat-stream`, no events are delivered; the call only returns
+    /// after the response finishes (or errors),and cannot be cancelled.
+    chat: func(
+      model: string,
+      messages: list<chat-message>,
+      tools: list<tool>,
+    ) -> result<chat-result, string>;
+
     /// Open a streaming chat response. Returns a UUID handle; deltas flow
     /// into the agent's inbox as `"chat-delta"` events until a terminal
     /// `"stream-end"` (or `"error"`) event closes the stream.
-    chat: func(
+    chat-stream: func(
       model: string,
       messages: list<chat-message>,
       tools: list<tool>,
@@ -180,7 +218,7 @@ interface provider {
 
 /// A tooling instance from the global tooling map, addressed by name.
 interface tooling {
-  use types.{tool, resource-info};
+  use types.{tool, resource-info, resource-content, tool-result};
 
   /// One configured tooling instance.
   resource tooling {
@@ -193,12 +231,28 @@ interface tooling {
     /// Every tool this tooling exposes, callable via `call-tool`.
     list-tools: func() -> result<list<tool>, string>;
 
-    /// Invoke a tool by name with opaque JSON arguments; returns the tool's
-    /// JSON result.
+    /// Invoke a tool by name with opaque JSON arguments; queues the call
+    /// and returns a UUID handle. The result arrives as a `"tool-result"`
+    /// event tagged with that UUID (or an `"error"` event on failure).
     call-tool: func(name: string, arguments: string) -> result<string, string>;
+
+    /// Whether a queued tool call is still open.
+    is-open: func(uuid: string) -> bool;
+
+    /// Cancel a queued tool call by UUID, dropping its pending result
+    /// delivery.
+    cancel: func(uuid: string);
+
+    /// Invoke a tool by name with opaque JSON arguments, blocking until the
+    /// result is ready; returns the tool result in-band (errors are surfaced
+    /// as the `result` string).
+    call-tool-blocking: func(name: string, arguments: string) -> result<tool-result, string>;
 
     /// Enumerate every resource this tooling exposes.
     list-resources: func() -> result<list<resource-info>, string>;
+
+    /// Read one resource's current content, blocking on the underlying tooling.
+    read-resource: func(uri: string) -> result<resource-content, string>;
 
     /// Subscribe to the resource *list* changing; the fired `"resource-list-updated"`
     /// event is tagged with the returned UUID.
@@ -258,6 +312,21 @@ interface host {
   /// Cancel a pending wait (`wait-timestamp` / `wait-duration` / `wait-cron`) by
   /// the UUID handle it returned. No further `"timer"` event is delivered.
   cancel: func(uuid: string);
+
+  /// Blocking wait for `ms` milliseconds; returns once the delay elapses.
+  /// Unlike `wait-duration`, no `"timer"` event is delivered; the call only
+  /// returns after the wait finishes, and and cannot be cancelled.
+  sleep-duration: func(ms: u64);
+
+  /// Blocking wait until a timestamp fires. Errors if `ts <= now`. Unlike
+  /// `wait-timestamp`, no `"timer"` event is delivered; the call only returns
+  /// after the wait finishes, and cannot be cancelled.
+  sleep-timestamp: func(ts: u64) -> result<_, string>;
+
+  /// Blocking wait until the next fire of a cron spec. Unlike `wait-cron`,
+  /// no `"timer"` event is delivered; the call only returns after the wait
+  /// finishes, and cannot be cancelled.
+  sleep-cron: func(spec: string) -> result<_, string>;
 
   /// Subscribe to messages from another agent. Returns a UUID handle;
   /// events from that agent arrive tagged with it. Nothing arrives without

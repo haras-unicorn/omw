@@ -50,9 +50,11 @@ long-lived I/O source is driven by a _pump task_ spawned onto the agent's bridge
 runtime (the `AgentContext.rt` tokio runtime), which pushes events into the
 inbox:
 
-- a `provider.chat` call spawns a [chat-stream pump][streams] that delivers
-  `chat-delta` events as chunks arrive and a terminal `stream-end` (or `error`)
-  event when the stream closes.
+- a `provider.chat-stream` call spawns a [chat-stream pump][streams] that
+  delivers `chat-delta` events as chunks arrive and a terminal `stream-end` (or
+  `error`) event when the stream closes.
+- a `tooling.call-tool` queues a [tool-call pump][tools]that delivers a
+  `tool-result` (or `error` on failure) event.
 - a `tooling.subscribe-resource-list` / `subscribe-resource` call spawns a
   [resource pump][resources] that delivers `resource-list-updated` /
   `resource-updated` events.
@@ -63,11 +65,11 @@ Every pump holds a cancel signal keyed by its UUID handle: `provider.cancel`,
 `host.cancel`, and the `tooling.unsubscribe-*` calls can drop it early, stopping
 further deliveries before the source naturally ends.
 
-Pull-style calls (`models`, `list-tools`, `call-tool`, `list-resources`) are far
-shorter, so the host runs them to completion with `rt.block_on` instead of
-spawning a pump. Both approaches run _off_ the wasm thread — pump tasks on the
-tokio runtime, blocking calls on the `spawn_blocking` thread the engine runs on
-— so the synchronous engine never blocks a tokio worker.
+Pull-style calls (`models`, `list-tools`, `list-resources`) are far shorter, so
+the host runs them to completion with `rt.block_on` instead of spawning a pump.
+Both approaches run _off_ the wasm thread — pump tasks on the tokio runtime,
+blocking calls on the `spawn_blocking` thread the engine runs on — so the
+synchronous engine never blocks a tokio worker.
 
 ## Why it is shaped this way
 
@@ -80,5 +82,6 @@ a plain sequential program over a stream of facts.
 
 [events]: ./host.md#events
 [streams]: ./provider/interface.md
+[tools]: ./tooling/interface.md
 [resources]: ./tooling/interface.md#subscriptions
 [time]: ./host.md#timers

@@ -82,7 +82,7 @@ impl Provider for OpenAIProvider {
       .unwrap_or_default()
   }
 
-  async fn chat(
+  async fn chat_stream(
     &self,
     model: &str,
     messages: Vec<ChatMessage>,

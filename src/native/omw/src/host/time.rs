@@ -19,6 +19,33 @@ pub fn now_ticks() -> u64 {
   u64::try_from(now_ms()).unwrap_or_default()
 }
 
+/// Milliseconds between `now` and a future `ts`, rejecting timestamps already
+/// passed. Used by both the cancellable `wait-timestamp` and the blocking
+/// `sleep-timestamp`.
+pub fn delay_until(ts: u64) -> Result<Duration, String> {
+  let now = now_ticks();
+  if ts <= now {
+    return Err("timestamp must be in the future".to_string());
+  }
+  Ok(Duration::from_millis(ts.saturating_sub(now)))
+}
+
+/// Milliseconds between `now` and the next fire of a cron spec. Used by both
+/// the cancellable `wait-cron` and the blocking `sleep-cron`.
+pub fn delay_cron(spec: &str) -> Result<Duration, String> {
+  let schedule_ = cron::Schedule::from_str(spec)
+    .map_err(|e| format!("invalid cron spec {spec:?}: {e}"))?;
+  let now = Utc::now();
+  let next = schedule_
+    .after(&now)
+    .next()
+    .ok_or_else(|| "cron schedule yields no future fire time".to_string())?;
+  next
+    .signed_duration_since(now)
+    .to_std()
+    .map_err(|e| e.to_string())
+}
+
 /// Signed milliseconds since the Unix epoch.
 fn now_ms() -> i64 {
   chrono::Utc::now().timestamp_millis()
@@ -65,12 +92,7 @@ pub fn wait_timestamp(
   uuid: &str,
   ts: u64,
 ) -> Result<(), String> {
-  let now = now_ticks();
-  if ts <= now {
-    tracing::warn!(agent = %name, uuid, ts, now, "wait-timestamp rejected a past tick");
-    return Err("timestamp must be in the future".to_string());
-  }
-  let delay = Duration::from_millis(ts.saturating_sub(now));
+  let delay = delay_until(ts)?;
   schedule(
     bus.clone(),
     rt.clone(),
@@ -113,17 +135,7 @@ pub fn wait_cron(
   uuid: &str,
   spec: &str,
 ) -> Result<(), String> {
-  let schedule_ = cron::Schedule::from_str(spec)
-    .map_err(|e| format!("invalid cron spec {spec:?}: {e}"))?;
-  let now = Utc::now();
-  let next = schedule_
-    .after(&now)
-    .next()
-    .ok_or_else(|| "cron schedule yields no future fire time".to_string())?;
-  let delay = next
-    .signed_duration_since(now)
-    .to_std()
-    .map_err(|e| e.to_string())?;
+  let delay = delay_cron(spec)?;
   schedule(
     bus.clone(),
     rt.clone(),
@@ -132,6 +144,37 @@ pub fn wait_cron(
     uuid.to_string(),
     delay,
   );
+  Ok(())
+}
+
+/// Block `ms` milliseconds on the bridge runtime; like `wait_duration` but
+/// holding the thread instead of scheduling a `timer` event. Not cancellable.
+pub fn sleep_duration(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
+  let delay = Duration::from_millis(ms);
+  rt.block_on(tokio::time::sleep(delay));
+}
+
+/// Block until a future timestamp fires on the bridge runtime, rejecting
+/// timestamps already passed. Like `wait_timestamp` but holding the thread
+/// instead of scheduling a `timer` event. Not cancellable.
+pub fn sleep_timestamp(
+  rt: &Arc<tokio::runtime::Runtime>,
+  ts: u64,
+) -> Result<(), String> {
+  let delay = delay_until(ts)?;
+  rt.block_on(tokio::time::sleep(delay));
+  Ok(())
+}
+
+/// Block until the next fire of a cron spec on the bridge runtime; like
+/// `wait_cron` but holding the thread instead of scheduling a `timer` event.
+/// Not cancellable.
+pub fn sleep_cron(
+  rt: &Arc<tokio::runtime::Runtime>,
+  spec: &str,
+) -> Result<(), String> {
+  let delay = delay_cron(spec)?;
+  rt.block_on(tokio::time::sleep(delay));
   Ok(())
 }
 
@@ -214,6 +257,26 @@ mod tests {
     .err()
     .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
     assert!(err.contains("future"), "{err}");
+    Ok(())
+  }
+
+  #[test]
+  fn sleep_timestamp_rejects_the_past() -> anyhow::Result<()> {
+    let rt = Arc::new(tokio::runtime::Builder::new_current_thread().build()?);
+    let err = sleep_timestamp(&rt, 1)
+      .err()
+      .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
+    assert!(err.contains("future"), "{err}");
+    Ok(())
+  }
+
+  #[test]
+  fn sleep_cron_rejects_an_invalid_spec() -> anyhow::Result<()> {
+    let rt = Arc::new(tokio::runtime::Builder::new_current_thread().build()?);
+    let err = sleep_cron(&rt, "not a cron spec")
+      .err()
+      .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
+    assert!(err.contains("invalid cron spec"), "{err}");
     Ok(())
   }
 

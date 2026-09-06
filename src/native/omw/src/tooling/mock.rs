@@ -51,6 +51,51 @@ pub struct ToolCall {
   pub arguments: Value,
 }
 
+/// A scripted tooling that fails every call, for testing error paths.
+pub struct FailingTooling;
+
+#[async_trait::async_trait]
+impl Tooling for FailingTooling {
+  fn kind() -> &'static str {
+    "mock"
+  }
+
+  async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
+    Ok(Vec::new())
+  }
+
+  async fn call_tool(
+    &self,
+    _name: &str,
+    _args: Value,
+  ) -> anyhow::Result<String> {
+    anyhow::bail!("mock failure")
+  }
+
+  async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
+    Ok(Vec::new())
+  }
+
+  async fn read_resource(&self, _uri: &str) -> anyhow::Result<ResourceContent> {
+    anyhow::bail!("mock failure")
+  }
+
+  async fn subscribe_resource_list(
+    &self,
+  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
+  {
+    anyhow::bail!("mock failure")
+  }
+
+  async fn subscribe_resource(
+    &self,
+    _uri: &str,
+  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
+  {
+    anyhow::bail!("mock failure")
+  }
+}
+
 /// A scripted tooling backed by in-memory state. Each subscription registers a
 /// sender and auto-notifies the subscriber once shortly after subscribing, so
 /// tests and scripts recv an event without an external driver.

@@ -117,7 +117,7 @@ async fn llamacpp_streams_real_inference() -> anyhow::Result<()> {
   };
   let mut stream = entry
     .provider
-    .chat("omw-test", vec![system_msg, user_msg], Vec::new())
+    .chat_stream("omw-test", vec![system_msg, user_msg], Vec::new())
     .await?;
 
   let mut content = String::new();

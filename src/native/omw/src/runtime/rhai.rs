@@ -131,6 +131,7 @@ mod tests {
       Arc::new(crate::host::streams::StreamRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?)
   }
 
@@ -147,6 +148,7 @@ mod tests {
       HashMap::new(),
       bus,
       Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
     )?)
@@ -192,7 +194,7 @@ mod tests {
 
     let script = r#"
       let p = omw::provider::get("mock-provider");
-      let id = p.chat("gpt-test", [ #{ role: "user", content: "hi" } ], []);
+      let id = p.chat_stream("gpt-test", [ #{ role: "user", content: "hi" } ], []);
       let out = "";
       loop {
         let e = omw::host::recv();
@@ -200,9 +202,9 @@ mod tests {
         if e.id == id && e.kind == "stream-end" { break; }
       }
       let t = omw::tooling::get("mock-tooling");
-      let tool_res = t.call_tool("some-tool", #{ a: 1 });
+      let tool_res = t.call_tool_blocking("some-tool", #{ a: 1 });
       omw::host::log("info", "hello from test");
-      out + "|" + tool_res
+      out + "|" + tool_res.value
     "#;
     let dir = tempdir()?;
     let path = dir.path().join("brain.rhai");
@@ -232,6 +234,42 @@ mod tests {
   }
 
   #[test]
+  fn tooling_call_tool_delivers_a_tool_result_event() -> anyhow::Result<()> {
+    let tooling = MockTooling::noop();
+    let mut tooling_map = HashMap::new();
+    tooling_map.insert(
+      "mock-tooling".to_string(),
+      crate::tooling::ToolingEntry {
+        name: "mock-tooling".to_string(),
+        kind: MockTooling::kind(),
+        tooling,
+      },
+    );
+
+    let dir = tempdir()?;
+    let path = dir.path().join("call_tool.rhai");
+    std::fs::write(
+      &path,
+      r#"
+        let t = omw::tooling::get("mock-tooling");
+        let tid = t.call_tool("some-tool", #{ a: 1 });
+        let e = omw::host::recv();
+        (e.id == tid) + "|" + e.kind + "|" + e.payload.value
+      "#,
+    )?;
+    let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(
+      outcome,
+      RunOutcome::Exited("true|tool-result|".to_string()),
+      "call_tool should return a handle and recv should yield a tool-result event"
+    );
+    Ok(())
+  }
+
+  #[test]
   fn provider_chat_streams_deltas_into_inbox() -> anyhow::Result<()> {
     let provider = crate::provider::build(
       "mock-provider",
@@ -243,7 +281,7 @@ mod tests {
 
     let script = r#"
       let p = omw::provider::get("mock-provider");
-      let id = p.chat("gpt-test", [], []);
+      let id = p.chat_stream("gpt-test", [], []);
       let out = "";
       loop {
         let e = omw::host::recv();
@@ -263,6 +301,36 @@ mod tests {
       outcome,
       RunOutcome::Exited("Hello, world".to_string()),
       "chat deltas should accumulate in order until stream-end"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn provider_chat_blocks_and_returns_a_chat_result() -> anyhow::Result<()> {
+    let provider = crate::provider::build(
+      "mock-provider",
+      "mock",
+      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+    )?;
+    let mut providers = HashMap::new();
+    providers.insert("mock-provider".to_string(), provider);
+
+    let script = r#"
+      let p = omw::provider::get("mock-provider");
+      let r = p.chat("gpt-test", [], []);
+      r.content + "|" + r.tool_calls.len()
+    "#;
+    let dir = tempdir()?;
+    let path = dir.path().join("chat.rhai");
+    std::fs::write(&path, script)?;
+    let ctx = test_ctx(path, providers, HashMap::new())?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(
+      outcome,
+      RunOutcome::Exited("Hello, world|0".to_string()),
+      "blocking chat should return the accumulated content in-band"
     );
     Ok(())
   }
@@ -430,6 +498,76 @@ mod tests {
     assert!(
       result.is_err(),
       "wait_timestamp in the past should error, got {result:?}"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn host_sleep_duration_blocks_and_returns() -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+
+    let dir = tempdir()?;
+    let path = dir.path().join("sleep.rhai");
+    std::fs::write(&path, r#"omw::host::sleep_duration(0); "slept""#)?;
+
+    let ctx = test_ctx_with_bus("test-agent", path, bus)?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(
+      outcome,
+      RunOutcome::Exited("slept".to_string()),
+      "sleep_duration should block briefly then let the script continue"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn host_sleep_timestamp_in_the_past_errors() -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+
+    let dir = tempdir()?;
+    let path = dir.path().join("sleep_past.rhai");
+    std::fs::write(&path, r#"omw::host::sleep_timestamp(1)"#)?;
+
+    let ctx = test_ctx_with_bus("test-agent", path, bus)?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let result = run(&runtime, &ctx);
+    assert!(
+      result.is_err(),
+      "sleep_timestamp in the past should error, got {result:?}"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn tooling_read_resource_surfaces_resource_content() -> anyhow::Result<()> {
+    let tooling =
+      MockTooling::with_resource_content("file:///a", "hello-resource");
+
+    let mut tooling_map = HashMap::new();
+    tooling_map.insert(
+      "mock-tooling".to_string(),
+      crate::tooling::ToolingEntry {
+        name: "mock-tooling".to_string(),
+        kind: MockTooling::kind(),
+        tooling: tooling.clone(),
+      },
+    );
+
+    let dir = tempdir()?;
+    let path = dir.path().join("read_resource.rhai");
+    std::fs::write(
+      &path,
+      r#"let t = omw::tooling::get("mock-tooling"); let c = t.read_resource("file:///a"); c.uri + "|" + c.content"#,
+    )?;
+    let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(
+      outcome,
+      RunOutcome::Exited("file:///a|hello-resource".to_string()),
+      "read_resource should return the resource's current content"
     );
     Ok(())
   }

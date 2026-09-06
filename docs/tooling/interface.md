@@ -11,8 +11,20 @@ A tooling exposes, through the WIT `tooling` interface:
 - `kind()` — which implementation this is (e.g. `mcp`).
 - `name()` — the configured name of the instance.
 - `list-tools()` — every tool visible on the instance.
-- `call-tool(name, arguments)` — invoke a single tool, returning text.
+- `call-tool(name, arguments)` — queue a tool invocation, returning a UUID
+  handle. The result arrives as a `tool-result` event (or an `error` event on
+  failure) tagged with that UUID..
+- `is-open(uuid)` — whether a queued tool call is still open..
+- `cancel(uuid)` — cancel a queued tool call by UUID, dropping its pending
+  result delivery..
+- `call-tool-blocking(name`, `arguments)` — invoke a tool by name with opaque
+  JSON arguments, blocking until the result is ready. Returns the tool's result
+  as a `tool-result` (`name`, `arguments`, `value`) in-band (errors are surfaced
+  as the `err`).
 - `list-resources()` — every URI-addressed resource the tooling exposes.
+- `read-resource(uri)` — block and read one resource's _current_ content — it
+  returns a `resource-content` (`uri`, optional `mime-type`, and `content` which
+  is text for textual formats and base64 for anything else).
 - `subscribe-resource-list()` — subscribe to the resource _list_ changing;
   returns a UUID handle tagged on each `resource-list-updated` event, which
   carries the freshly fetched resource list.
@@ -32,7 +44,7 @@ resource; all further calls go through that handle.
 A `tool` has a `name`, an optional `description`, and an `input-schema` — a JSON
 Schema describing the arguments the model must supply. The guest hands the
 signature to a provider so the model can emit a `tool-call` for it, then invokes
-it with `call-tool`.
+it with `call-tool`, or synchronously with `call-tool-blocking`.
 
 ## Resources
 
@@ -63,7 +75,10 @@ contract: **dropping the returned stream cancels the subscription**.
 
 ## The streaming contract
 
-`subscribe-resource-list` and `subscribe-resource` mirror the provider's chat
-contract: they return a UUID immediately, and events arrive later through the
-inbox. The guest matches the envelope `id` against the UUID of the subscription
-it wants to hear about.
+`subscribe-resource-list` and `subscribe-resource` mirror the provider's
+chat-stream contract: they return a UUID immediately, and events arrive later
+through the inbox. The guest matches the envelope `id` against the UUID of the
+subscription it wants to hear about. `call-tool` follows the same shape: it
+returns a UUID held for the queued invocation, and the `tool-result` event
+arrives later under that UUID (`call-tool-blocking` is instead the synchronous
+mirror, returning the result in-band).

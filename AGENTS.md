@@ -119,8 +119,8 @@ A Cargo workspace with three crates plus a single WIT contract.
 
 - The wasm engine is synchronous and runs on a `spawn_blocking` thread, not a
   tokio worker. Async is bridged through a dedicated tokio runtime held in
-  `AgentContext` (`ctx.rt`). `provider.chat` spawns a chat-stream pump on `rt`
-  that delivers `chat-delta`/`stream-end` events into the inbox via
+  `AgentContext` (`ctx.rt`). `provider.chat-stream` spawns a chat-stream pump on
+  `rt` that delivers `chat-delta`/`stream-end` events into the inbox via
   `bus.deliver` (using `futures_util` + `tokio::select!`), and the
   `tooling.*`/`host.try-recv` imports use `rt.block_on`. `kanal` is used only
   for the per-agent `MessageBus` inboxes.

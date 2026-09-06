@@ -23,7 +23,10 @@ async fn chat_all(
   model: &str,
   messages: Vec<ChatMessage>,
 ) -> anyhow::Result<Vec<omw::provider::ChatDelta>> {
-  let mut stream = entry.provider.chat(model, messages, Vec::new()).await?;
+  let mut stream = entry
+    .provider
+    .chat_stream(model, messages, Vec::new())
+    .await?;
   let mut out = Vec::new();
   while let Some(delta) = stream.next().await {
     out.push(delta.map_err(anyhow::Error::msg)?);

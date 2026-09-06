@@ -80,6 +80,7 @@ mod tests {
       Arc::new(crate::host::streams::StreamRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
     )?;
 
     let runtime = WasmRuntime::default();
