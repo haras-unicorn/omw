@@ -105,9 +105,55 @@ impl WasmEngine {
   ) -> anyhow::Result<(Engine, Component)> {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.epoch_interruption(true);
     let engine = Engine::new(&config)?;
     let component = f(&engine)?;
     Ok((engine, component))
+  }
+
+  /// Instantiate the component and call the exported
+  /// `runtime.check(script)`. Validates without running: no abort mapping, so
+  /// any trap (including epoch) surfaces as a plain validation failure.
+  /// Runs synchronously, so it must be called from a non-async thread (see
+  /// the runtimes).
+  pub fn check(&self, ctx: AgentContext, script: String) -> anyhow::Result<()> {
+    let span = tracing::info_span!("engine.check", agent = %ctx.name);
+    let _entered = span.enter();
+    tracing::debug!(script, "instantiating the component for validation");
+    // Deliberately not `ctx.set_engine`: validation runs while the old run
+    // keeps executing, and stashing would clobber the live run's epoch
+    // handle that `abort_grace` traps through.
+    let mut store = Store::new(
+      &self.engine,
+      Host {
+        ctx: ctx.clone(),
+        table: Default::default(),
+        wasi: <wasmtime_wasi::WasiCtxBuilder as Default>::default().build(),
+      },
+    );
+    store.set_epoch_deadline(1);
+    let mut linker: Linker<Host> = Linker::new(&self.engine);
+    // The guest (wasm32-wasip2) implicitly imports `wasi:cli/*`; satisfy it.
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    omw::provider::add_to_linker::<_, HasSelf<_>>(&mut linker, |h| h)?;
+    omw::tooling::add_to_linker::<_, HasSelf<_>>(&mut linker, |h| h)?;
+    omw::host::add_to_linker::<_, HasSelf<_>>(&mut linker, |h| h)?;
+
+    let instance = Omw::instantiate(&mut store, &self.component, &linker)
+      .inspect_err(|e| {
+        tracing::error!(error = %e, "failed to instantiate the component");
+      })?;
+    instance
+      .omw_omw_runtime()
+      .call_check(&mut store, &script)
+      .map_err(|e| {
+        tracing::error!(error = %e, "component runtime.check failed");
+        anyhow::anyhow!(e)
+      })?
+      .map_err(|e| {
+        tracing::error!(error = %e, "component runtime.check returned an error");
+        anyhow::anyhow!(e)
+      })
   }
 
   /// Instantiate the component and call the exported `runtime.run(script)`.
@@ -122,14 +168,16 @@ impl WasmEngine {
     let span = tracing::info_span!("engine.run", agent = %ctx.name);
     let _entered = span.enter();
     tracing::debug!(script, "instantiating the component");
+    ctx.set_engine(self.engine.clone());
     let mut store = Store::new(
       &self.engine,
       Host {
-        ctx,
+        ctx: ctx.clone(),
         table: Default::default(),
         wasi: <wasmtime_wasi::WasiCtxBuilder as Default>::default().build(),
       },
     );
+    store.set_epoch_deadline(1);
     let mut linker: Linker<Host> = Linker::new(&self.engine);
     // The guest (wasm32-wasip2) implicitly imports `wasi:cli/*`; satisfy it.
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -141,10 +189,11 @@ impl WasmEngine {
       .inspect_err(|e| {
         tracing::error!(error = %e, "failed to instantiate the component");
       })?;
+    let host_ctx = store.data().ctx.clone();
     let result: Option<String> = instance
       .omw_omw_runtime()
       .call_run(&mut store, &script)
-      .map_err(anyhow::Error::from)
+      .map_err(|e| map_trap(&host_ctx, e.into()))
       .map_err(|e| {
         tracing::error!(error = %e, "component runtime.run failed");
         e
@@ -155,6 +204,74 @@ impl WasmEngine {
       })?;
     tracing::debug!(?result, "brain run returned");
     Ok(result)
+  }
+}
+
+/// Map an epoch-interruption trap to a reload/shutdown abort when one was
+/// requested, so unyielding wasm loops surface as a restart instead of a
+/// failure. Any other trap (or an interrupt without a pending request) is a
+/// real failure.
+fn map_trap(ctx: &AgentContext, error: anyhow::Error) -> anyhow::Error {
+  let trap = error
+    .chain()
+    .any(|cause| cause.to_string().contains("epoch deadline exceeded"));
+  if !trap {
+    return error;
+  }
+  if ctx.shutdown_requested() {
+    return anyhow::anyhow!("agent shutting down");
+  }
+  if ctx.reload_requested() {
+    return anyhow::anyhow!("agent reloaded");
+  }
+  error
+}
+
+#[cfg(test)]
+mod trap_tests {
+  use super::*;
+  use std::collections::HashMap;
+  use std::path::PathBuf;
+  use std::sync::Arc;
+
+  use crate::host::bus::MessageBus;
+
+  fn trap_ctx() -> anyhow::Result<AgentContext> {
+    Ok(AgentContext::new(
+      "test-agent".to_string(),
+      PathBuf::from("unused.wasm"),
+      HashMap::new(),
+      HashMap::new(),
+      Arc::new(MessageBus::new()),
+      Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
+    )?)
+  }
+
+  #[test]
+  fn epoch_trap_maps_to_reload_or_shutdown() -> anyhow::Result<()> {
+    let ctx = trap_ctx()?;
+    let error = anyhow::anyhow!("wasm trap: epoch deadline exceeded");
+    assert!(
+      map_trap(&ctx, anyhow::anyhow!("{error}"))
+        .to_string()
+        .contains("epoch")
+    );
+    ctx.request_reload();
+    assert_eq!(
+      map_trap(&ctx, anyhow::anyhow!("{error}")).to_string(),
+      "agent reloaded"
+    );
+    ctx.clear_reload();
+    ctx.request_shutdown();
+    assert_eq!(
+      map_trap(&ctx, anyhow::anyhow!("{error}")).to_string(),
+      "agent shutting down"
+    );
+    Ok(())
   }
 }
 

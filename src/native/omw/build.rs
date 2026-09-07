@@ -144,8 +144,13 @@ fn compile_guest(guest: &str) {
     .unwrap_or_else(|e| panic!("failed to run wasm-tools print: {e}"));
   assert!(status.success(), "wasm-tools print failed");
 
-  // 4. Compile the component AOT.
-  let engine = wasmtime::Engine::default();
+  // 4. Compile the component AOT with the same epoch-interruption config
+  // as the runtime engine, so the cached native loads under it.
+  let mut config = wasmtime::Config::new();
+  config.wasm_component_model(true);
+  config.epoch_interruption(true);
+  let engine = wasmtime::Engine::new(&config)
+    .unwrap_or_else(|_| panic!("failed building {guest} engine"));
   let component =
     wasmtime::component::Component::from_file(&engine, &component_wasm)
       .unwrap_or_else(|_| panic!("failed compiling {guest} guest component"));

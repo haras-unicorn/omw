@@ -13,7 +13,6 @@
 //!     thread).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use wasmtime::component::Resource;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -80,9 +79,17 @@ impl provider_bindings::HostProvider for Host {
     let Some(entry) = self.table.get(&self_).ok() else {
       return Vec::new();
     };
+    let entry_name = entry.name.clone();
+    let agent = self.ctx.name.clone();
     let provider = Arc::clone(&entry.provider);
-    let rt = Arc::clone(&self.ctx.rt());
-    rt.block_on(provider.models())
+    let list = async move { provider.models().await };
+    match self.ctx.block_on_reload(list) {
+      Ok(models) => models,
+      Err(error) => {
+        tracing::warn!(agent = %agent, provider = %entry_name, error = %error, "provider models aborted");
+        Vec::new()
+      }
+    }
   }
 
   fn chat(
@@ -93,18 +100,18 @@ impl provider_bindings::HostProvider for Host {
     tools: Vec<tooling_bindings::Tool>,
   ) -> Result<types_bindings::ChatResult, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
+    let entry_name = entry.name.clone();
+    let agent = self.ctx.name.clone();
     let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
     let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
     let provider = Arc::clone(&entry.provider);
-    let rt = Arc::clone(&self.ctx.rt());
     tracing::debug!(
-      agent = %self.ctx.name,
-      provider = %entry.name,
+      agent = %agent,
+      provider = %entry_name,
       "running a blocking chat"
     );
-    let result = rt
-      .block_on(provider.chat(&model, msgs, tools))
-      .map_err(|e| e.to_string())?;
+    let chat = async move { provider.chat(&model, msgs, tools).await };
+    let result = self.ctx.block_on_reload(chat)?.map_err(|e| e.to_string())?;
     Ok(out_chat_result(result))
   }
 
@@ -195,13 +202,12 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<Vec<tooling_bindings::Tool>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
+    let tooling_name = entry.name.clone();
     let agent = self.ctx.name.clone();
-    tracing::debug!(agent = %agent, tooling = %entry.name, "listing tools");
-    let rt = Arc::clone(&self.ctx.rt());
-    let tools = rt
-      .block_on(tooling.list_tools())
-      .map_err(|e| e.to_string())?;
-    tracing::debug!(agent = %agent, tooling = %entry.name, count = tools.len(), "listed tools");
+    tracing::debug!(agent = %agent, tooling = %tooling_name, "listing tools");
+    let list = async move { tooling.list_tools().await };
+    let tools = self.ctx.block_on_reload(list)?.map_err(|e| e.to_string())?;
+    tracing::debug!(agent = %agent, tooling = %tooling_name, count = tools.len(), "listed tools");
     Ok(tools.into_iter().map(Tool::into).collect())
   }
 
@@ -213,12 +219,13 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
+    let tooling_name = entry.name.clone();
     let agent = self.ctx.name.clone();
     let args =
       serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
     tracing::trace!(
       agent = %agent,
-      tooling = %entry.name,
+      tooling = %tooling_name,
       tool = %name,
       arg_bytes = arguments.len(),
       "queuing a tool call"
@@ -243,40 +250,39 @@ impl tooling_bindings::HostTooling for Host {
 
   fn cancel(&mut self, _self_: Resource<ToolingEntry>, uuid: String) {
     self.ctx.tool_calls.cancel(&uuid);
-    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"cancelling a tool call");
+    tracing::debug!(agent = %self.ctx.name, uuid = %uuid, "cancelling a tool call");
   }
 
   fn call_tool_blocking(
     &mut self,
     self_: Resource<ToolingEntry>,
-    name: String,
+    tool: String,
     arguments: String,
   ) -> Result<tooling_bindings::ToolResult, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
+    let tooling_name = entry.name.clone();
     let agent = self.ctx.name.clone();
     let args =
       serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
     tracing::trace!(
       agent = %agent,
-      tooling = %entry.name,
-      tool = %name,
+      tooling = %tooling_name,
+      tool = %tool,
       arg_bytes = arguments.len(),
       "calling a tool"
     );
-    let rt = Arc::clone(&self.ctx.rt());
-    let result = rt
-      .block_on(tooling.call_tool(&name, args))
-      .map_err(|e| e.to_string())?;
+    let tool_for_call = tool.clone();
+    let call = async move { tooling.call_tool(&tool_for_call, args).await };
+    let result = self.ctx.block_on_reload(call)?.map_err(|e| e.to_string())?;
     tracing::trace!(
       agent = %agent,
-      tooling = %entry.name,
-      tool = %name,
+      tooling = %tooling_name,
       result_bytes = result.len(),
       "tool call returned"
     );
     Ok(tooling_bindings::ToolResult {
-      name,
+      name: tool,
       arguments,
       value: result,
     })
@@ -288,8 +294,10 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<Vec<tooling_bindings::ResourceInfo>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
-    let rt = Arc::clone(&self.ctx.rt());
-    rt.block_on(tooling.list_resources())
+    let list = async move { tooling.list_resources().await };
+    self
+      .ctx
+      .block_on_reload(list)?
       .map(|resources| resources.into_iter().map(ResourceInfo::into).collect())
       .map_err(|e| e.to_string())
   }
@@ -301,8 +309,10 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<tooling_bindings::ResourceContent, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
-    let rt = Arc::clone(&self.ctx.rt());
-    rt.block_on(tooling.read_resource(&uri))
+    let read = async move { tooling.read_resource(&uri).await };
+    self
+      .ctx
+      .block_on_reload(read)?
       .map(tooling_bindings::ResourceContent::from)
       .map_err(|e| e.to_string())
   }
@@ -313,22 +323,27 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
-    let rt = Arc::clone(&self.ctx.rt());
-    let stream = rt
-      .block_on(tooling.subscribe_resource_list())
+    let tooling_name = entry.name.clone();
+    let agent = self.ctx.name.clone();
+    let tooling_for_sub = Arc::clone(&tooling);
+    let subscribe =
+      async move { tooling_for_sub.subscribe_resource_list().await };
+    let stream = self
+      .ctx
+      .block_on_reload(subscribe)?
       .map_err(|e| e.to_string())?;
     let uuid = crate::host::bus::new_uuid();
     tracing::debug!(
-      agent = %self.ctx.name,
-      tooling = %entry.name,
+      agent = %agent,
+      tooling = %tooling_name,
       uuid = %uuid,
       "subscribing to the resource list"
     );
     crate::host::resources::spawn_pump(
       Arc::clone(&self.ctx.resources),
-      rt,
+      self.ctx.rt(),
       Arc::clone(&self.ctx.bus),
-      self.ctx.name.clone(),
+      agent,
       uuid.clone(),
       tooling,
       stream,
@@ -343,23 +358,29 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(&entry.tooling);
-    let rt = Arc::clone(&self.ctx.rt());
-    let stream = rt
-      .block_on(tooling.subscribe_resource(&uri))
+    let tooling_name = entry.name.clone();
+    let agent = self.ctx.name.clone();
+    let tooling_for_sub = Arc::clone(&tooling);
+    let uri_for_sub = uri.clone();
+    let subscribe =
+      async move { tooling_for_sub.subscribe_resource(&uri_for_sub).await };
+    let stream = self
+      .ctx
+      .block_on_reload(subscribe)?
       .map_err(|e| e.to_string())?;
     let uuid = crate::host::bus::new_uuid();
     tracing::debug!(
-      agent = %self.ctx.name,
-      tooling = %entry.name,
+      agent = %agent,
+      tooling = %tooling_name,
       uri = %uri,
       uuid = %uuid,
       "subscribing to a resource"
     );
     crate::host::resources::spawn_pump(
       Arc::clone(&self.ctx.resources),
-      rt,
+      self.ctx.rt(),
       Arc::clone(&self.ctx.bus),
-      self.ctx.name.clone(),
+      agent,
       uuid.clone(),
       tooling,
       stream,
@@ -483,6 +504,29 @@ impl host_bindings::Host for Host {
     Ok(uuid)
   }
 
+  fn lifecycle_subscribe(&mut self) -> Result<String, String> {
+    let result = self.ctx.bus.lifecycle_subscribe(&self.ctx.name);
+    match &result {
+      Ok(uuid) => {
+        tracing::info!(agent = %self.ctx.name, uuid = %uuid, "host lifecycle-subscribe")
+      }
+      Err(error) => {
+        tracing::warn!(agent = %self.ctx.name, error = %error, "host lifecycle-subscribe rejected")
+      }
+    }
+    result
+  }
+
+  fn lifecycle_unsubscribe(&mut self, uuid: String) {
+    let removed = self.ctx.bus.lifecycle_unsubscribe(&self.ctx.name, &uuid);
+    tracing::debug!(
+      agent = %self.ctx.name,
+      uuid = %uuid,
+      removed,
+      "host lifecycle-unsubscribe"
+    );
+  }
+
   fn unsubscribe(&mut self, uuid: String) {
     let removed = self.ctx.bus.unsubscribe(&self.ctx.name, &uuid);
     tracing::debug!(
@@ -555,30 +599,62 @@ impl host_bindings::Host for Host {
 
   fn sleep_duration(&mut self, ms: u64) {
     tracing::debug!(agent = %self.ctx.name,ms,"host sleep-duration");
-    crate::host::time::sleep_duration(&self.ctx.rt(), ms);
+    if let Err(error) = self
+      .ctx
+      .block_on_reload(crate::host::time::sleep_future(ms))
+    {
+      tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-duration aborted");
+    }
   }
 
   fn sleep_timestamp(&mut self, ts: u64) -> Result<(), String> {
-    crate::host::time::sleep_timestamp(&self.ctx.rt(), ts).map_err(|error| {
+    let delay = crate::host::time::delay_until(ts).map_err(|error| {
       tracing::warn!(agent = %self.ctx.name,error,ts,"host sleep-timestamp rejected");
       error
-    })
+    })?;
+    self
+      .ctx
+      .block_on_reload(crate::host::time::sleep_future_ms(delay))
+      .map_err(|error| {
+        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-timestamp aborted");
+        error
+      })
   }
 
   fn sleep_cron(&mut self, spec: String) -> Result<(), String> {
-    crate::host::time::sleep_cron(&self.ctx.rt(), &spec).map_err(|error| {
+    let delay = crate::host::time::delay_cron(&spec).map_err(|error| {
       tracing::warn!(agent = %self.ctx.name,error,spec = %spec,"host sleep-cron rejected");
       error
-    })
+    })?;
+    self
+      .ctx
+      .block_on_reload(crate::host::time::sleep_future_ms(delay))
+      .map_err(|error| {
+        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-cron aborted");
+        error
+      })
   }
 
   fn recv(&mut self) -> Result<host_bindings::EventEnvelope, String> {
     tracing::debug!(agent = %self.ctx.name, "host recv waiting for an event");
+    let flag = self.ctx.clone();
+    let name = self.ctx.name.clone();
+    let check = self.ctx.clone();
     let envelope = self
       .ctx
       .bus
-      .recv(&self.ctx.name, Duration::from_secs(60))
-      .map_err(|e| e.to_string())?;
+      .recv_while(&name, RECV_TIMEOUT, move || {
+        flag.reload_requested() || flag.shutdown_requested()
+      })
+      .map_err(|error| {
+        if error.to_string() == "stop requested" {
+          if check.shutdown_requested() {
+            return "agent shutting down".to_string();
+          }
+          return "agent reloaded".to_string();
+        }
+        error.to_string()
+      })?;
     Ok(EventEnvelope {
       id: envelope.id,
       event: out_event(envelope.event),
@@ -609,11 +685,17 @@ impl host_bindings::Host for Host {
 
 type EventEnvelope = host_bindings::EventEnvelope;
 
+/// How long a blocking `recv` waits before timing out.
+pub const RECV_TIMEOUT: std::time::Duration =
+  std::time::Duration::from_secs(60);
+
 fn out_event(event: Event) -> types_bindings::Event {
   match event {
     Event::Message(payload) => types_bindings::Event::Message(payload),
     Event::Error(message) => types_bindings::Event::Error(message),
     Event::Timer => types_bindings::Event::Timer,
+    Event::Reload => types_bindings::Event::Reload,
+    Event::Shutdown => types_bindings::Event::Shutdown,
     Event::ChatDelta(d) => types_bindings::Event::ChatDelta(out_msg(d)),
     Event::StreamEnd => types_bindings::Event::StreamEnd,
     Event::ToolResult(r) => {

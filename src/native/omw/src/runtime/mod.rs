@@ -36,6 +36,11 @@ pub trait Runtime: Send + Sync {
     Self: Sized;
 
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome>;
+
+  /// Check the agent's current brain script for validity without running it.
+  /// Used by hot reload (and startup) to validate an edit before aborting
+  /// the live run.
+  async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()>;
 }
 
 /// Build a runtime from the agent's kind and the runtime's impl config.

@@ -27,3 +27,5 @@ ignoreWords:
   - oneshot
   - hostnames
   - chatcmpl
+  - debouncer
+  - toctou

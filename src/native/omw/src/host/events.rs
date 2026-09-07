@@ -41,6 +41,10 @@ pub enum Event {
   Error(String),
   /// A timer (timestamp / duration / cron wait) fired.
   Timer,
+  /// The agent's brain script changed; the run should exit for a restart.
+  Reload,
+  /// The process is shutting down; the run should exit terminally.
+  Shutdown,
   /// A chat-stream delta.
   ChatDelta(ChatDelta),
   /// A chat stream finished.

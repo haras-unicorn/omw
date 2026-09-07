@@ -208,7 +208,10 @@ mod tests {
     );
     let bus = Arc::new(MessageBus::new());
     let subs = Arc::new(CancelRegistry::new());
-    let tooling: Arc<dyn Tooling> = MockTooling::noop();
+    // Pending: the stream never yields, so cancel is the only way the pump
+    // can exit — no race with the mock's 10ms auto-notify thread.
+    let tooling: Arc<dyn Tooling> =
+      Arc::new(crate::tooling::mock::PendingTooling);
     let uuid = crate::host::bus::new_uuid();
 
     let stream = rt.block_on(tooling.subscribe_resource("file:///a"))?;
@@ -221,10 +224,15 @@ mod tests {
       Arc::clone(&tooling),
       stream,
     );
+    assert!(
+      subs.wait_for(&uuid, true, Duration::from_secs(5)),
+      "pump should register before cancel"
+    );
     subs.cancel(&uuid);
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
+    assert!(
+      subs.wait_for(&uuid, false, Duration::from_secs(5)),
+      "cancelled pump should deregister"
+    );
     assert_eq!(bus.try_recv("alice")?, None);
     Ok(())
   }

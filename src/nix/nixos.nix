@@ -159,9 +159,9 @@ let
 
               args = lib.escapeShellArgs (
                 [
+                  cfg.mode
                   "--config"
                   "/dev/stdin"
-                  cfg.mode
                 ]
                 ++ cfg.extraArgs
               );

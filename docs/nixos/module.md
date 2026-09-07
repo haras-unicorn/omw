@@ -43,7 +43,7 @@ The generated unit reads the configuration, substitutes environment variables
 into it, and pipes the result into omw through `--config /dev/stdin`:
 
 ```sh
-envsubst < /path/to/config | omw --config /dev/stdin loop
+envsubst < /path/to/config | omw loop --config /dev/stdin
 ```
 
 Two things follow from this:
@@ -58,6 +58,10 @@ Two things follow from this:
 
 `mode` selects `run` (every agent once) or `loop` (keep agents running,
 restarting on failure — the default, suited to a service).
+
+`extraArgs` passes extra CLI flags after the mode; use `[ "--watch" ]` to
+hot-reload agent scripts (a changed brain file restarts its agent while inboxes
+and subscriptions survive).
 
 `variant` selects which package flavor runs: `default` (the crates.io-equivalent
 build, no rhai runtime) or `rhai` (the `omw-rhai` package, which compiles the

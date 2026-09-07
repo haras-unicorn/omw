@@ -73,18 +73,31 @@ pub struct AgentConfig {
 pub struct Cli {
   #[command(subcommand)]
   pub command: Command,
+}
 
+/// Shared `run` / `loop` flags: config path + watch.
+#[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
+pub struct RunArgs {
   /// Path to the config file (defaults to `omw.toml` in the current directory)
-  #[arg(long, global = true)]
+  #[arg(long)]
   pub config: Option<PathBuf>,
+  /// Watch agent scripts and restart agents when their script changes
+  #[arg(long)]
+  pub watch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
   /// Run all configured agents once
-  Run,
+  Run {
+    #[command(flatten)]
+    args: RunArgs,
+  },
   /// Loop all configured agents
-  Loop,
+  Loop {
+    #[command(flatten)]
+    args: RunArgs,
+  },
   /// Generate the JSON schema for the configuration
   Schema {
     /// Output path
@@ -94,6 +107,16 @@ pub enum Command {
 }
 
 impl Cli {
+  pub fn load() -> anyhow::Result<Self> {
+    Ok(Self::try_parse()?)
+  }
+}
+
+impl RunArgs {
+  pub fn watch(&self) -> bool {
+    self.watch
+  }
+
   pub fn resolve_config_path(&self) -> PathBuf {
     self
       .config
@@ -142,10 +165,6 @@ impl Cli {
       "configuration details"
     );
     Ok(config)
-  }
-
-  pub fn load() -> anyhow::Result<Self> {
-    Ok(Self::try_parse()?)
   }
 }
 
@@ -209,10 +228,10 @@ mod tests {
   use std::path::PathBuf;
   use tempfile::tempdir;
 
-  fn cli(path: PathBuf) -> Cli {
-    Cli {
-      command: Command::Run,
+  fn cli(path: PathBuf) -> RunArgs {
+    RunArgs {
       config: Some(path),
+      watch: false,
     }
   }
 
@@ -314,11 +333,11 @@ mod tests {
 
   #[test]
   fn resolve_config_path_defaults_to_omw_toml() {
-    let cli = Cli {
-      command: Command::Run,
+    let args = RunArgs {
       config: None,
+      watch: false,
     };
-    assert_eq!(cli.resolve_config_path(), PathBuf::from("omw.toml"));
+    assert_eq!(args.resolve_config_path(), PathBuf::from("omw.toml"));
   }
 
   #[test]

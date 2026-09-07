@@ -151,7 +151,18 @@ pub fn wait_cron(
 /// holding the thread instead of scheduling a `timer` event. Not cancellable.
 pub fn sleep_duration(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
   let delay = Duration::from_millis(ms);
-  rt.block_on(tokio::time::sleep(delay));
+  rt.block_on(sleep_future_ms(delay));
+}
+
+/// Awaitable sleep for `ms` milliseconds, for the reload-aware blocking-call
+/// helper.
+pub async fn sleep_future(ms: u64) {
+  tokio::time::sleep(Duration::from_millis(ms)).await;
+}
+
+/// Awaitable sleep for `delay`, for the reload-aware blocking-call helper.
+pub async fn sleep_future_ms(delay: Duration) {
+  tokio::time::sleep(delay).await;
 }
 
 /// Block until a future timestamp fires on the bridge runtime, rejecting
@@ -290,11 +301,18 @@ mod tests {
     let bus = Arc::new(MessageBus::new());
     let timers = Arc::new(CancelRegistry::new());
     let uuid = crate::host::bus::new_uuid();
-    wait_duration(&bus, &rt, &timers, "alice", &uuid, 0);
+    // A far-future delay: the sleep can never win, so cancel is the only
+    // way the pump exits — no race with a 0ms timer firing first.
+    wait_duration(&bus, &rt, &timers, "alice", &uuid, 60_000);
+    assert!(
+      timers.wait_for(&uuid, true, Duration::from_secs(5)),
+      "timer should register before cancel"
+    );
     timers.cancel(&uuid);
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
+    assert!(
+      timers.wait_for(&uuid, false, Duration::from_secs(5)),
+      "cancelled timer should deregister"
+    );
     assert_eq!(bus.try_recv("alice")?, None);
     Ok(())
   }

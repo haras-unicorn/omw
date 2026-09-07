@@ -24,6 +24,11 @@ A Cargo workspace with three crates plus a single WIT contract.
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
 
+  - `watch.rs` — hot-reload file watching (`ScriptWatcher`): maps each agent's
+    brain script to the agents using it and reports agent names to restart on
+    change. Enabled per invocation with `--watch` on `run` / `loop`; the
+    supervisor in `agent.rs` keeps the shared bus alive across reloads.
+
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
     implemented for OpenAI in `openai.rs`. The `build` factory dispatches on the
     configured `kind`.

@@ -38,3 +38,6 @@ ignoreWords:
   - rmcp
   - modelcontextprotocol
   - hostnames
+  - evented
+  - stringly
+  - toctou

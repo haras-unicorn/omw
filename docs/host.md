@@ -22,6 +22,8 @@ with two fields:
 | `message(string)`                            | the text                       | a message from a subscribed agent                                 |
 | `error(string)`                              | the error text                 | a failed I/O surfaced to the guest                                |
 | `timer`                                      | —                              | a timestamp / duration / cron timer fired                         |
+| `reload`                                     | —                              | the brain script changed; exit so the run restarts                |
+| `shutdown`                                   | —                              | the process is shutting down; exit terminally                     |
 | `chat-delta(chat-delta)`                     | a stream chunk                 | a chat-stream delta                                               |
 | `stream-end`                                 | —                              | an open chat stream finished                                      |
 | `tool-result(tool-result)`                   | `{ name, arguments, value }`   | a queued tool invocation returned                                 |
@@ -54,6 +56,11 @@ the UUID the opening call returned — for example the UUID from
 
 - `subscribe(agent)` — subscribe to messages from another agent.
 - `unsubscribe(uuid)` — cancel a subscription by its `subscribe` UUID.
+- `lifecycle-subscribe()` — subscribe to lifecycle events (`reload`, `shutdown`,
+  and reload-failure `error`); returns a UUID handle they arrive tagged with.
+  Errors on a second subscribe (one per run).
+- `lifecycle-unsubscribe(uuid)` — drop the lifecycle subscription; a foreign
+  UUID is a no-op.
 - `send(agent, payload)` — send text to another agent. The message only lands in
   the recipient's inbox if it subscribed to the sender, tagged with that
   subscription's UUID.
@@ -61,6 +68,11 @@ the UUID the opening call returned — for example the UUID from
   with a 60 second host-side timeout. Returns an `event-envelope` or an error.
 - `try-recv()` — non-blocking poll of the next event; returns `none` when the
   inbox is empty.
+
+Correlate a lifecycle event by matching `id` against the UUID
+`lifecycle-subscribe` returned, and `kind` for `reload` / `shutdown` / `error`
+(a reload-failure `error` means the edit was invalid and the live run kept
+going).
 
 ## The endpoint
 

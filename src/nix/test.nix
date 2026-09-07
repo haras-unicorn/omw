@@ -147,7 +147,45 @@ let
       testScript = ''
         start_all()
         machine.wait_for_unit("omw.service")
-        machine.wait_until_succeeds("test \"$(journalctl -u omw.service --no-pager | grep -c -F 'agent run failed')\" -ge 3")
+        machine.wait_until_succeeds("test \"$(journalctl -u omw.service --no-pager | grep -c -F 'agent brain failed startup validation')\" -ge 3")
+        machine.succeed("systemctl stop omw.service")
+        machine.wait_until_fails("systemctl is-active omw.service")
+      '';
+    };
+
+    watch = {
+      containers.machine = {
+        services.omw = {
+          extraArgs = [ "--watch" ];
+          settings = {
+            runtime.rhai.kind = "rhai";
+            agents = [
+              {
+                name = "alice";
+                runtime = "rhai";
+                script = "/etc/brain.rhai";
+              }
+            ];
+          };
+        };
+
+        environment.etc."brain.rhai".text = tick-script;
+        environment.etc."brain-new.rhai".text = tick-script;
+      };
+      testScript = ''
+        start_all()
+        # The service never exits under --watch: `run` stays up while reloads
+        # are armed, restarting the script instead of completing.
+        machine.wait_for_unit("omw.service")
+        machine.wait_until_succeeds('test "$(journalctl -u omw.service --no-pager | grep -c -F "tick")" -ge 2')
+        machine.succeed("systemctl is-active omw.service")
+
+        # Rewrite the script: the watcher must restart the agent on the new
+        # script, which keeps ticking.
+        machine.succeed("rm -f /etc/brain.rhai; cp /etc/brain-new.rhai /etc/brain.rhai")
+        machine.wait_until_succeeds('test "$(journalctl -u omw.service --no-pager | grep -c -F "agent run reloaded")" -ge 1')
+        machine.wait_until_succeeds('test "$(journalctl -u omw.service --no-pager | grep -c -F "tick")" -ge 4')
+        machine.succeed("systemctl is-active omw.service")
         machine.succeed("systemctl stop omw.service")
         machine.wait_until_fails("systemctl is-active omw.service")
       '';

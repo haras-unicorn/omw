@@ -520,7 +520,9 @@ mod tests {
       Ok::<_, anyhow::Error>(body)
     });
     let mut session = None;
-    for _ in 0..100 {
+    // Generous budget: axum bind + reqwest round-trip on a loaded CI VM can
+    // take seconds; poll the inbox instead of assuming a fixed latency.
+    for _ in 0..1000 {
       if let Some(envelope) = bus.try_recv("alice")? {
         match envelope.event {
           Event::EndpointMessage(message) => {
@@ -738,12 +740,16 @@ mod tests {
         .await
       }
     });
-    let envelope = loop {
-      if let Some(envelope) = bus.try_recv("alice")? {
-        break envelope;
+    let envelope = tokio::time::timeout(Duration::from_secs(10), async {
+      loop {
+        if let Some(envelope) = bus.try_recv("alice")? {
+          return Ok::<_, anyhow::Error>(envelope);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
       }
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for endpoint-message"))??;
     let Event::EndpointMessage(message) = envelope.event else {
       return Err(anyhow::anyhow!("expected an endpoint-message"));
     };
