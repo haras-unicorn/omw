@@ -60,7 +60,7 @@ Two things follow from this:
 restarting on failure — the default, suited to a service).
 
 `variant` selects which package flavor runs: `default` (the crates.io-equivalent
-build, no rhai runtime)) or `rhai` (the `omw-rhai` package, which compiles the
+build, no rhai runtime) or `rhai` (the `omw-rhai` package, which compiles the
 bundled rhai interpreter in). Overridable entirely with `package`.
 
 ## Users and state

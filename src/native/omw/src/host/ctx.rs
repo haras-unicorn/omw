@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 
 use crate::host::bus::MessageBus;
+use crate::host::endpoint::EndpointRegistry;
 use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
@@ -35,6 +36,10 @@ pub struct AgentContext {
   pub resources: Arc<CancelRegistry>,
   /// Registry of this agent's in-flight tool calls, keyed by UUID.
   pub tool_calls: Arc<CancelRegistry>,
+  /// The shared endpoint session registry, present when the endpoint HTTP
+  /// server is configured. `None` when the agent cannot use the `endpoint-*`
+  /// host imports (they error out).
+  pub endpoint: Option<Arc<EndpointRegistry>>,
   /// The tokio runtime used to bridge synchronous wasm host calls to the
   /// async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
@@ -55,6 +60,7 @@ impl AgentContext {
     timers: Arc<CancelRegistry>,
     resources: Arc<CancelRegistry>,
     tool_calls: Arc<CancelRegistry>,
+    endpoint: Option<Arc<EndpointRegistry>>,
   ) -> anyhow::Result<Self> {
     Ok(Self {
       name,
@@ -66,6 +72,7 @@ impl AgentContext {
       timers,
       resources,
       tool_calls,
+      endpoint,
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()

@@ -19,7 +19,8 @@ messages from other agents all land in the same inbox as an
 
 - `id` — the UUID of the _subscribed source_ the event came from.
 - `event` — the strongly-typed payload (`message`, `error`, `timer`,
-  `chat-delta`, `stream-end`, `resource-list-updated`, `resource-updated`).
+  `chat-delta`, `stream-end`, `resource-list-updated`, `resource-updated`,
+  `endpoint-message`, `endpoint-session-end`).
 
 The brain consumes events with `host.recv` (a blocking receive with a 60 second
 host-side timeout) or `host.try-recv` (a non-blocking poll). Because every event
@@ -53,7 +54,7 @@ inbox:
 - a `provider.chat-stream` call spawns a [chat-stream pump][streams] that
   delivers `chat-delta` events as chunks arrive and a terminal `stream-end` (or
   `error`) event when the stream closes.
-- a `tooling.call-tool` queues a [tool-call pump][tools]that delivers a
+- a `tooling.call-tool` queues a [tool-call pump][tools] that delivers a
   `tool-result` (or `error` on failure) event.
 - a `tooling.subscribe-resource-list` / `subscribe-resource` call spawns a
   [resource pump][resources] that delivers `resource-list-updated` /
@@ -70,6 +71,13 @@ the host runs them to completion with `rt.block_on` instead of spawning a pump.
 Both approaches run _off_ the wasm thread — pump tasks on the tokio runtime,
 blocking calls on the `spawn_blocking` thread the engine runs on — so the
 synchronous engine never blocks a tokio worker.
+
+## Endpoint requests
+
+Endpoint requests are different: the [endpoint server](./endpoint.md) routes an
+inbound chat completion straight into the owning agent's inbox as an
+`endpoint-message` event, and the agent streams deltas back through the session
+registry. Each session ends exactly once with an `endpoint-session-end` event.
 
 ## Why it is shaped this way
 

@@ -37,3 +37,4 @@ ignoreWords:
   - streamable
   - rmcp
   - modelcontextprotocol
+  - hostnames

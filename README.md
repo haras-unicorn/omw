@@ -32,8 +32,9 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
   as an opt-in flavor. The default `omw` package/binary (crates.io-equivalent,
-  no rhai feature), vs the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
-  (`--features rhai`). Both see the same `omw` host interface.
+  no rhai feature) ships without the rhai runtime, whereas the `omw-rhai`
+  package / `omw-rhai-<arch>.tar.gz` binary (`--features rhai`) includes it.
+  Both see the same `omw` host interface.
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 

@@ -65,7 +65,7 @@ impl WasmEngine {
     Ok(Self { engine, component })
   }
 
-  /// Load a AOT compiled component from a file path.
+  /// Load an AOT compiled component from a file path.
   pub fn from_native_path(path: &Path) -> anyhow::Result<Self> {
     let (engine, component) = Self::load(|engine| {
       #[allow(unsafe_code, reason = "need to load it somehow")]
@@ -89,7 +89,7 @@ impl WasmEngine {
     Ok(Self { engine, component })
   }
 
-  /// Load a AOT compiled WASM component from an in-memory byte slice.
+  /// Load an AOT compiled WASM component from an in-memory byte slice.
   pub fn from_native_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
     let (engine, component) = Self::load(|engine| {
       #[allow(unsafe_code, reason = "need to load it somehow")]
@@ -197,6 +197,7 @@ mod tests {
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
     )?)
   }
 

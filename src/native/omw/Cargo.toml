@@ -16,6 +16,7 @@ mock = []
 [dependencies]
 anyhow = "1.0.104"
 async-trait = "0.1.92"
+axum = "0.8.9"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive"] }
 config = "0.15.25"
@@ -24,7 +25,11 @@ futures = "0.3.34"
 futures-util = "0.3.34"
 kanal = "0.1.1"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
-rmcp = { version = "3.1.4", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.1.4", features = [
+  "client",
+  "transport-child-process",
+  "transport-streamable-http-client-reqwest",
+] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -39,7 +44,6 @@ tokio = { version = "1.53.1", features = [
   "sync",
   "time",
 ] }
-toml = "1.1.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
@@ -55,8 +59,14 @@ wat.workspace = true
 wasmtime.workspace = true
 
 [dev-dependencies]
+async-openai = { version = "0.41.3", features = ["chat-completion", "model"] }
 hyper-util = { version = "0.1.20", features = ["server"] }
-rmcp = { version = "3.1.4", features = ["server", "transport-async-rw", "transport-streamable-http-server", "tower"] }
+rmcp = { version = "3.1.4", features = [
+  "server",
+  "transport-async-rw",
+  "transport-streamable-http-server",
+  "tower",
+] }
 serial_test = "4.0.1"
 tempfile = "3.27.0"
 testcontainers = "0.28.0"

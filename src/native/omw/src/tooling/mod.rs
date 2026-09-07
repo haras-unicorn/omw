@@ -45,7 +45,6 @@ pub struct ResourceContent {
 }
 
 /// A server-initiated resource notification delivered on a subscription stream.
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceNotification {
   /// The resource list changed (from `subscribe_resource_list`).
@@ -89,13 +88,13 @@ pub trait Tooling: Send + Sync {
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>>;
   /// Read one resource's current content by URI.
   async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent>;
-  /// Subscribe to the resource *list* changing;yielded notifications arrive
+  /// Subscribe to the resource *list* changing; yielded notifications arrive
   /// on the returned stream (dropping the stream cancels the subscription).
   async fn subscribe_resource_list(
     &self,
   ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>;
 
-  /// Subscribe to one resource's updates;yielded notifications arrive on the
+  /// Subscribe to one resource's updates; yielded notifications arrive on the
   /// returned stream (dropping the stream cancels the subscription).
   async fn subscribe_resource(
     &self,
@@ -159,6 +158,7 @@ mod tests {
       providers: HashMap::new(),
       tooling: HashMap::new(),
       runtime: HashMap::new(),
+      endpoint: None,
       agents: Vec::new(),
     };
     assert!(build_registry(&cfg).await?.is_empty());
@@ -177,6 +177,7 @@ mod tests {
         },
       )]),
       runtime: HashMap::new(),
+      endpoint: None,
       agents: Vec::new(),
     };
     let reg = build_registry(&cfg).await?;
