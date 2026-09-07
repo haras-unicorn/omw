@@ -1,5 +1,6 @@
 pub mod bus;
 pub mod ctx;
+pub mod endpoint;
 pub mod events;
 pub mod imports;
 pub mod resources;

@@ -13,14 +13,14 @@ A tooling exposes, through the WIT `tooling` interface:
 - `list-tools()` — every tool visible on the instance.
 - `call-tool(name, arguments)` — queue a tool invocation, returning a UUID
   handle. The result arrives as a `tool-result` event (or an `error` event on
-  failure) tagged with that UUID..
-- `is-open(uuid)` — whether a queued tool call is still open..
+  failure) tagged with that UUID.
+- `is-open(uuid)` — whether a queued tool call is still open.
 - `cancel(uuid)` — cancel a queued tool call by UUID, dropping its pending
-  result delivery..
-- `call-tool-blocking(name`, `arguments)` — invoke a tool by name with opaque
-  JSON arguments, blocking until the result is ready. Returns the tool's result
-  as a `tool-result` (`name`, `arguments`, `value`) in-band (errors are surfaced
-  as the `err`).
+  result delivery.
+- `call-tool-blocking(name, arguments)` — invoke a tool by name with opaque JSON
+  arguments, blocking until the result is ready. Returns the tool's result as a
+  `tool-result` (`name`, `arguments`, `value`) in-band (errors are surfaced as
+  the `err`).
 - `list-resources()` — every URI-addressed resource the tooling exposes.
 - `read-resource(uri)` — block and read one resource's _current_ content — it
   returns a `resource-content` (`uri`, optional `mime-type`, and `content` which

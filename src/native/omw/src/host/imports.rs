@@ -7,7 +7,6 @@
 //!   * `provider.chat-stream` spawns a pump task (see `host/streams.rs`) on the
 //!     shared tokio runtime that delivers `chat-delta` / `stream-end` events into the
 //!     agent's inbox.
-
 //!   * `tooling.*` and `host.*` results are obtained with
 //!     [`Runtime::block_on`], which is only legal on threads that are not
 //!     themselves inside a tokio runtime (i.e. our `spawn_blocking` wasm
@@ -494,6 +493,61 @@ impl host_bindings::Host for Host {
     );
   }
 
+  fn endpoint_subscribe(&mut self, model: String) -> Result<String, String> {
+    if self.ctx.endpoint.is_none() {
+      tracing::warn!(
+        agent = %self.ctx.name,
+        "host endpoint-subscribe rejected: the endpoint is not configured"
+      );
+      return Err("the endpoint is not configured".to_string());
+    }
+    let result = self.ctx.bus.endpoint_subscribe(&self.ctx.name, model);
+    match &result {
+      Ok(uuid) => tracing::info!(
+        agent = %self.ctx.name,
+        uuid = %uuid,
+        "host endpoint-subscribe"
+      ),
+      Err(error) => tracing::warn!(
+        agent = %self.ctx.name,
+        error = %error,
+        "host endpoint-subscribe rejected"
+      ),
+    }
+    result
+  }
+
+  fn endpoint_unsubscribe(&mut self, uuid: String) {
+    let model = self.ctx.bus.endpoint_unsubscribe(&self.ctx.name, &uuid);
+    tracing::info!(
+      agent = %self.ctx.name,
+      uuid = %uuid,
+      model = ?model.as_deref(),
+      "host endpoint-unsubscribe"
+    );
+    if model.is_some()
+      && let Some(registry) = &self.ctx.endpoint
+    {
+      registry.cancel_subscription(&uuid);
+    }
+  }
+
+  fn endpoint_stream(
+    &mut self,
+    session: String,
+    delta: types_bindings::ChatDelta,
+  ) -> Result<(), String> {
+    let Some(registry) = &self.ctx.endpoint else {
+      return Err("the endpoint is not configured".to_string());
+    };
+    tracing::debug!(
+      agent = %self.ctx.name,
+      session = %session,
+      "host endpoint-stream"
+    );
+    registry.push(&self.ctx.name, &session, in_delta(delta))
+  }
+
   fn cancel(&mut self, uuid: String) {
     self.ctx.timers.cancel(&uuid);
     tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"host cancel");
@@ -577,6 +631,19 @@ fn out_event(event: Event) -> types_bindings::Event {
     Event::ResourceUpdated(content) => {
       types_bindings::Event::ResourceUpdated(content.into())
     }
+    Event::EndpointMessage(m) => {
+      types_bindings::Event::EndpointMessage(types_bindings::EndpointMessage {
+        session: m.session,
+        messages: m.messages.into_iter().map(out_chat_msg).collect(),
+        tools: m.tools.into_iter().map(Tool::into).collect(),
+      })
+    }
+    Event::EndpointSessionEnd(e) => types_bindings::Event::EndpointSessionEnd(
+      types_bindings::EndpointSessionEnd {
+        session: e.session,
+        error: e.error,
+      },
+    ),
   }
 }
 
@@ -594,6 +661,39 @@ fn in_msg(m: provider_bindings::ChatMessage) -> ChatMessage {
       name: tc.name,
       arguments: tc.arguments,
     }),
+  }
+}
+
+/// Map one host-side [`ChatMessage`] back onto the wire type used by the
+/// endpoint-message event payload.
+fn out_chat_msg(m: ChatMessage) -> provider_bindings::ChatMessage {
+  provider_bindings::ChatMessage {
+    role: match m.role {
+      Role::System => provider_bindings::Role::System,
+      Role::User => provider_bindings::Role::User,
+      Role::Assistant => provider_bindings::Role::Assistant,
+      Role::Tool => provider_bindings::Role::Tool,
+    },
+    content: m.content,
+    tool_call: m.tool_call.map(|tc| provider_bindings::ToolCall {
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    }),
+  }
+}
+
+/// Map one wire [`ChatDelta`] (from `host.endpoint-stream`) back onto the
+/// host-side delta type.
+fn in_delta(d: types_bindings::ChatDelta) -> ChatDelta {
+  ChatDelta {
+    content: d.content,
+    tool_call: d.tool_call.map(|tc| ToolCall {
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    }),
+    finish_reason: d.finish_reason,
   }
 }
 
@@ -690,12 +790,151 @@ mod tests {
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
     )?;
     Ok(Host {
       ctx,
       table: Default::default(),
       wasi: wasmtime_wasi::WasiCtxBuilder::new().build(),
     })
+  }
+
+  fn test_host_with_endpoint() -> anyhow::Result<Host> {
+    let bus = Arc::new(MessageBus::new());
+    let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
+      Arc::clone(&bus),
+    ));
+    bus
+      .endpoint_subscribe("test-agent", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    let ctx = AgentContext::new(
+      "test-agent".to_string(),
+      PathBuf::from("unused.rhai"),
+      HashMap::new(),
+      HashMap::new(),
+      bus,
+      Arc::new(StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Some(registry),
+    )?;
+    Ok(Host {
+      ctx,
+      table: Default::default(),
+      wasi: wasmtime_wasi::WasiCtxBuilder::new().build(),
+    })
+  }
+
+  #[test]
+  fn endpoint_stream_errors_when_endpoint_not_configured() -> anyhow::Result<()>
+  {
+    let mut host = test_host()?;
+    let delta = out_msg(ChatDelta {
+      content: Some("hi".to_string()),
+      tool_call: None,
+      finish_reason: None,
+    });
+    let err = host
+      .endpoint_stream("session-1".to_string(), delta)
+      .unwrap_err();
+    assert_eq!(err, "the endpoint is not configured");
+    Ok(())
+  }
+
+  #[test]
+  fn endpoint_subscribe_errors_when_endpoint_not_configured()
+  -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    let err = host.endpoint_subscribe("gpt-4o".to_string()).unwrap_err();
+    assert_eq!(err, "the endpoint is not configured");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn endpoint_stream_errors_when_receiver_closed() -> anyhow::Result<()> {
+    let mut host = test_host_with_endpoint()?;
+    let registry = host
+      .ctx
+      .endpoint
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("expected an endpoint registry"))?
+      .clone();
+    let mut open = registry.open("test-agent", "sub-1");
+    open.rx.close();
+    let err = host
+      .endpoint_stream(
+        open.session.clone(),
+        out_msg(ChatDelta {
+          content: Some("hi".to_string()),
+          tool_call: None,
+          finish_reason: None,
+        }),
+      )
+      .unwrap_err();
+    assert_eq!(err, "endpoint session receiver closed");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn endpoint_stream_queues_non_terminal_deltas_and_rejects_after_termination()
+  -> anyhow::Result<()> {
+    let mut host = test_host_with_endpoint()?;
+    let registry = host
+      .ctx
+      .endpoint
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("expected an endpoint registry"))?
+      .clone();
+    let mut open = registry.open("test-agent", "sub-1");
+    host
+      .endpoint_stream(
+        open.session.clone(),
+        out_msg(ChatDelta {
+          content: Some("hi".to_string()),
+          tool_call: None,
+          finish_reason: None,
+        }),
+      )
+      .map_err(|e| anyhow::anyhow!(e))?;
+    match open.rx.recv().await {
+      Some(crate::host::endpoint::Outbound::Delta(delta)) => {
+        assert_eq!(delta.content.as_deref(), Some("hi"));
+      }
+      other => assert!(false, "unexpected outbound: {other:?}"),
+    }
+    host
+      .endpoint_stream(
+        open.session.clone(),
+        out_msg(ChatDelta {
+          content: None,
+          tool_call: None,
+          finish_reason: Some("stop".to_string()),
+        }),
+      )
+      .map_err(|e| anyhow::anyhow!(e))?;
+    match open.rx.recv().await {
+      Some(crate::host::endpoint::Outbound::Delta(delta)) => {
+        assert_eq!(delta.finish_reason.as_deref(), Some("stop"));
+      }
+      other => assert!(false, "unexpected outbound: {other:?}"),
+    };
+    assert_eq!(
+      open.rx.recv().await,
+      Some(crate::host::endpoint::Outbound::Close)
+    );
+    let err = host
+      .endpoint_stream(
+        open.session.clone(),
+        out_msg(ChatDelta {
+          content: None,
+          tool_call: None,
+          finish_reason: None,
+        }),
+      )
+      .unwrap_err();
+    assert_eq!(err, "unknown endpoint session");
+    Ok(())
   }
 
   fn in_msg_with(role: provider_bindings::Role) -> ChatMessage {

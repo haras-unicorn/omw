@@ -25,3 +25,5 @@ ignoreWords:
   - gguf
   - llamacpp
   - oneshot
+  - hostnames
+  - chatcmpl

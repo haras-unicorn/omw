@@ -58,19 +58,16 @@ impl StreamRegistry {
   }
 
   /// Whether a chat stream is still open.
-
   pub fn is_open(&self, uuid: &str) -> bool {
     self.locked_open().contains_key(uuid)
   }
 
   /// Cancel an open stream by UUID: drops its cancel signal, waking the pump.
-
   pub fn cancel(&self, uuid: &str) {
     let _ = self.locked_open().remove(uuid);
   }
 
-  /// Deregister a stream;the pump calls this once it finishes.
-
+  /// Deregister a stream; the pump calls this once it finishes.
   pub fn remove(&self, uuid: &str) {
     let _ = self.locked_open().remove(uuid);
   }
@@ -84,7 +81,6 @@ impl StreamRegistry {
 /// deltas into `name`'s inbox tagged with `uuid`. The pump runs to a terminal
 /// `stream-end` event on natural end (or an `error` event on failure) and then
 /// deregisters its stream.
-
 pub fn spawn_pump(
   provider: Arc<dyn Provider>,
   rt: Arc<tokio::runtime::Runtime>,

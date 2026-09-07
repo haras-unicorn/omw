@@ -41,9 +41,9 @@ pushes a blocking task that:
 
 Every runtime call receives an `AgentContext`: the agent `name`, the brain
 `script` path, the named `providers` and `tooling` registries, the shared
-`MessageBus`, the agent's own `StreamRegistry` (chat streams), timer
-`CancelRegistry`, resource-subscription `CancelRegistry` and the dedicated tokio
-`rt` used to bridge synchronous host calls to the async provider/tooling.
+`MessageBus`, the agent's own `StreamRegistry` (chat streams), the timer
+`CancelRegistry`, the resource-subscription `CancelRegistry`, and the dedicated
+tokio `rt` used to bridge synchronous host calls to the async provider/tooling.
 
 Provider and tooling registries, and the message bus, are shared across all
 agents in one process — the `StreamRegistry`, timer/resource registries, and

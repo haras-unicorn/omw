@@ -27,7 +27,7 @@ runtime = "rhai"
 script = "brain.rhai"
 ```
 
-A custom interpreter component can be substituted either via the runtime's
+A custom interpreter component can be substituted via the runtime's
 `interpreter` parameter; otherwise the interpreter compiled into the binary is
 used.
 
@@ -48,7 +48,8 @@ sub-modules that expose the WIT interfaces to the script:
   methods.
 - `omw::host::*` — the host helpers: `log`, `now`, `timestamp_add`,
   `timestamp_sub`, `timestamp_diff`, `timestamp_format`, `wait_timestamp`,
-  `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`, `send`,
+  `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`,
+  `endpoint_subscribe`, `endpoint_unsubscribe`, `endpoint_stream`, `send`,
   `recv`, `try_recv`, `new_uuid`, `sleep_duration`, `sleep_timestamp`, and
   `sleep_cron`.
 
@@ -63,14 +64,19 @@ Events come back as maps shaped `#{ id, kind, payload }`:
 
 - `id` — the envelope's UUID;
 - `kind` — one of `message`, `error`, `timer`, `chat-delta`, `stream-end`,
-  `tool-result`, `resource-list-updated`, `resource-updated`;
+  `tool-result`, `resource-list-updated`, `resource-updated`,
+  `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, a map for `chat-delta` (with
   `content`, `tool_call` `{ id, name, arguments }`, and `finish_reason`), a map
   for `tool-result` (`{ name, arguments, value }`), a list of resource maps
   (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
   resource-content map (`{ uri, mime_type?, content }`) for `resource-updated`,
-  and unit otherwise. The `content` field holds actual text for textual formats
-  and base64 for anything else — match on `mime_type` to tell which.
+  a map for `endpoint-message` (`{ session, messages, tools }`, with `messages`
+  a list of `{ role, content?, tool_call? }` maps, and `tools` a list of
+  `{ name, description?, input_schema }`), a map for `endpoint-session-end`
+  (`{ session, error? }`), and unit otherwise. The `content` field holds actual
+  text for textual formats and base64 for anything else — match on `mime_type`
+  to tell which.
 
 ## Example brain
 

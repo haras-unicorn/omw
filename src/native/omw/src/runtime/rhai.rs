@@ -132,6 +132,27 @@ mod tests {
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
+    )?)
+  }
+
+  /// Build a context wired to a caller-supplied endpoint bus + registry pair.
+  fn test_endpoint_ctx(
+    script: std::path::PathBuf,
+    bus: Arc<MessageBus>,
+    endpoint: Arc<crate::host::endpoint::EndpointRegistry>,
+  ) -> anyhow::Result<AgentContext> {
+    Ok(AgentContext::new(
+      "test-agent".to_string(),
+      script,
+      HashMap::new(),
+      HashMap::new(),
+      bus,
+      Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Some(endpoint),
     )?)
   }
 
@@ -151,6 +172,7 @@ mod tests {
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
       Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
     )?)
   }
 
@@ -568,6 +590,167 @@ mod tests {
       outcome,
       RunOutcome::Exited("file:///a|hello-resource".to_string()),
       "read_resource should return the resource's current content"
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn host_endpoint_subscribe_routes_message_visible_to_script()
+  -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+    let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
+      Arc::clone(&bus),
+    ));
+
+    let dir = tempdir()?;
+    let path = dir.path().join("endpoint.rhai");
+    std::fs::write(
+      &path,
+      r#"
+        let sub = omw::host::endpoint_subscribe("gpt-4o");
+        let e = omw::host::recv();
+        let m = e.payload.messages[0];
+        let t = e.payload.tools[0];
+        (e.id == sub) + "|" + e.kind + "|" + e.payload.session + "|"
+          + m.role + "|" + m.content + "|" + t.name + "|"
+          + t.description + "|" + t.input_schema
+      "#,
+    )?;
+    let ctx = test_endpoint_ctx(path, Arc::clone(&bus), Arc::clone(&registry))?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let run_ctx = ctx.clone();
+    let handle = std::thread::spawn(move || run(&runtime, &run_ctx));
+
+    // Wait for the script's subscribe, then route a request into its inbox.
+    for _ in 0..100 {
+      if bus.endpoint_lookup("gpt-4o").is_some() {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (agent, sub_uuid) = bus
+      .endpoint_lookup("gpt-4o")
+      .ok_or_else(|| anyhow::anyhow!("script never subscribed"))?;
+    assert_eq!(agent, "test-agent");
+    let open = registry.clone().open(&agent, &sub_uuid);
+    let session = open.session.clone();
+    // `OpenSession` itself has no `Drop` (only `SessionRx` aborts), so the
+    // session entry stays alive even though this test never drains it.
+    std::mem::forget(open.rx);
+    bus
+      .endpoint_route(
+        "gpt-4o",
+        &session,
+        vec![crate::provider::ChatMessage {
+          role: crate::provider::Role::User,
+          content: Some("hi".to_string()),
+          tool_call: None,
+        }],
+        vec![crate::tooling::Tool {
+          name: "get_weather".to_string(),
+          description: Some("weather".to_string()),
+          input_schema: serde_json::json!({ "type": "object" }),
+        }],
+      )
+      .map_err(|e| anyhow::anyhow!(e))?;
+
+    let outcome = handle
+      .join()
+      .map_err(|_| anyhow::anyhow!("endpoint script thread panicked"))??;
+    match outcome {
+      RunOutcome::Exited(msg) => {
+        assert!(
+          msg.starts_with("true|endpoint-message|"),
+          "expected an endpoint-message event, got {msg:?}"
+        );
+        assert!(msg.contains(&session));
+        assert!(msg.contains("user|hi|get_weather|weather"));
+        assert!(msg.contains(r#"{"type":"object"}"#));
+      }
+      other => anyhow::bail!("expected an exited message, got {other:?}"),
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn host_endpoint_stream_sends_deltas_visible_on_session_channel()
+  -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+    let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
+      Arc::clone(&bus),
+    ));
+    let sub = bus
+      .endpoint_subscribe("test-agent", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    let open = registry.clone().open("test-agent", &sub);
+    // Move the receiver out and keep it alive for the script's pushes;
+    // `OpenSession` itself has no `Drop`, only `SessionRx` aborts.
+    let session = open.session.clone();
+    let mut rx = open.rx;
+
+    let dir = tempdir()?;
+    let path = dir.path().join("endpoint_stream.rhai");
+    std::fs::write(
+      &path,
+      format!(
+        r#"
+        omw::host::endpoint_stream("{session}", #{{ content: "Hello" }});
+        omw::host::endpoint_stream("{session}", #{{ finish_reason: "stop" }});
+        "streamed"
+      "#
+      ),
+    )?;
+    let ctx = test_endpoint_ctx(path, Arc::clone(&bus), Arc::clone(&registry))?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(outcome, RunOutcome::Exited("streamed".to_string()));
+
+    use crate::host::endpoint::Outbound;
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()?;
+    rt.block_on(async {
+      match rx.recv().await {
+        Some(Outbound::Delta(d)) => {
+          assert_eq!(d.content.as_deref(), Some("Hello"));
+        }
+        other => anyhow::bail!("unexpected outbound: {other:?}"),
+      }
+      match rx.recv().await {
+        Some(Outbound::Delta(d)) => {
+          assert_eq!(d.finish_reason.as_deref(), Some("stop"));
+        }
+        other => anyhow::bail!("unexpected outbound: {other:?}"),
+      }
+      assert_eq!(rx.recv().await, Some(Outbound::Close));
+      Ok::<_, anyhow::Error>(())
+    })?;
+    Ok(())
+  }
+
+  #[test]
+  fn host_endpoint_stream_unknown_session_errors_in_script()
+  -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+    let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
+      Arc::clone(&bus),
+    ));
+
+    let dir = tempdir()?;
+    let path = dir.path().join("endpoint_bad_session.rhai");
+    std::fs::write(
+      &path,
+      r#"omw::host::endpoint_stream("nope", #{ content: "hi" })"#,
+    )?;
+    let ctx = test_endpoint_ctx(path, bus, registry)?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let result = run(&runtime, &ctx);
+    assert!(
+      result.is_err(),
+      "endpoint_stream on an unknown session should error, got {result:?}"
     );
     Ok(())
   }

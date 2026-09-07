@@ -147,7 +147,7 @@ let
       testScript = ''
         start_all()
         machine.wait_for_unit("omw.service")
-        machine.wait_until_succeeds("test \"$(journalctl -u omw.service --no-pager | grep -c -F 'agent alice failed')\" -ge 3")
+        machine.wait_until_succeeds("test \"$(journalctl -u omw.service --no-pager | grep -c -F 'agent run failed')\" -ge 3")
         machine.succeed("systemctl stop omw.service")
         machine.wait_until_fails("systemctl is-active omw.service")
       '';

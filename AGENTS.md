@@ -38,6 +38,13 @@ A Cargo workspace with three crates plus a single WIT contract.
     brain) and `rhai.rs` (the bundled Rhai evaluator that loads `.rhai` brains
     enabled by the `rhai` feature).
 
+  - `endpoint/` — the optional OpenAI-compatible HTTP server (`[endpoint]`
+    config, axum; zero extra features, started only when configured: exposing
+    `GET /v1/models` and `POST /v1/chat/completions`, routing each request as an
+    `endpoint-message` inbox event under the model name the calling agent
+    subscribed to, and streaming the agent's `endpoint-stream` deltas back as
+    SSE or a buffered JSON completion.
+
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
 
@@ -64,12 +71,16 @@ A Cargo workspace with three crates plus a single WIT contract.
     - `resources.rs` is the cancellable resource-subscription pump that delivers
       `resource-list-updated`/`resource-updated` events into inboxes.
 
+    - `endpoint.rs` is the per-process endpoint session registry (`open` /
+      `push` / `abort`) that buffers an agent's streamed deltas non-blocking,
+      and fires `endpoint-session-end` events on normal/abrupt termination.
+
     - `ctx.rs` is `AgentContext`.
 
 - `src/wasm/omw-rhai-wasm-interpreter` — the Rhai guest component
   (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
-  `provider`/ `tooling`/`host` functions route to the host.
+  `provider`/`tooling`/`host` functions route to the host.
 
 - `src/wasm/omw-wasm-mock` — the test-only wasm mock brain, cross-compiled by
   the `mock` feature for the engine/wasm runtime tests (not shipped to

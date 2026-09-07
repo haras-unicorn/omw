@@ -12,6 +12,7 @@
 pub mod agent;
 pub mod bindings;
 pub mod config;
+pub mod endpoint;
 pub mod host;
 pub mod log;
 pub mod provider;

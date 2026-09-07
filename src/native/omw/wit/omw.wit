@@ -127,6 +127,31 @@ interface types {
     finish-reason: option<string>,
   }
 
+  /// An inbound chat request routed from the endpoint to a subscribed agent,
+  /// tagged with the subscription UUID the `endpoint-subscribe` call returned.
+  record endpoint-message {
+    /// UUID of the session this request belongs to; deltas streamed back via
+    /// `host.endpoint-stream` address this.
+    session: string,
+
+    /// The chat history as submitted by the endpoint client.
+    messages: list<chat-message>,
+
+    /// The tools advertised by the endpoint client, if any.
+    tools: list<tool>,
+  }
+
+  /// A session ended: either the agent's reply completed (`error` absent) or
+  /// the session was interrupted (`error` carries a host-side description).
+  record endpoint-session-end {
+    /// UUID of the session that ended.
+    session: string,
+
+    /// Present if the session ended abruptly rather than via a terminal
+    /// `finish-reason`.
+    error: option<string>,
+  }
+
   /// A strongly-typed event payload delivered into an agent's inbox. The
   /// guest matches an event against the UUID handles it holds via
   /// `event-envelope.id`.
@@ -156,6 +181,14 @@ interface types {
     /// A subscribed resource updated in place; carries the freshly read
     /// resource content.
     resource-updated(resource-content),
+
+    /// An inbound endpoint request routed to a subscribed agent; carries the
+    /// session id, messages, and tools.
+    endpoint-message(endpoint-message),
+
+    /// An endpoint session ended; carries the session id and an optional
+    /// error when the session was interrupted.
+    endpoint-session-end(endpoint-session-end),
   }
 
   /// An event tagged with the UUID of its subscribed source.
@@ -189,7 +222,7 @@ interface provider {
 
     /// Run a chat conversation to completion and return the full result in-band.
     /// Unlike `chat-stream`, no events are delivered; the call only returns
-    /// after the response finishes (or errors),and cannot be cancelled.
+    /// after the response finishes (or errors), and cannot be cancelled.
     chat: func(
       model: string,
       messages: list<chat-message>,
@@ -277,7 +310,7 @@ interface tooling {
 
 /// Static helpers baked into the host module. Not extensible.
 interface host {
-  use types.{event-envelope};
+  use types.{chat-delta, event-envelope};
 
   /// level is one of "trace" | "debug" | "info" | "warn" | "error".
   log: func(level: string, message: string);
@@ -315,7 +348,7 @@ interface host {
 
   /// Blocking wait for `ms` milliseconds; returns once the delay elapses.
   /// Unlike `wait-duration`, no `"timer"` event is delivered; the call only
-  /// returns after the wait finishes, and and cannot be cancelled.
+  /// returns after the wait finishes, and cannot be cancelled.
   sleep-duration: func(ms: u64);
 
   /// Blocking wait until a timestamp fires. Errors if `ts <= now`. Unlike
@@ -336,6 +369,27 @@ interface host {
   /// Unsubscribe from another agent's messages by the UUID handle `subscribe`
   /// returned. No further `"message"` events are delivered on that handle.
   unsubscribe: func(uuid: string);
+
+  /// Subscribe this agent to the endpoint under the model name `model`.
+  /// Returns a UUID handle: inbound endpoint requests for that model arrive
+  /// as `"endpoint-message"` events tagged with it, and the model shows up on
+  /// `GET /v1/models` while subscribed. An agent may subscribe multiple
+  /// model names, each its own handle. Errors if `model` is already taken.
+  endpoint-subscribe: func(model: string) -> result<string, string>;
+
+  /// Unsubscribe by the UUID `endpoint-subscribe` returned. The model is
+  /// dropped from `/v1/models`, no further requests route to the agent, and
+  /// every in-flight session of that subscription is abruptly terminated
+  /// (each delivering an `"endpoint-session-end"` event with an error).
+  endpoint-unsubscribe: func(uuid: string);
+
+  /// Stream one `chat-delta` to the endpoint session identified by `session`.
+  /// Non-blocking: the delta is queued to the session's local buffer and the
+  /// call returns once queued, never waiting for the endpoint client. Errors
+  /// if the session is unknown, belongs to another agent, or has already
+  /// ended. A delta carrying a `finish-reason` ends the session.
+
+  endpoint-stream: func(session: string, delta: chat-delta) -> result<_, string>;
 
   /// Send a payload to another agent. The sender is taken from the calling
   /// agent's context; the message lands in the recipient's inbox only if it
@@ -366,9 +420,9 @@ interface runtime {
 /// The single world: host-owned registries and helpers are imported; the
 /// runtime is exported.
 world omw {
-    import types;
-    import provider;
-    import tooling;
-    import host;
-    export runtime;
+  import types;
+  import provider;
+  import tooling;
+  import host;
+  export runtime;
 }

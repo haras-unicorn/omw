@@ -27,6 +27,16 @@ pub struct ImplConfig {
   pub params: serde_json::Value,
 }
 
+/// Optional HTTP endpoint configuration: starts an OpenAI-compatible chat
+/// server through which each subscribed agent is addressable as a model.
+#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
+pub struct EndpointConfig {
+  /// Socket address to listen on, e.g. `"127.0.0.1:8080"` or
+  /// `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
+  /// startup.
+  pub listen: String,
+}
+
 /// OMW configuration.
 #[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
 pub struct Config {
@@ -39,6 +49,11 @@ pub struct Config {
   /// Named runtime implementations.
   #[serde(default)]
   pub runtime: HashMap<String, ImplConfig>,
+
+  /// Optional HTTP endpoint; when set, a server is started and the agents
+  /// can subscribe to it as models.
+  #[serde(default)]
+  pub endpoint: Option<EndpointConfig>,
   #[serde(default)]
   pub agents: Vec<AgentConfig>,
 }

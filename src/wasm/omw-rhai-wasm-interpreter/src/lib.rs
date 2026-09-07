@@ -121,6 +121,9 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("try_recv", host_try_recv);
   host.set_native_fn("new_uuid", host_new_uuid);
 
+  host.set_native_fn("endpoint_subscribe", host_endpoint_subscribe);
+  host.set_native_fn("endpoint_unsubscribe", host_endpoint_unsubscribe);
+  host.set_native_fn("endpoint_stream", host_endpoint_stream);
   let mut omw = Module::new();
   omw.set_sub_module("provider", provider);
   omw.set_sub_module("tooling", tooling);
@@ -544,6 +547,30 @@ fn host_new_uuid() -> Result<String, Box<EvalAltResult>> {
   Ok(host::new_uuid())
 }
 
+/// Subscribe this agent to the endpoint under the model name `model`. Returns
+/// the subscription UUID; inbound endpoint requests arrive as
+/// `"endpoint-message"` events tagged with it.
+fn host_endpoint_subscribe(model: &str) -> Result<String, Box<EvalAltResult>> {
+  host::endpoint_subscribe(model).map_err(to_error)
+}
+
+/// Unsubscribe by a UUID that `endpoint_subscribe` returned; the model is
+/// dropped and every in-flight session of that subscription is terminated.
+fn host_endpoint_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::endpoint_unsubscribe(uuid);
+  Ok(())
+}
+
+/// Stream one `chat-delta` map to the endpoint session identified by `session`,
+/// non-blocking. A map carrying a `finish_reason` ends the session.
+fn host_endpoint_stream(
+  session: &str,
+  delta: Map,
+) -> Result<(), Box<EvalAltResult>> {
+  let delta = delta_from_map(&delta).map_err(to_error)?;
+  host::endpoint_stream(session, &delta).map_err(to_error)
+}
+
 /// Map a `host::EventEnvelope` into a rhai map `#{ id, kind, payload }` so
 /// scripts can inspect `e.id` and match events against their handles.
 fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
@@ -570,6 +597,29 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
     types::Event::ResourceUpdated(content) => {
       ("resource-updated", resource_content_to_map(content).into())
     }
+    types::Event::EndpointMessage(message) => {
+      let mut payload = Map::new();
+      payload.insert("session".into(), message.session.into());
+      let mut messages = Array::new();
+      for m in message.messages {
+        messages.push(chat_message_to_map(m).into());
+      }
+      payload.insert("messages".into(), messages.into());
+      let mut tools = Array::new();
+      for t in message.tools {
+        tools.push(tool_to_map(t).into());
+      }
+      payload.insert("tools".into(), tools.into());
+      ("endpoint-message", payload.into())
+    }
+    types::Event::EndpointSessionEnd(end) => {
+      let mut payload = Map::new();
+      payload.insert("session".into(), end.session.into());
+      if let Some(error) = end.error {
+        payload.insert("error".into(), error.into());
+      }
+      ("endpoint-session-end", payload.into())
+    }
   };
   m.insert("kind".into(), kind.into());
   m.insert("payload".into(), payload);
@@ -593,6 +643,91 @@ fn delta_to_map(delta: types::ChatDelta) -> Map {
   if let Some(finish_reason) = delta.finish_reason {
     m.insert("finish_reason".into(), finish_reason.into());
   }
+  m
+}
+
+/// Map a `types::ChatDelta` back out of a rhai map (the inverse of
+/// [`delta_to_map`]). Reads `content`, `tool_call` (a map with `id`/
+/// `name`/`arguments`), and `finish_reason` off it.
+fn delta_from_map(delta: &Map) -> Result<types::ChatDelta, String> {
+  let content = delta
+    .get("content")
+    .and_then(|c| c.clone().try_cast::<String>());
+  let tool_call = match delta.get("tool_call") {
+    Some(tc) => {
+      let tc = tc
+        .clone()
+        .try_cast::<Map>()
+        .ok_or_else(|| "tool_call must be a map".to_string())?;
+      let id = tc
+        .get("id")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing id".to_string())?;
+      let name = tc
+        .get("name")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing name".to_string())?;
+      let arguments = tc
+        .get("arguments")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing arguments".to_string())?;
+      Some(types::ToolCall {
+        id,
+        name,
+        arguments,
+      })
+    }
+    None => None,
+  };
+  let finish_reason = delta
+    .get("finish_reason")
+    .and_then(|f| f.clone().try_cast::<String>());
+  Ok(types::ChatDelta {
+    content,
+    tool_call,
+    finish_reason,
+  })
+}
+
+/// Map a `types::ChatMessage` into a rhai map so scripts can read `role`,
+/// `content`,and `tool_call` off an `endpoint-message` event's messages.
+fn chat_message_to_map(m: types::ChatMessage) -> Map {
+  let mut r = Map::new();
+  if let Some(content) = m.content {
+    r.insert("content".into(), content.into());
+  }
+  if let Some(tc) = m.tool_call {
+    r.insert("tool_call".into(), tool_call_to_map(tc).into());
+  }
+  let role = match m.role {
+    types::Role::System => "system",
+    types::Role::User => "user",
+    types::Role::Assistant => "assistant",
+    types::Role::Tool => "tool",
+  };
+  r.insert("role".into(), role.into());
+  r
+}
+
+/// Map a `types::Tool` into a rhai map so scripts can read `name`,
+/// `description`,and `input_schema` off an `endpoint-message` event's tools.
+fn tool_to_map(t: types::Tool) -> Map {
+  let mut m = Map::new();
+  if let Some(desc) = t.description {
+    m.insert("description".into(), desc.into());
+  }
+  m.insert("name".into(), t.name.into());
+  m.insert("input_schema".into(), t.input_schema.into());
+  m
+}
+
+/// Map a `types::ToolCall` into a rhai map so scripts can read `id`/
+/// `name`/`arguments` off a tool call.
+fn tool_call_to_map(tc: types::ToolCall) -> Map {
+  let mut m = Map::new();
+  m.insert("id".into(), tc.id.into());
+  m.insert("name".into(), tc.name.into());
+  m.insert("arguments".into(), tc.arguments.into());
   m
 }
 
@@ -630,10 +765,36 @@ fn msg_from_dynamic(d: Dynamic) -> Result<provider::ChatMessage, String> {
     "tool" => provider::Role::Tool,
     _ => provider::Role::User,
   };
+  let tool_call = match map.get("tool_call") {
+    Some(tc) => {
+      let tc = tc
+        .clone()
+        .try_cast::<Map>()
+        .ok_or_else(|| "tool_call must be a map".to_string())?;
+      let id = tc
+        .get("id")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing id".to_string())?;
+      let name = tc
+        .get("name")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing name".to_string())?;
+      let arguments = tc
+        .get("arguments")
+        .and_then(|v| v.clone().try_cast::<String>())
+        .ok_or_else(|| "tool_call missing arguments".to_string())?;
+      Some(provider::ToolCall {
+        id,
+        name,
+        arguments,
+      })
+    }
+    None => None,
+  };
   Ok(provider::ChatMessage {
     role: role_enum,
     content,
-    tool_call: None,
+    tool_call,
   })
 }
 

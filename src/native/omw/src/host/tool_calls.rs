@@ -17,7 +17,7 @@ use crate::tooling::Tooling;
 
 /// Spawn a pump task on `rt` that awaits `tooling.call_tool(name, args)`
 /// and delivers its result into `name`'s inbox tagged with `uuid`. A failure
-/// is delivered as an [`Event::Error`]and a successful result as an
+/// is delivered as an [`Event::Error`] and a successful result as an
 /// [`Event::ToolResult`]. Cancelling the invocation (via the shared registry)
 /// suppresses but does not abort the underlying call.
 #[allow(

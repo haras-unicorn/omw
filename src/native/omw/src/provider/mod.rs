@@ -52,8 +52,8 @@ pub struct ChatDelta {
   pub finish_reason: Option<String>,
 }
 
-/// The in-band result of a blocking `chat` call:the concatenated text, the
-/// fully-reassembled tool calls,and the terminal finish reason、
+/// The in-band result of a blocking `chat` call: the concatenated text, the
+/// fully-reassembled tool calls, and the terminal finish reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatResult {
   pub content: Option<String>,
@@ -83,7 +83,7 @@ impl std::fmt::Debug for ProviderEntry {
 /// A provider is anything that can run a chat conversation.
 ///
 /// `chat_stream` always streams; dropping the returned stream aborts the in-flight
-/// request. `chat` blocks on `chat_stream` to completion by default,and
+/// request. `chat` blocks on `chat_stream` to completion by default, and
 /// returns the accumulated [`ChatResult`] in-band.
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
@@ -141,8 +141,8 @@ pub trait Provider: Send + Sync {
 
 /// Merge one streaming ToolCall (whose arguments may be fragmented or
 /// repeated across chunks) into the accumulated list, keyed by id in
-/// first-seen order形式 A delta whose arguments extend the previous ones replaces
-/// them; any other non-empty fragment is appended。
+/// first-seen order. A delta whose arguments extend the previous ones replaces
+/// them; any other non-empty fragment is appended.
 fn merge_tool_call(tool_calls: &mut Vec<ToolCall>, incoming: ToolCall) {
   if let Some(existing) = tool_calls.iter_mut().find(|c| c.id == incoming.id) {
     let args = &incoming.arguments;
@@ -215,6 +215,7 @@ mod tests {
       providers: HashMap::new(),
       tooling: HashMap::new(),
       runtime: HashMap::new(),
+      endpoint: None,
       agents: Vec::new(),
     };
     assert!(build_registry(&cfg)?.is_empty());
@@ -233,6 +234,7 @@ mod tests {
       )]),
       tooling: HashMap::new(),
       runtime: HashMap::new(),
+      endpoint: None,
       agents: vec![AgentConfig {
         name: "a".to_string(),
         runtime: "rhai".to_string(),

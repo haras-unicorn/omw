@@ -3,6 +3,7 @@
 - [Introduction](./introduction.md)
 - [The actor model](./actor.md)
 - [The host interface](./host.md)
+- [The endpoint](./endpoint.md)
 - [Provider](./provider/interface.md)
   - [The OpenAI provider](./provider/openai.md)
 - [Tooling](./tooling/interface.md)

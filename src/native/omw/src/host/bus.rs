@@ -3,13 +3,16 @@
 //! every delivery carries the subscription's UUID so the guest can disambiguate
 //! events from different sources on the single inbox.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use kanal::{Receiver, Sender};
 
-use crate::host::events::{Event, EventEnvelope};
+use crate::host::events::{EndpointMessage, Event, EventEnvelope};
+use crate::provider::ChatMessage;
+use crate::tooling::Tool;
 
 /// Lock a `std::sync::Mutex`, recovering the guard on poison (a poisoned lock
 /// should never take the whole runtime down).
@@ -36,6 +39,13 @@ struct BusInner {
   /// `subscription uuid` -> `(subscriber, source)` reverse index, so
   /// `unsubscribe` can remove by handle instead of re-deriving the pair.
   subscriptions_by_uuid: HashMap<String, (String, String)>,
+  /// Endpoint model name -> `(agent, subscription uuid)`, kept in a
+  /// `BTreeMap` so `/v1/models` enumerates models in deterministic order.
+  endpoint_by_model: BTreeMap<String, (String, String)>,
+  /// Endpoint `subscription uuid` -> `(agent, model)` reverse index, so
+  /// `endpoint-unsubscribe` can remove by handle instead of again walking
+  /// the model map.
+  endpoint_by_uuid: HashMap<String, (String, String)>,
 }
 
 impl MessageBus {
@@ -81,6 +91,114 @@ impl MessageBus {
     inner.subscriptions.remove(&(sub, src.clone()));
     tracing::debug!(subscriber, source = %src, uuid = %uuid, "agent unsubscribed from another agent");
     true
+  }
+
+  /// Subscribe `agent` to inbound endpoint requests under the model name
+  /// `model`, returning a fresh UUID handle that routing deliveries are tagged
+  /// with. Errors if `model` is already taken by any agent.
+  pub fn endpoint_subscribe(
+    &self,
+    agent: &str,
+    model: String,
+  ) -> Result<String, String> {
+    let mut inner = lock(&self.inner);
+    if inner.endpoint_by_model.contains_key(&model) {
+      tracing::debug!(agent,endpoint_model = %model, "endpoint model already subscribed");
+      return Err(format!("model {model:?} is already subscribed"));
+    }
+    let uuid = new_uuid();
+    inner
+      .endpoint_by_model
+      .insert(model.clone(), (agent.to_string(), uuid.clone()));
+    inner
+      .endpoint_by_uuid
+      .insert(uuid.clone(), (agent.to_string(), model.clone()));
+    tracing::info!(
+      agent,
+      endpoint_model = %model,
+      uuid = %uuid,
+      "agent subscribed to the endpoint"
+    );
+    Ok(uuid)
+  }
+
+  /// Remove `agent`'s endpoint subscription identified by `uuid`, if any.
+  /// Returns the model name that was unsubscribed, or `None` when `uuid` is
+  /// unknown or belongs to another agent.
+  pub fn endpoint_unsubscribe(
+    &self,
+    agent: &str,
+    uuid: &str,
+  ) -> Option<String> {
+    let mut inner = lock(&self.inner);
+    let (sub, model) = inner.endpoint_by_uuid.remove(uuid)?;
+    if sub != agent {
+      inner
+        .endpoint_by_uuid
+        .insert(uuid.to_string(), (sub, model));
+      return None;
+    }
+    inner.endpoint_by_model.remove(&model);
+    tracing::info!(
+      agent,
+      endpoint_model = %model,
+      uuid = %uuid,
+      "agent unsubscribed from the endpoint"
+    );
+    Some(model)
+  }
+
+  /// Every currently subscribed endpoint model name, in sorted order, for
+  /// the `/v1/models` listing.
+  pub fn endpoint_models(&self) -> Vec<String> {
+    let inner = lock(&self.inner);
+    inner.endpoint_by_model.keys().cloned().collect()
+  }
+
+  /// Look up which agent owns an endpoint model, without delivering anything.
+  /// Returns the `(agent, uuid)` pair the server needs to open a session
+  /// before routing the request into the inbox.
+  pub fn endpoint_lookup(&self, model: &str) -> Option<(String, String)> {
+    let inner = lock(&self.inner);
+    inner.endpoint_by_model.get(model).cloned()
+  }
+
+  /// Route an inbound endpoint request for `model` into the owning agent's
+  /// inbox, tagged with that agent's subscription UUID. The message only
+  /// lands if `model` is currently subscribed. Returns the `(agent, uuid)`
+  /// pair so the caller can tag the matching session.
+  pub fn endpoint_route(
+    &self,
+    model: &str,
+    session: &str,
+    messages: Vec<ChatMessage>,
+    tools: Vec<Tool>,
+  ) -> Result<(String, String), String> {
+    let mut inner = lock(&self.inner);
+    let Some((agent, uuid)) = inner.endpoint_by_model.get(model).cloned()
+    else {
+      tracing::debug!(endpoint_model = %model, "endpoint route miss");
+      return Err(format!("no such subscribed endpoint model {model:?}"));
+    };
+    let envelope = EventEnvelope {
+      id: uuid.clone(),
+      event: Event::EndpointMessage(EndpointMessage {
+        session: session.to_string(),
+        messages,
+        tools,
+      }),
+    };
+    let (tx, _) = self.channels_locked(&mut inner, &agent);
+    if tx.send(envelope).is_err() {
+      tracing::warn!(agent,endpoint_model = %model, "failed to deliver an endpoint message to an inbox");
+    }
+    tracing::debug!(
+      agent,
+      endpoint_model = %model,
+      uuid = %uuid,
+      "endpoint message routed"
+    );
+    Ok((agent, uuid))
   }
 
   /// Deliver `payload` from `caller` to `dest`'s inbox, tagged with the UUID of
@@ -262,5 +380,91 @@ mod tests {
       .map_err(|_| anyhow::anyhow!("not a valid uuid: {uuid:?}"))?;
     assert_eq!(parsed.get_version(), Some(uuid::Version::Random));
     Ok(())
+  }
+
+  #[test]
+  fn endpoint_subscribe_then_route_delivers_tagged_endpoint_message()
+  -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let sub = bus
+      .endpoint_subscribe("alice", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    let (agent, uuid) = bus
+      .endpoint_route(
+        "gpt-4o",
+        "session-1",
+        vec![ChatMessage {
+          role: crate::provider::Role::User,
+          content: Some("hi".to_string()),
+          tool_call: None,
+        }],
+        Vec::new(),
+      )
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert_eq!(agent, "alice");
+    assert_eq!(uuid, sub);
+    let envelope = bus.try_recv("alice")?.ok_or_else(|| {
+      anyhow::anyhow!("expected a delivered endpoint message")
+    })?;
+    assert_eq!(envelope.id, sub);
+    match envelope.event {
+      Event::EndpointMessage(mgs) => {
+        assert_eq!(mgs.session, "session-1");
+        assert_eq!(mgs.messages.len(), 1);
+        assert!(mgs.tools.is_empty());
+      }
+      other => return Err(anyhow::anyhow!("unexpected event: {other:?}")),
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn endpoint_subscribe_rejects_duplicate_models() {
+    let bus = MessageBus::new();
+    bus
+      .endpoint_subscribe("alice", "gpt-4o".to_string())
+      .unwrap();
+    let err = bus
+      .endpoint_subscribe("bob", "gpt-4o".to_string())
+      .unwrap_err();
+    assert!(err.contains("already subscribed"));
+  }
+
+  #[test]
+  fn endpoint_unsubscribe_removes_model_and_route_misses() -> anyhow::Result<()>
+  {
+    let bus = MessageBus::new();
+    let sub = bus
+      .endpoint_subscribe("alice", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    let model = bus
+      .endpoint_unsubscribe("alice", &sub)
+      .ok_or_else(|| anyhow::anyhow!("expected a model back"))?;
+    assert_eq!(model, "gpt-4o");
+    assert!(bus.endpoint_models().is_empty());
+    assert!(bus.endpoint_lookup("gpt-4o").is_none());
+    Ok(())
+  }
+
+  #[test]
+  fn endpoint_unsubscribe_rejects_foreign_handles() -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let sub = bus
+      .endpoint_subscribe("alice", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert!(bus.endpoint_unsubscribe("carol", &sub).is_none());
+    assert_eq!(
+      bus.endpoint_lookup("gpt-4o").map(|p| p.0),
+      Some("alice".to_string())
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn endpoint_models_lists_models_in_sorted_order() {
+    let bus = MessageBus::new();
+    bus.endpoint_subscribe("alice", "zeta".to_string()).unwrap();
+    bus.endpoint_subscribe("bob", "alpha".to_string()).unwrap();
+    assert_eq!(bus.endpoint_models(), vec!["alpha", "zeta"]);
   }
 }
