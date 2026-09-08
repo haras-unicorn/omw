@@ -51,6 +51,55 @@ pub struct ToolCall {
   pub arguments: Value,
 }
 
+/// A scripted tooling whose calls never complete, for testing cancellation:
+/// `call-tool` awaits a pending future and each subscription returns a
+/// pending stream, so a pump can only exit via cancel. This makes
+/// cancel-suppresses-delivery tests deterministic (no Mockito race between
+/// an immediately-completing call and `cancel`).
+pub struct PendingTooling;
+
+#[async_trait::async_trait]
+impl Tooling for PendingTooling {
+  fn kind() -> &'static str {
+    "mock"
+  }
+
+  async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
+    Ok(Vec::new())
+  }
+
+  async fn call_tool(
+    &self,
+    _name: &str,
+    _args: Value,
+  ) -> anyhow::Result<String> {
+    std::future::pending().await
+  }
+
+  async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
+    Ok(Vec::new())
+  }
+
+  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
+    anyhow::bail!("mock has no content for resource {uri:?}")
+  }
+
+  async fn subscribe_resource_list(
+    &self,
+  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
+  {
+    Ok(Box::pin(futures_util::stream::pending()))
+  }
+
+  async fn subscribe_resource(
+    &self,
+    _uri: &str,
+  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
+  {
+    Ok(Box::pin(futures_util::stream::pending()))
+  }
+}
+
 /// A scripted tooling that fails every call, for testing error paths.
 pub struct FailingTooling;
 

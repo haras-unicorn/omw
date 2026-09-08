@@ -165,6 +165,13 @@ interface types {
     /// A timer (timestamp / duration / cron wait) fired.
     timer,
 
+    /// The agent's brain script changed; the current run should exit so the
+    /// supervisor can restart it on the new script.
+    reload,
+
+    /// The process is shutting down; the current run should exit terminally.
+    shutdown,
+
     /// A chat-stream delta.
     chat-delta(chat-delta),
 
@@ -361,8 +368,17 @@ interface host {
   /// finishes, and cannot be cancelled.
   sleep-cron: func(spec: string) -> result<_, string>;
 
-  /// Subscribe to messages from another agent. Returns a UUID handle;
-  /// events from that agent arrive tagged with it. Nothing arrives without
+  /// Subscribe to lifecycle events (`reload`, `shutdown`, and reload-failure
+  /// `error`). Returns a UUID handle; lifecycle events arrive tagged with it.
+  /// Errors on a second subscribe (one lifecycle subscription per run).
+  lifecycle-subscribe: func() -> result<string, string>;
+
+  /// Unsubscribe by the UUID `lifecycle-subscribe` returned. A foreign UUID
+  /// is a no-op, like the other `unsubscribe`s.
+  lifecycle-unsubscribe: func(uuid: string);
+
+  /// Subscribe to messages from another agent. Returns a UUID handle; events
+  /// from that agent arrive tagged with it. Nothing arrives without
   /// a subscription.
   subscribe: func(agent: string) -> result<string, string>;
 
@@ -415,6 +431,10 @@ interface runtime {
   /// Run one iteration over the agent's brain script. Returns the terminal
   /// message if the brain chose to exit.
   run: func(script: string) -> result<option<string>, string>;
+
+  /// Check a brain script for validity without running it. Used by hot reload
+  /// to validate an edit before aborting the live run.
+  check: func(script: string) -> result<_, string>;
 }
 
 /// The single world: host-owned registries and helpers are imported; the

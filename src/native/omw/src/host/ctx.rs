@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context as _;
 
@@ -12,6 +14,17 @@ use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
 use crate::tooling::ToolingEntry;
+
+/// How long the blocking-call helper waits between reload checks.
+pub const RELOAD_POLL: std::time::Duration =
+  std::time::Duration::from_millis(200);
+
+/// Uninterrupted wasm execution allowed after a reload/shutdown grace
+/// expires before the engine epoch trap fires. Doubles as the SIGKILL tier:
+/// cooperative exits (recv abort, `block_on_reload`) get `RELOAD_GRACE` first,
+/// then one epoch increment traps `while true {}` loops that never yield.
+pub const EPOCH_BUDGET: std::time::Duration =
+  std::time::Duration::from_millis(100);
 
 /// Everything a runtime needs to execute one agent for one iteration.
 ///
@@ -43,6 +56,17 @@ pub struct AgentContext {
   /// The tokio runtime used to bridge synchronous wasm host calls to the
   /// async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
+  /// Cooperative reload flag, set by the file watcher. The blocking
+  /// `host.recv` polls it every slice without draining the inbox, so a
+  /// reload aborts the wait while queued events survive for the next run.
+  reload: Arc<AtomicBool>,
+  /// Cooperative shutdown flag, set on SIGTERM/SIGINT. Behaves like reload
+  /// but is terminal: the supervisor does not restart the run.
+  shutdown: Arc<AtomicBool>,
+  /// The engine of the currently running `Store`, stashed by
+  /// `WasmEngine::run` so the supervisor can trap unyielding wasm loops with
+  /// `increment_epoch` once the grace expires.
+  engine: Arc<Mutex<Option<wasmtime::Engine>>>,
 }
 
 impl AgentContext {
@@ -73,6 +97,9 @@ impl AgentContext {
       resources,
       tool_calls,
       endpoint,
+      reload: Arc::new(AtomicBool::new(false)),
+      shutdown: Arc::new(AtomicBool::new(false)),
+      engine: Arc::new(Mutex::new(None)),
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()
@@ -82,10 +109,94 @@ impl AgentContext {
     })
   }
 
+  /// Whether a reload has been requested (and not yet cleared).
+  pub fn reload_requested(&self) -> bool {
+    self.reload.load(Ordering::Relaxed)
+  }
+
+  /// Whether a shutdown has been requested (and not yet cleared).
+  pub fn shutdown_requested(&self) -> bool {
+    self.shutdown.load(Ordering::Relaxed)
+  }
+
+  /// Signal this agent's run to reload: the blocking `host.recv` aborts
+  /// with a reload error, waking the brain out of its wait.
+  pub fn request_reload(&self) {
+    self.reload.store(true, Ordering::Relaxed);
+  }
+
+  /// Signal this agent's run to shut down terminally.
+  pub fn request_shutdown(&self) {
+    self.shutdown.store(true, Ordering::Relaxed);
+  }
+
+  /// Clear previously requested reload/shutdown flags, so the next iteration
+  /// starts clean.
+  pub fn clear_reload(&self) {
+    self.reload.store(false, Ordering::Relaxed);
+    self.shutdown.store(false, Ordering::Relaxed);
+  }
+
+  /// Stash the engine of the currently running `Store` for epoch trapping.
+  pub fn set_engine(&self, engine: wasmtime::Engine) {
+    if let Ok(mut slot) = self.engine.lock() {
+      *slot = Some(engine);
+    }
+  }
+
+  /// Trap the running wasm `Store` by incrementing the stashed engine epoch.
+  /// Only fires after a reload/shutdown armed the deadline and the grace
+  /// expired; a no-op when no run is active.
+  pub fn increment_epoch(&self) {
+    if let Ok(slot) = self.engine.lock()
+      && let Some(engine) = slot.as_ref()
+    {
+      engine.increment_epoch();
+    }
+  }
+
   pub fn rt(&self) -> Arc<tokio::runtime::Runtime> {
     #[allow(clippy::unwrap_used, reason = "Always constructed as Some")]
     {
       Arc::clone(self.rt.as_ref().unwrap())
+    }
+  }
+
+  /// Run `future` on the bridge runtime from the synchronous wasm thread,
+  /// aborting early with `"agent reloaded"` / `"agent shutting down"` when
+  /// requested. Upstream work may still run to completion; its result is
+  /// dropped.
+  pub fn block_on_reload<T: Send + 'static>(
+    &self,
+    future: impl std::future::Future<Output = T> + Send + 'static,
+  ) -> Result<T, String> {
+    let rt = self.rt();
+    let mut handle = rt.spawn(future);
+    loop {
+      if self.shutdown_requested() {
+        handle.abort();
+        return Err("agent shutting down".to_string());
+      }
+      if self.reload_requested() {
+        handle.abort();
+        return Err("agent reloaded".to_string());
+      }
+      let settled = rt.block_on(async {
+        tokio::select! {
+          biased;
+          done = &mut handle => Some(done),
+          () = tokio::time::sleep(RELOAD_POLL) => None,
+        }
+      });
+      if let Some(done) = settled {
+        return done.map_err(|_| {
+          if self.shutdown_requested() {
+            "agent shutting down".to_string()
+          } else {
+            "agent reloaded".to_string()
+          }
+        });
+      }
     }
   }
 }

@@ -18,8 +18,7 @@ use crate::tooling::Tooling;
 /// Spawn a pump task on `rt` that awaits `tooling.call_tool(name, args)`
 /// and delivers its result into `name`'s inbox tagged with `uuid`. A failure
 /// is delivered as an [`Event::Error`] and a successful result as an
-/// [`Event::ToolResult`]. Cancelling the invocation (via the shared registry)
-/// suppresses but does not abort the underlying call.
+/// [`Event::ToolResult`]. Cancelling the invocation drops the underlying call.
 #[allow(
   clippy::too_many_arguments,
   reason = "aggregating the bridge handles into a struct is left to a pumps refactor"
@@ -38,14 +37,16 @@ pub fn spawn_pump(
   tracing::info!(agent = %name, uuid = %uuid, tool = %tool, "tool call queued");
   rt.spawn(async move {
     let arguments = args.to_string();
-    let result = tooling.call_tool(&tool, args).await;
+    let tool_for_call = tool.clone();
+    let call = async move { tooling.call_tool(&tool_for_call, args).await };
+    tokio::pin!(call);
     tokio::select! {
       biased;
 
       _ = &mut cancel => {
         tracing::debug!(agent = %name, uuid = %uuid, tool = %tool, "tool call cancelled");
       }
-      res = async { result } => {
+      res = &mut call => {
         match res {
           Ok(result) => {
             tracing::trace!(agent = %name, uuid = %uuid, tool = %tool, result_bytes = result.len(), "tool call delivered");
@@ -113,10 +114,10 @@ mod tests {
         result: String::new(),
       })
     );
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
-    assert!(!calls.is_open(&uuid));
+    assert!(
+      calls.wait_for(&uuid, false, Duration::from_secs(5)),
+      "tool call should deregister after delivery"
+    );
     Ok(())
   }
 
@@ -146,10 +147,10 @@ mod tests {
     let envelope = bus.recv("alice", Duration::from_secs(5))?;
     assert_eq!(envelope.id, uuid);
     assert!(matches!(envelope.event, Event::Error(_)));
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
-    assert!(!calls.is_open(&uuid));
+    assert!(
+      calls.wait_for(&uuid, false, Duration::from_secs(5)),
+      "failed tool call should deregister after delivery"
+    );
     Ok(())
   }
 
@@ -162,7 +163,11 @@ mod tests {
     );
     let bus = Arc::new(MessageBus::new());
     let calls = Arc::new(CancelRegistry::new());
-    let tooling: Arc<dyn Tooling> = MockTooling::noop();
+    // Pending: the call never completes, so cancel is the only way the pump
+    // can exit — no race between an immediately-ready `noop` result and the
+    // cancel signal.
+    let tooling: Arc<dyn Tooling> =
+      Arc::new(crate::tooling::mock::PendingTooling);
     let uuid = crate::host::bus::new_uuid();
 
     spawn_pump(
@@ -176,12 +181,16 @@ mod tests {
       serde_json::Value::Null,
     );
 
+    assert!(
+      calls.wait_for(&uuid, true, Duration::from_secs(5)),
+      "pump should register before cancel"
+    );
     calls.cancel(&uuid);
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
+    assert!(
+      calls.wait_for(&uuid, false, Duration::from_secs(5)),
+      "cancelled pump should deregister"
+    );
     assert_eq!(bus.try_recv("alice")?, None);
-    assert!(!calls.is_open(&uuid));
     Ok(())
   }
 }

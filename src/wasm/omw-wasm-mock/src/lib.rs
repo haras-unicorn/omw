@@ -37,6 +37,10 @@ impl Guest for Component {
     println!("Hello, world!");
     Ok(None)
   }
+
+  fn check(_script: String) -> Result<(), String> {
+    Ok(())
+  }
 }
 
 export!(Component);

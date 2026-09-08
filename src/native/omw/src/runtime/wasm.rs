@@ -2,6 +2,7 @@
 //! implements the exported `runtime` interface) and runs it.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::host::ctx::AgentContext;
 use crate::runtime::engine::WasmEngine;
@@ -19,12 +20,17 @@ pub struct Config {}
 pub struct WasmRuntime {
   pub name: String,
   pub config: Config,
+  /// Last successfully validated engine, kept as a TOCTOU backstop: a save
+  /// landing between validate and load still falls back to this instead of
+  /// failing the run.
+  last_good: Arc<Mutex<Option<WasmEngine>>>,
 }
 
 pub fn build(name: &str, params: &Value) -> anyhow::Result<Arc<dyn Runtime>> {
   Ok(Arc::new(WasmRuntime {
     name: name.to_owned(),
     config: Config::deserialize(params.into_deserializer())?,
+    last_good: Arc::new(Mutex::new(None)),
   }))
 }
 
@@ -36,8 +42,21 @@ impl Runtime for WasmRuntime {
 
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
     tracing::debug!(agent = %ctx.name, script = %ctx.script.display(), "loading the wasm brain");
-    let engine = WasmEngine::from_path(&ctx.script)
-      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))?;
+    let engine = match WasmEngine::from_path(&ctx.script)
+      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))
+    {
+      Ok(engine) => engine,
+      Err(error) => {
+        if let Ok(slot) = self.last_good.lock()
+          && let Some(cached) = slot.clone()
+        {
+          tracing::warn!(agent = %ctx.name, error = %error, "wasm brain changed underfoot, running the last-good component");
+          cached
+        } else {
+          return Err(error);
+        }
+      }
+    };
     let ctx = ctx.clone();
 
     // The wasm engine here is synchronous; push it off the tokio worker so
@@ -50,6 +69,21 @@ impl Runtime for WasmRuntime {
         .context("wasm brain task failed")??;
 
     Ok(outcome.map_or(RunOutcome::Completed, RunOutcome::Exited))
+  }
+
+  async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()> {
+    let engine = WasmEngine::from_path(&ctx.script)
+      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))?;
+    let ctx_clone = ctx.clone();
+    tokio::task::spawn_blocking(move || engine.check(ctx_clone, String::new()))
+      .await
+      .context("wasm check task failed")??;
+    if let Ok(fresh) = WasmEngine::from_path(&ctx.script)
+      && let Ok(mut slot) = self.last_good.lock()
+    {
+      *slot = Some(fresh);
+    }
+    Ok(())
   }
 }
 
@@ -97,6 +131,43 @@ mod tests {
   fn enabled_non_native() -> bool {
     std::env::var_os("OMW_TEST_WASM_RUNTIME_NON_NATIVE")
       .is_some_and(|value| value != "0")
+  }
+
+  fn validate(script: PathBuf) -> anyhow::Result<()> {
+    let bus = Arc::new(MessageBus::new());
+    let ctx = AgentContext::new(
+      "test-agent".to_string(),
+      script,
+      HashMap::new(),
+      HashMap::new(),
+      bus,
+      Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
+    )?;
+    let runtime = WasmRuntime::default();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .enable_all()
+      .build()?;
+    rt.block_on(runtime.validate(&ctx))
+  }
+
+  #[test]
+  #[serial(non_native)]
+  fn validate_ok_and_err() -> anyhow::Result<()> {
+    if !enabled_non_native() {
+      eprintln!("skipping: OMW_TEST_WASM_RUNTIME_NON_NATIVE not set");
+      return Ok(());
+    }
+    let dir = tempdir()?;
+    let wasm = dir.path().join("brain.wasm");
+    std::fs::write(&wasm, WASM_MOCK_COMPONENT_WASM)?;
+    validate(wasm)?;
+    let missing = dir.path().join("missing.wasm");
+    assert!(validate(missing).is_err());
+    Ok(())
   }
 
   #[test]

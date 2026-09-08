@@ -39,6 +39,10 @@ struct BusInner {
   /// `subscription uuid` -> `(subscriber, source)` reverse index, so
   /// `unsubscribe` can remove by handle instead of re-deriving the pair.
   subscriptions_by_uuid: HashMap<String, (String, String)>,
+  /// Agent -> active lifecycle subscription uuid (one per run).
+  lifecycle: HashMap<String, String>,
+  /// Lifecycle `subscription uuid` -> agent reverse index.
+  lifecycle_by_uuid: HashMap<String, String>,
   /// Endpoint model name -> `(agent, subscription uuid)`, kept in a
   /// `BTreeMap` so `/v1/models` enumerates models in deterministic order.
   endpoint_by_model: BTreeMap<String, (String, String)>,
@@ -91,6 +95,45 @@ impl MessageBus {
     inner.subscriptions.remove(&(sub, src.clone()));
     tracing::debug!(subscriber, source = %src, uuid = %uuid, "agent unsubscribed from another agent");
     true
+  }
+
+  /// Subscribe `agent` to lifecycle events, returning a fresh UUID handle
+  /// that `reload` / `shutdown` / reload-failure `error` events are tagged
+  /// with. Errors on a second subscribe (one lifecycle subscription per run).
+  pub fn lifecycle_subscribe(&self, agent: &str) -> Result<String, String> {
+    let mut inner = lock(&self.inner);
+    if inner.lifecycle.contains_key(agent) {
+      return Err("lifecycle already subscribed".to_string());
+    }
+    let uuid = new_uuid();
+    inner.lifecycle.insert(agent.to_string(), uuid.clone());
+    inner
+      .lifecycle_by_uuid
+      .insert(uuid.clone(), agent.to_string());
+    tracing::debug!(agent, uuid = %uuid, "agent subscribed to lifecycle events");
+    Ok(uuid)
+  }
+
+  /// Remove `agent`'s lifecycle subscription identified by `uuid`, if it is
+  /// theirs. A foreign or unknown `uuid` is a no-op returning false.
+  pub fn lifecycle_unsubscribe(&self, agent: &str, uuid: &str) -> bool {
+    let mut inner = lock(&self.inner);
+    let Some(owner) = inner.lifecycle_by_uuid.get(uuid).cloned() else {
+      return false;
+    };
+    if owner != agent {
+      return false;
+    }
+    inner.lifecycle_by_uuid.remove(uuid);
+    inner.lifecycle.remove(agent);
+    tracing::debug!(agent, uuid = %uuid, "agent unsubscribed from lifecycle events");
+    true
+  }
+
+  /// The active lifecycle UUID for `agent`, if subscribed.
+  pub fn lifecycle_of(&self, agent: &str) -> Option<String> {
+    let inner = lock(&self.inner);
+    inner.lifecycle.get(agent).cloned()
   }
 
   /// Subscribe `agent` to inbound endpoint requests under the model name
@@ -240,22 +283,52 @@ impl MessageBus {
     }
   }
 
-  /// Blocking receive (with a timeout) of the next event from `name`'s inbox.
+  /// Blocking receive (with a timeout) of the next event from `name`'s
+  /// inbox. Takes an optional shutdown predicate (checked roughly every
+  /// 200ms) that aborts the wait early — for example a hot-reload request.
+  /// Slices only return what is already queued, so pending events stay in
+  /// the inbox for whoever runs next.
   pub fn recv(
     &self,
     name: &str,
     timeout: Duration,
   ) -> anyhow::Result<EventEnvelope> {
+    self.recv_while(name, timeout, || false)
+  }
+
+  /// [`recv`](Self::recv) with an early-abort predicate: when `should_stop`
+  /// returns true the wait aborts with a `"stop requested"` error, leaving
+  /// queued events untouched.
+  pub fn recv_while(
+    &self,
+    name: &str,
+    timeout: Duration,
+    should_stop: impl Fn() -> bool,
+  ) -> anyhow::Result<EventEnvelope> {
     let (_, rx) = self.channels(name);
-    match rx.recv_timeout(timeout) {
-      Ok(envelope) => {
-        tracing::trace!(name, "received an event from the inbox");
-        Ok(envelope)
+    let start = std::time::Instant::now();
+    let slice = RECV_SLICE;
+    loop {
+      if should_stop() {
+        return Err(anyhow::anyhow!("stop requested"));
       }
-      // Empty, closed, or a timeout all read as "no event right now".
-      Err(_) => {
+      let elapsed = start.elapsed();
+      if elapsed >= timeout {
         tracing::debug!(name, "inbox recv timed out");
-        Err(anyhow::anyhow!("no event available"))
+        return Err(anyhow::anyhow!("no event available"));
+      }
+      let remaining = timeout.checked_sub(elapsed).unwrap_or(slice);
+      match rx.recv_timeout(remaining.min(slice)) {
+        Ok(envelope) => {
+          tracing::trace!(name, "received an event from the inbox");
+          return Ok(envelope);
+        }
+        // Empty, closed, or a timeout all read as "no event right now".
+        Err(_) => {
+          if should_stop() {
+            return Err(anyhow::anyhow!("stop requested"));
+          }
+        }
       }
     }
   }
@@ -273,6 +346,52 @@ impl MessageBus {
     }
   }
 
+  /// Drop queued `Reload`/`Shutdown` system events from `name`'s inbox,
+  /// requeueing anything else in order. The flag-abort in `recv_while`
+  /// leaves the delivered system event queued, so without this the next
+  /// iteration's first `recv` would spuriously exit. Ordering across the
+  /// drain is best-effort: concurrent pumps may deliver while draining.
+  /// Stale lifecycle `error`s (delivered on the previous run's lifecycle
+  /// UUID) are dropped as well, so a restarted brain never observes a
+  /// reload failure from before its run.
+  pub fn drain_system(&self, name: &str) -> anyhow::Result<()> {
+    let lifecycle = self.lifecycle_of(name);
+    let mut kept: Vec<EventEnvelope> = Vec::new();
+    while let Some(envelope) = self.try_recv(name)? {
+      match &envelope.event {
+        Event::Reload | Event::Shutdown => {}
+        Event::Error(_) => {
+          if Some(envelope.id.as_str()) == lifecycle.as_deref() {
+            continue;
+          }
+          kept.push(envelope);
+        }
+        _ => kept.push(envelope),
+      }
+    }
+    // Lifecycle handles are one-shot per run; the next iteration must
+    // re-subscribe. Clear after capturing the old UUID for stale-error
+    // filtering above.
+    {
+      let mut inner = lock(&self.inner);
+      if let Some(uuid) = inner.lifecycle.remove(name) {
+        inner.lifecycle_by_uuid.remove(&uuid);
+      }
+    }
+    if kept.is_empty() {
+      return Ok(());
+    }
+    let mut inner = lock(&self.inner);
+    let (tx, _) = self.channels_locked(&mut inner, name);
+    for envelope in kept {
+      if tx.send(envelope).is_err() {
+        tracing::warn!(name, "failed to requeue an event after a drain");
+        break;
+      }
+    }
+    Ok(())
+  }
+
   /// Get (creating if missing) the channel pair for `name`.
   fn channels(&self, name: &str) -> AgentChannels {
     let mut inner = lock(&self.inner);
@@ -284,7 +403,7 @@ impl MessageBus {
     inner
       .inboxes
       .entry(name.to_string())
-      .or_insert_with(|| kanal::bounded(1024))
+      .or_insert_with(|| kanal::bounded(INBOX_BOUND))
       .clone()
   }
 }
@@ -293,6 +412,12 @@ impl MessageBus {
 pub fn new_uuid() -> String {
   uuid::Uuid::new_v4().to_string()
 }
+
+/// How many events a single agent inbox buffers before sends fail.
+pub const INBOX_BOUND: usize = 1024;
+
+/// How long `recv_while` parks between early-abort checks.
+pub const RECV_SLICE: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests {
@@ -368,9 +493,100 @@ mod tests {
   fn recv_respects_timeout() {
     let bus = MessageBus::new();
     assert!(
-      bus.recv("ghost", Duration::from_millis(20)).is_err(),
+      bus.recv("ghost", Duration::from_secs(1)).is_err(),
       "recv on an empty inbox should time out"
     );
+  }
+
+  #[test]
+  fn recv_while_aborts_early_on_stop_leaving_queued_events()
+  -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    bus.send("nobody", "alice", "queued".to_string());
+    // No subscription, so nothing is queued yet; stop immediately instead.
+    let error = bus
+      .recv_while("alice", Duration::from_secs(60), || true)
+      .unwrap_err();
+    assert_eq!(error.to_string(), "stop requested");
+
+    let sub = bus.subscribe("alice", "bob");
+    bus.send("bob", "alice", "hello".to_string());
+    let error = bus
+      .recv_while("alice", Duration::from_secs(60), || true)
+      .unwrap_err();
+    assert_eq!(error.to_string(), "stop requested");
+    // The abort must not drain the inbox: the event is still there.
+    let envelope = bus
+      .try_recv("alice")?
+      .ok_or_else(|| anyhow::anyhow!("expected the queued event"))?;
+    assert_eq!(envelope.id, sub);
+    assert_eq!(envelope.event, Event::Message("hello".to_string()));
+    Ok(())
+  }
+
+  #[test]
+  fn drain_system_drops_reload_and_shutdown_keeping_order() -> anyhow::Result<()>
+  {
+    let bus = MessageBus::new();
+    let first = bus.subscribe("alice", "bob");
+    bus.send("bob", "alice", "one".to_string());
+    bus.deliver("alice", &new_uuid(), Event::Reload);
+    bus.send("bob", "alice", "two".to_string());
+    bus.deliver("alice", &new_uuid(), Event::Shutdown);
+    bus.send("bob", "alice", "three".to_string());
+    bus.drain_system("alice")?;
+    for expected in ["one", "two", "three"] {
+      let envelope = bus
+        .try_recv("alice")?
+        .ok_or_else(|| anyhow::anyhow!("expected {expected:?}"))?;
+      assert_eq!(envelope.id, first);
+      assert_eq!(envelope.event, Event::Message(expected.to_string()));
+    }
+    assert_eq!(bus.try_recv("alice")?, None);
+    Ok(())
+  }
+
+  #[test]
+  fn lifecycle_subscribe_returns_a_handle_and_rejects_a_second()
+  -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let uuid = bus
+      .lifecycle_subscribe("alice")
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert_eq!(bus.lifecycle_of("alice"), Some(uuid.clone()));
+    assert!(bus.lifecycle_subscribe("alice").is_err());
+    assert!(bus.lifecycle_unsubscribe("alice", &uuid));
+    assert_eq!(bus.lifecycle_of("alice"), None);
+    Ok(())
+  }
+
+  #[test]
+  fn lifecycle_unsubscribe_rejects_foreign_handles() -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let uuid = bus
+      .lifecycle_subscribe("alice")
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert!(!bus.lifecycle_unsubscribe("carol", &uuid));
+    assert_eq!(bus.lifecycle_of("alice"), Some(uuid));
+    Ok(())
+  }
+
+  #[test]
+  fn drain_system_drops_lifecycle_errors() -> anyhow::Result<()> {
+    let bus = MessageBus::new();
+    let lifecycle = bus
+      .lifecycle_subscribe("alice")
+      .map_err(|e| anyhow::anyhow!(e))?;
+    bus.deliver("alice", &lifecycle, Event::Error("bad edit".to_string()));
+    bus.deliver("alice", &new_uuid(), Event::Error("other".to_string()));
+    bus.drain_system("alice")?;
+    let envelope = bus
+      .try_recv("alice")?
+      .ok_or_else(|| anyhow::anyhow!("expected the non-lifecycle error"))?;
+    assert_eq!(envelope.event, Event::Error("other".to_string()));
+    assert_eq!(bus.try_recv("alice")?, None);
+    assert_eq!(bus.lifecycle_of("alice"), None);
+    Ok(())
   }
 
   #[test]

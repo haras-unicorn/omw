@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -33,27 +34,27 @@ pub struct RhaiWasmRuntime {
   #[allow(dead_code, reason = "to keep it consistent")]
   config: Config,
   wasm: WasmEngine,
+  /// Last successfully validated script source, kept as a TOCTOU backstop:
+  /// a save landing between validate and load still runs the previous
+  /// version instead of failing the run.
+  last_good: Arc<Mutex<Option<String>>>,
 }
 
 impl RhaiWasmRuntime {
   /// Load a rhai evaluator component.
   pub fn new(name: String, config: Config) -> anyhow::Result<Self> {
     tracing::info!(name = %name, config = ?config, "loading rhai interpreter");
-    if let Some(interpreter) = config.interpreter.clone() {
-      Ok(Self {
-        name,
-        config,
-        wasm: WasmEngine::from_path(&interpreter)?,
-      })
+    let wasm = if let Some(interpreter) = config.interpreter.clone() {
+      WasmEngine::from_path(&interpreter)?
     } else {
-      Ok(Self {
-        name,
-        config,
-        wasm: WasmEngine::from_native_bytes(
-          RHAI_WASM_INTERPRETER_COMPONENT_NATIVE,
-        )?,
-      })
-    }
+      WasmEngine::from_native_bytes(RHAI_WASM_INTERPRETER_COMPONENT_NATIVE)?
+    };
+    Ok(Self {
+      name,
+      config,
+      wasm,
+      last_good: Arc::new(Mutex::new(None)),
+    })
   }
 }
 
@@ -69,10 +70,23 @@ impl Runtime for RhaiWasmRuntime {
   }
 
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
-    let script = tokio::fs::read_to_string(&ctx.script).await.map_err(|e| {
-      tracing::error!(agent = %ctx.name, script = %ctx.script.display(), error = %e, "failed to read the rhai script");
-      anyhow::anyhow!("failed to read rhai script {:?}: {e}", ctx.script)
-    })?;
+    let script = match tokio::fs::read_to_string(&ctx.script).await {
+      Ok(script) => script,
+      Err(error) => {
+        if let Ok(slot) = self.last_good.lock()
+          && let Some(cached) = slot.clone()
+        {
+          tracing::warn!(agent = %ctx.name, script = %ctx.script.display(), error = %error, "rhai script changed underfoot, running the last-good version");
+          cached
+        } else {
+          tracing::error!(agent = %ctx.name, script = %ctx.script.display(), error = %error, "failed to read the rhai script");
+          return Err(anyhow::anyhow!(
+            "failed to read rhai script {:?}: {error}",
+            ctx.script
+          ));
+        }
+      }
+    };
     tracing::debug!(agent = %ctx.name, script = %ctx.script.display(), "read the rhai script");
 
     let wasm = self.wasm.clone();
@@ -86,6 +100,72 @@ impl Runtime for RhaiWasmRuntime {
       .context("rhai runtime task failed")??;
 
     Ok(outcome.map_or(RunOutcome::Completed, RunOutcome::Exited))
+  }
+
+  async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()> {
+    let script =
+      tokio::fs::read_to_string(&ctx.script)
+        .await
+        .with_context(|| {
+          format!("failed to read rhai script {:?}", ctx.script)
+        })?;
+    let wasm = self.wasm.clone();
+    let ctx_clone = ctx.clone();
+    let check_script = script.clone();
+    tokio::task::spawn_blocking(move || wasm.check(ctx_clone, check_script))
+      .await
+      .context("rhai check task failed")??;
+    if let Ok(mut slot) = self.last_good.lock() {
+      *slot = Some(script);
+    }
+    Ok(())
+  }
+}
+
+#[cfg(test)]
+mod validate_tests {
+  use super::tests;
+  use super::*;
+
+  #[test]
+  fn check_accepts_a_good_script_and_rejects_a_syntax_error()
+  -> anyhow::Result<()> {
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+    let dir = tempdir()?;
+    let good = dir.path().join("good.rhai");
+    std::fs::write(&good, "1 + 2")?;
+    let bad = dir.path().join("bad.rhai");
+    std::fs::write(&bad, "let === ")?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    tests::validate(
+      &runtime,
+      &tests::test_ctx(good, HashMap::new(), HashMap::new())?,
+    )?;
+    assert!(
+      tests::validate(
+        &runtime,
+        &tests::test_ctx(bad, HashMap::new(), HashMap::new())?
+      )
+      .is_err()
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn last_good_fallback_runs_the_cached_version() -> anyhow::Result<()> {
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+    let dir = tempdir()?;
+    let path = dir.path().join("brain.rhai");
+    std::fs::write(&path, "\"cached\"")?;
+    let ctx = tests::test_ctx(path.clone(), HashMap::new(), HashMap::new())?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    tests::validate(&runtime, &ctx)?;
+    std::fs::remove_file(&path)?;
+    let outcome = tests::run(&runtime, &ctx)?;
+    assert_eq!(outcome, RunOutcome::Exited("cached".to_string()));
+    Ok(())
   }
 }
 
@@ -106,7 +186,7 @@ mod tests {
   /// Run the async `RhaiWasmRuntime::run` on a test runtime, so the bridge
   /// runtime held in `AgentContext` is dropped back on a synchronous thread
   /// (dropping a tokio runtime from an async context panics).
-  fn run(
+  pub(crate) fn run(
     runtime: &RhaiWasmRuntime,
     ctx: &AgentContext,
   ) -> anyhow::Result<RunOutcome> {
@@ -116,7 +196,17 @@ mod tests {
     rt.block_on(runtime.run(ctx))
   }
 
-  fn test_ctx(
+  pub(crate) fn validate(
+    runtime: &RhaiWasmRuntime,
+    ctx: &AgentContext,
+  ) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+      .enable_all()
+      .build()?;
+    rt.block_on(runtime.validate(ctx))
+  }
+
+  pub(crate) fn test_ctx(
     script: std::path::PathBuf,
     providers: HashMap<String, crate::provider::ProviderEntry>,
     tooling: HashMap<String, crate::tooling::ToolingEntry>,
@@ -623,7 +713,9 @@ mod tests {
     let handle = std::thread::spawn(move || run(&runtime, &run_ctx));
 
     // Wait for the script's subscribe, then route a request into its inbox.
-    for _ in 0..100 {
+    // Generous budget: wasm compile + component startup on a loaded CI VM
+    // can take seconds.
+    for _ in 0..1000 {
       if bus.endpoint_lookup("gpt-4o").is_some() {
         break;
       }

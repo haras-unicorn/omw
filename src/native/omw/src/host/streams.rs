@@ -67,9 +67,37 @@ impl StreamRegistry {
     let _ = self.locked_open().remove(uuid);
   }
 
+  /// Cancel every open stream/timer/subscription at once, waking all pumps.
+  /// Used on hot reload so a restarted agent leaves no stale pumps behind.
+  pub fn cancel_all(&self) {
+    self.locked_open().clear();
+  }
+
   /// Deregister a stream; the pump calls this once it finishes.
   pub fn remove(&self, uuid: &str) {
     let _ = self.locked_open().remove(uuid);
+  }
+
+  /// Test-only poll helper: block up to `timeout` until `uuid` appears
+  /// (when `present` is true) or disappears. Returns the final state.
+  /// Replaces fixed `sleep(50ms)` + assert shapes that flake on slow CI.
+  #[cfg(test)]
+  pub fn wait_for(
+    &self,
+    uuid: &str,
+    present: bool,
+    timeout: std::time::Duration,
+  ) -> bool {
+    let start = std::time::Instant::now();
+    loop {
+      if self.is_open(uuid) == present {
+        return true;
+      }
+      if start.elapsed() >= timeout {
+        return self.is_open(uuid) == present;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    }
   }
 }
 
@@ -161,6 +189,20 @@ mod tests {
   }
 
   #[test]
+  fn cancel_all_wakes_every_pump() {
+    let streams = StreamRegistry::new();
+    let mut first = streams.open("a".to_string());
+    let mut second = streams.open("b".to_string());
+    assert!(streams.is_open("a"));
+    assert!(streams.is_open("b"));
+    streams.cancel_all();
+    assert!(!streams.is_open("a"));
+    assert!(!streams.is_open("b"));
+    assert!(first.try_recv().is_err());
+    assert!(second.try_recv().is_err());
+  }
+
+  #[test]
   fn pump_delivers_deltas_then_stream_end() -> anyhow::Result<()> {
     let rt = Arc::new(
       tokio::runtime::Builder::new_multi_thread()
@@ -198,10 +240,10 @@ mod tests {
     }
     let end = bus.recv("alice", Duration::from_secs(5))?;
     assert_eq!(end.event, Event::StreamEnd);
-    rt.block_on(async {
-      tokio::time::sleep(Duration::from_millis(50)).await;
-    });
-    assert!(!streams.is_open(&uuid));
+    assert!(
+      streams.wait_for(&uuid, false, Duration::from_secs(5)),
+      "stream should deregister after StreamEnd"
+    );
     Ok(())
   }
 }

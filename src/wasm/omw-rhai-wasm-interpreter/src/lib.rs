@@ -49,6 +49,15 @@ impl Guest for Component {
   fn run(script: String) -> Result<Option<String>, String> {
     eval_rhai(&script)
   }
+
+  fn check(script: String) -> Result<(), String> {
+    let mut engine = Engine::new();
+    install_omw(&mut engine);
+    engine
+      .compile(&script)
+      .map(|_| ())
+      .map_err(|e| e.to_string())
+  }
 }
 
 export!(Component);
@@ -116,6 +125,8 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("cancel", host_cancel);
   host.set_native_fn("subscribe", host_subscribe);
   host.set_native_fn("unsubscribe", host_unsubscribe);
+  host.set_native_fn("lifecycle_subscribe", host_lifecycle_subscribe);
+  host.set_native_fn("lifecycle_unsubscribe", host_lifecycle_unsubscribe);
   host.set_native_fn("send", host_send);
   host.set_native_fn("recv", host_recv);
   host.set_native_fn("try_recv", host_try_recv);
@@ -519,6 +530,15 @@ fn host_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
   Ok(())
 }
 
+fn host_lifecycle_subscribe() -> Result<String, Box<EvalAltResult>> {
+  host::lifecycle_subscribe().map_err(to_error)
+}
+
+fn host_lifecycle_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::lifecycle_unsubscribe(uuid);
+  Ok(())
+}
+
 /// Convert a rhai `i64` to a WIT `u64`, rejecting negatives.
 fn to_u64(v: i64) -> Result<u64, Box<EvalAltResult>> {
   u64::try_from(v).map_err(|_| to_error("expected a non-negative integer"))
@@ -580,6 +600,8 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
     types::Event::Message(payload) => ("message", payload.into()),
     types::Event::Error(message) => ("error", message.into()),
     types::Event::Timer => ("timer", ().into()),
+    types::Event::Reload => ("reload", ().into()),
+    types::Event::Shutdown => ("shutdown", ().into()),
     types::Event::ChatDelta(delta) => {
       ("chat-delta", delta_to_map(delta).into())
     }

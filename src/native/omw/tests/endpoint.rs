@@ -42,8 +42,10 @@ impl MockAgent {
       loop {
         let envelope = match task_bus.try_recv("alice") {
           Ok(Some(envelope)) => envelope,
+          // Yield to the scheduler; a fixed sleep here only adds reaction
+          // latency to every SDK round-trip on CI.
           Ok(None) => {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
             continue;
           }
           Err(_) => return,
@@ -298,7 +300,9 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
   let mut session = None;
   let mut messages = Vec::new();
   let mut tools = Vec::new();
-  for _ in 0..200 {
+  // Generous budget: server POST -> route on a loaded CI VM can take
+  // seconds.
+  for _ in 0..1000 {
     if let Some(envelope) = bus.try_recv("alice")? {
       if let Event::EndpointMessage(message) = envelope.event {
         session = Some(message.session.clone());

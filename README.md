@@ -37,6 +37,15 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
   Both see the same `omw` host interface.
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
+- **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`
+  with a `listen` address and agents can subscribe themselves under model names:
+  inbound chat requests arrive in the agent's inbox as events, and the agent
+  streams its reply back (SSE or buffered JSON). Any OpenAI-compatible client
+  can then drive an agent.
+- **Hot reload** is `--watch` on `run` / `loop`. When a brain script changes,
+  the agent's run restarts on the new script while inboxes, subscriptions, and
+  sessions survive. The new script is validated before the live run ends, so a
+  bad edit never kills a good run — and a broken script never starts.
 
 ## Installation
 
@@ -110,6 +119,33 @@ omw run    # run every agent once
 omw loop   # keep every agent running, restarting on failure
 ```
 
+Serve agents over HTTP with the optional [endpoint]: add a `listen` address,
+have a brain subscribe itself under a model name, then any OpenAI-compatible
+client can call it:
+
+```toml
+[endpoint]
+listen = "127.0.0.1:8080"
+```
+
+```rhai
+let sub = omw::host::endpoint_subscribe("gpt-4o");
+```
+
+Inbound requests arrive in the agent's inbox as `endpoint-message` events; the
+brain streams its reply back with `endpoint-stream` (SSE for `stream: true`, one
+buffered JSON completion otherwise). `GET /v1/models` lists subscribed models.
+
+Edit brains live with `--watch` on either mode: when a brain file changes, the
+agent's current run ends and restarts on the new script, while inboxes,
+subscriptions, and sessions survive on the shared bus. The new script is
+validated _before_ the live run ends, so a bad edit keeps the good run alive
+(plus an `error` event if the brain subscribed to lifecycle events) — and a
+broken script never starts (parks under `--watch`, fails fast without it).
+Brains opt in to `reload` / `shutdown` notices with `lifecycle_subscribe`.
+
+See the [endpoint] and [hot reload] pages for the full reference.
+
 Configuration can also be layered from the environment (`OMW__` prefix) or
 generated as a JSON schema:
 
@@ -170,6 +206,8 @@ from an overlay, add the following to your nix configuration:
 
 [haras cachix cache]: https://app.cachix.org/cache/haras
 [docs]: https://haras-unicorn.github.io/omw/
+[endpoint]: https://haras-unicorn.github.io/omw/endpoint.html
+[hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
 [The NixOS module]: https://haras-unicorn.github.io/omw/nixos.html
 
 <!-- ANCHOR_END: body -->
