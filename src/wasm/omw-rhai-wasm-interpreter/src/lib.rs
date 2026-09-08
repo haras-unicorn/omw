@@ -131,6 +131,9 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("recv", host_recv);
   host.set_native_fn("try_recv", host_try_recv);
   host.set_native_fn("new_uuid", host_new_uuid);
+  host.set_native_fn("memory_get", host_memory_get);
+  host.set_native_fn("memory_set", host_memory_set);
+  host.set_native_fn("memory_del", host_memory_del);
 
   host.set_native_fn("endpoint_subscribe", host_endpoint_subscribe);
   host.set_native_fn("endpoint_unsubscribe", host_endpoint_unsubscribe);
@@ -565,6 +568,23 @@ fn host_try_recv() -> Result<Dynamic, Box<EvalAltResult>> {
 
 fn host_new_uuid() -> Result<String, Box<EvalAltResult>> {
   Ok(host::new_uuid())
+}
+
+fn host_memory_get(key: &str) -> Result<Dynamic, Box<EvalAltResult>> {
+  let value: Dynamic = match host::memory_get(key) {
+    Some(value) => value.into(),
+    None => ().into(),
+  };
+  Ok(value)
+}
+
+fn host_memory_set(key: &str, value: &str) -> Result<(), Box<EvalAltResult>> {
+  host::memory_set(key, value);
+  Ok(())
+}
+
+fn host_memory_del(key: &str) -> Result<bool, Box<EvalAltResult>> {
+  Ok(host::memory_del(key))
 }
 
 /// Subscribe this agent to the endpoint under the model name `model`. Returns

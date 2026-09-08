@@ -76,6 +76,12 @@ A Cargo workspace with three crates plus a single WIT contract.
     - `resources.rs` is the cancellable resource-subscription pump that delivers
       `resource-list-updated`/`resource-updated` events into inboxes.
 
+    - `tool_calls.rs` is the cancellable tool-call pump that delivers
+      `tool-result` events into inboxes.
+
+    - `memory.rs` is the per-agent string store (`DashMap`) that survives hot
+      reloads via the reused `AgentContext`.
+
     - `endpoint.rs` is the per-process endpoint session registry (`open` /
       `push` / `abort`) that buffers an agent's streamed deltas non-blocking,
       and fires `endpoint-session-end` events on normal/abrupt termination.

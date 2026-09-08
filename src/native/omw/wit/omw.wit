@@ -404,7 +404,6 @@ interface host {
   /// call returns once queued, never waiting for the endpoint client. Errors
   /// if the session is unknown, belongs to another agent, or has already
   /// ended. A delta carrying a `finish-reason` ends the session.
-
   endpoint-stream: func(session: string, delta: chat-delta) -> result<_, string>;
 
   /// Send a payload to another agent. The sender is taken from the calling
@@ -421,6 +420,16 @@ interface host {
 
   /// A fresh v4 UUID string (also used internally for every handle).
   new-uuid: func() -> string;
+
+  /// Read a memory value by key. Returns none when the key is absent.
+  /// Memory is per agent and survives hot reloads.
+  memory-get: func(key: string) -> option<string>;
+
+  /// Store a memory value under a key, overwriting any previous value.
+  memory-set: func(key: string, value: string);
+
+  /// Delete a memory value by key. Returns true when a value was present.
+  memory-del: func(key: string) -> bool;
 }
 
 /// The agent runtime: invoked once per iteration by the host.

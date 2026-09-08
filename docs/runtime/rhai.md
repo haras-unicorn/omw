@@ -50,8 +50,8 @@ sub-modules that expose the WIT interfaces to the script:
   `timestamp_sub`, `timestamp_diff`, `timestamp_format`, `wait_timestamp`,
   `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`,
   `endpoint_subscribe`, `endpoint_unsubscribe`, `endpoint_stream`, `send`,
-  `recv`, `try_recv`, `new_uuid`, `sleep_duration`, `sleep_timestamp`, and
-  `sleep_cron`.
+  `recv`, `try_recv`, `new_uuid`, `memory_get`, `memory_set`, `memory_del`,
+  `sleep_duration`, `sleep_timestamp`, and `sleep_cron`.
 
 Handles are Rhai maps. Methods are `FnPtr`s stored on them, so scripts call them
 method-style (`provider.chat_stream(...)`, `tooling.call-tool(...)`). The time
@@ -97,3 +97,14 @@ out
 ```
 
 The script's final value becomes its terminal message when it is not unit.
+
+## Memory
+
+`memory_get` returns the value or unit when absent; `memory_set` stores;
+`memory_del` returns true when a value was present:
+
+```rhai
+omw::host::memory_set("timer", omw::host::wait_duration(1000));
+// ... after a reload, the same context still has it:
+let timer = omw::host::memory_get("timer");
+```

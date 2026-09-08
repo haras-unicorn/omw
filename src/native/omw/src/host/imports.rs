@@ -681,6 +681,21 @@ impl host_bindings::Host for Host {
   fn new_uuid(&mut self) -> String {
     crate::host::bus::new_uuid()
   }
+
+  fn memory_get(&mut self, key: String) -> Option<String> {
+    tracing::trace!(agent = %self.ctx.name, key = %key, "host memory-get");
+    self.ctx.memory.get(&key)
+  }
+
+  fn memory_set(&mut self, key: String, value: String) {
+    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-set");
+    self.ctx.memory.set(key, value);
+  }
+
+  fn memory_del(&mut self, key: String) -> bool {
+    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-del");
+    self.ctx.memory.del(&key)
+  }
 }
 
 type EventEnvelope = host_bindings::EventEnvelope;
@@ -1034,6 +1049,46 @@ mod tests {
     let parsed = uuid::Uuid::parse_str(&uuid)
       .map_err(|_| anyhow::anyhow!("not a valid uuid: {uuid:?}"))?;
     assert_eq!(parsed.get_version(), Some(uuid::Version::Random));
+    Ok(())
+  }
+
+  #[test]
+  fn memory_get_set_del_roundtrips() -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    assert_eq!(host.memory_get("k".to_string()), None);
+    assert!(!host.memory_del("k".to_string()));
+    host.memory_set("k".to_string(), "v".to_string());
+    assert_eq!(host.memory_get("k".to_string()), Some("v".to_string()));
+    host.memory_set("k".to_string(), "v2".to_string());
+    assert_eq!(host.memory_get("k".to_string()), Some("v2".to_string()));
+    assert!(host.memory_del("k".to_string()));
+    assert_eq!(host.memory_get("k".to_string()), None);
+    assert!(!host.memory_del("k".to_string()));
+    Ok(())
+  }
+
+  #[test]
+  fn memory_is_scoped_to_the_context() -> anyhow::Result<()> {
+    let mut first = test_host()?;
+    let mut second = test_host()?;
+    first.memory_set("k".to_string(), "v".to_string());
+    assert_eq!(second.memory_get("k".to_string()), None);
+    Ok(())
+  }
+
+  #[test]
+  fn memory_survives_a_context_clone_like_a_reload() -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    host.memory_set("handle".to_string(), "uuid-1".to_string());
+    let mut reloaded = Host {
+      ctx: host.ctx.clone(),
+      table: Default::default(),
+      wasi: wasmtime_wasi::WasiCtxBuilder::new().build(),
+    };
+    assert_eq!(
+      reloaded.memory_get("handle".to_string()),
+      Some("uuid-1".to_string())
+    );
     Ok(())
   }
 

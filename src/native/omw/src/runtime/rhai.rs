@@ -823,6 +823,56 @@ mod tests {
   }
 
   #[test]
+  fn host_memory_get_set_del_roundtrip_through_script() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("memory.rhai");
+    std::fs::write(
+      &path,
+      r#"
+        omw::host::memory_set("k", "v1");
+        let first = omw::host::memory_get("k");
+        omw::host::memory_set("k", "v2");
+        let second = omw::host::memory_get("k");
+        let deleted = omw::host::memory_del("k");
+        let missing = omw::host::memory_get("k");
+        let deleted_again = omw::host::memory_del("k");
+        let missing_str = if missing == () { "none" } else { missing };
+        first + "|" + second + "|" + deleted + "|" + missing_str + "|" + deleted_again
+      "#,
+    )?;
+    let ctx = test_ctx(path, HashMap::new(), HashMap::new())?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(
+      outcome,
+      RunOutcome::Exited("v1|v2|true|none|false".to_string()),
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn host_memory_survives_across_runs_on_the_same_context() -> anyhow::Result<()>
+  {
+    let dir = tempdir()?;
+    let set_path = dir.path().join("memory_set.rhai");
+    std::fs::write(&set_path, r#"omw::host::memory_set("handle", "uuid-1")"#)?;
+    let get_path = dir.path().join("memory_get.rhai");
+    std::fs::write(&get_path, r#"omw::host::memory_get("handle")"#)?;
+
+    let ctx = test_ctx(set_path, HashMap::new(), HashMap::new())?;
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(outcome, RunOutcome::Completed);
+
+    let mut reloaded = ctx.clone();
+    reloaded.script = get_path;
+    let outcome = run(&runtime, &reloaded)?;
+    assert_eq!(outcome, RunOutcome::Exited("uuid-1".to_string()));
+    Ok(())
+  }
+
+  #[test]
   fn host_endpoint_stream_unknown_session_errors_in_script()
   -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
