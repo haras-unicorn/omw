@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/haras-unicorn/omw/compare/v0.1.1...v0.1.2) - 2026-09-08
+
+### Added
+
+- hot reload ([#24](https://github.com/haras-unicorn/omw/pull/24))
+- openai endpoint ([#20](https://github.com/haras-unicorn/omw/pull/20))
+- ensure blocking calls ([#19](https://github.com/haras-unicorn/omw/pull/19))
+- ensure all subscriptions are cancellable ([#17](https://github.com/haras-unicorn/omw/pull/17))
+
 ## [0.1.1](https://github.com/haras-unicorn/omw/compare/v0.1.0...v0.1.1) - 2026-09-02
 
 ### Added
