@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context as _;
 
+use crate::config::Tunables;
 use crate::host::bus::MessageBus;
 use crate::host::endpoint::EndpointRegistry;
 use crate::host::memory::Memory;
@@ -15,17 +16,6 @@ use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
 use crate::tooling::ToolingEntry;
-
-/// How long the blocking-call helper waits between reload checks.
-pub const RELOAD_POLL: std::time::Duration =
-  std::time::Duration::from_millis(200);
-
-/// Uninterrupted wasm execution allowed after a reload/shutdown grace
-/// expires before the engine epoch trap fires. Doubles as the SIGKILL tier:
-/// cooperative exits (recv abort, `block_on_reload`) get `RELOAD_GRACE` first,
-/// then one epoch increment traps `while true {}` loops that never yield.
-pub const EPOCH_BUDGET: std::time::Duration =
-  std::time::Duration::from_millis(100);
 
 /// Everything a runtime needs to execute one agent for one iteration.
 ///
@@ -60,6 +50,7 @@ pub struct AgentContext {
   /// The tokio runtime used to bridge synchronous wasm host calls to the
   /// async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
+  tunables: Tunables,
   /// Cooperative reload flag, set by the file watcher. The blocking
   /// `host.recv` polls it every slice without draining the inbox, so a
   /// reload aborts the wait while queued events survive for the next run.
@@ -90,6 +81,38 @@ impl AgentContext {
     tool_calls: Arc<CancelRegistry>,
     endpoint: Option<Arc<EndpointRegistry>>,
   ) -> anyhow::Result<Self> {
+    Self::with_tunables(
+      name,
+      script,
+      providers,
+      tooling,
+      bus,
+      streams,
+      timers,
+      resources,
+      tool_calls,
+      endpoint,
+      Tunables::default(),
+    )
+  }
+
+  #[allow(
+    clippy::too_many_arguments,
+    reason = "aggregating the per-agent registries into a struct is left to a ctx refactor"
+  )]
+  pub fn with_tunables(
+    name: String,
+    script: PathBuf,
+    providers: HashMap<String, ProviderEntry>,
+    tooling: HashMap<String, ToolingEntry>,
+    bus: Arc<MessageBus>,
+    streams: Arc<StreamRegistry>,
+    timers: Arc<CancelRegistry>,
+    resources: Arc<CancelRegistry>,
+    tool_calls: Arc<CancelRegistry>,
+    endpoint: Option<Arc<EndpointRegistry>>,
+    tunables: Tunables,
+  ) -> anyhow::Result<Self> {
     Ok(Self {
       name,
       script,
@@ -102,6 +125,7 @@ impl AgentContext {
       resources,
       tool_calls,
       endpoint,
+      tunables,
       reload: Arc::new(AtomicBool::new(false)),
       shutdown: Arc::new(AtomicBool::new(false)),
       engine: Arc::new(Mutex::new(None)),
@@ -112,6 +136,10 @@ impl AgentContext {
           .context("failed to build agent runtime")?,
       )),
     })
+  }
+
+  pub fn tunables(&self) -> Tunables {
+    self.tunables
   }
 
   /// Whether a reload has been requested (and not yet cleared).
@@ -186,11 +214,12 @@ impl AgentContext {
         handle.abort();
         return Err("agent reloaded".to_string());
       }
+      let poll = self.tunables.reload_poll();
       let settled = rt.block_on(async {
         tokio::select! {
           biased;
           done = &mut handle => Some(done),
-          () = tokio::time::sleep(RELOAD_POLL) => None,
+          () = tokio::time::sleep(poll) => None,
         }
       });
       if let Some(done) = settled {

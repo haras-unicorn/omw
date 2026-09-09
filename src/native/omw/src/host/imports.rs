@@ -643,7 +643,7 @@ impl host_bindings::Host for Host {
     let envelope = self
       .ctx
       .bus
-      .recv_while(&name, RECV_TIMEOUT, move || {
+      .recv_while(&name, self.ctx.tunables().recv_timeout(), move || {
         flag.reload_requested() || flag.shutdown_requested()
       })
       .map_err(|error| {
@@ -699,10 +699,6 @@ impl host_bindings::Host for Host {
 }
 
 type EventEnvelope = host_bindings::EventEnvelope;
-
-/// How long a blocking `recv` waits before timing out.
-pub const RECV_TIMEOUT: std::time::Duration =
-  std::time::Duration::from_secs(60);
 
 fn out_event(event: Event) -> types_bindings::Event {
   match event {

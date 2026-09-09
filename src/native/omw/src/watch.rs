@@ -11,17 +11,13 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Context as _;
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 use tokio::sync::mpsc;
 
-use crate::config::AgentConfig;
-
-/// How long to coalesce the burst of file events a single save produces.
-pub const DEBOUNCE: Duration = Duration::from_millis(200);
+use crate::config::{AgentConfig, Tunables};
 
 /// One watched script file plus every agent running it.
 #[derive(Debug)]
@@ -45,6 +41,14 @@ impl ScriptWatcher {
   /// Start watching the scripts of `agents`. Scripts whose parent directory
   /// does not exist are skipped with a warning.
   pub fn new(agents: &[AgentConfig]) -> anyhow::Result<Self> {
+    Self::with_tunables(agents, Tunables::default())
+  }
+
+  /// [`new`](Self::new) with an explicit debounce.
+  pub fn with_tunables(
+    agents: &[AgentConfig],
+    tunables: Tunables,
+  ) -> anyhow::Result<Self> {
     let mut scripts: Vec<WatchedScript> = Vec::new();
     for agent in agents {
       let script = absolute(&PathBuf::from(&agent.script))?;
@@ -96,7 +100,7 @@ impl ScriptWatcher {
 
     let (tx, rx) = mpsc::unbounded_channel();
     let mut debouncer = new_debouncer(
-      DEBOUNCE,
+      tunables.watch_debounce(),
       move |result: DebounceEventResult| match result {
         Ok(events) => {
           let paths = events
@@ -201,6 +205,7 @@ fn resolve(paths: &[PathBuf], scripts: &[WatchedScript]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::time::Duration;
 
   fn agent(name: &str, script: &str) -> AgentConfig {
     AgentConfig {

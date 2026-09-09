@@ -46,6 +46,23 @@
         "$ref": "#/$defs/ImplConfig"
       },
       "default": {}
+    },
+    "tunables": {
+      "description": "Global runtime tunables; all optional with built-in defaults.",
+      "$ref": "#/$defs/Tunables",
+      "default": {
+        "cancel_pumps_on_reload": true,
+        "epoch_budget_ms": 100,
+        "inbox_bound": 1024,
+        "loop_backoff_cap_secs": 30,
+        "loop_backoff_start_ms": 100,
+        "recv_slice_ms": 200,
+        "recv_timeout_secs": 60,
+        "reload_grace_secs": 5,
+        "reload_poll_ms": 200,
+        "session_buffer": 8192,
+        "watch_debounce_ms": 200
+      }
     }
   },
   "$defs": {
@@ -89,6 +106,87 @@
       },
       "additionalProperties": true,
       "required": ["kind"]
+    },
+    "Tunables": {
+      "description": "Runtime tunables: channel sizes, timeouts, and backoffs. All optional;\nomitted values fall back to the built-in defaults.",
+      "type": "object",
+      "properties": {
+        "cancel_pumps_on_reload": {
+          "description": "Cancel open pumps (streams, timers, resources, tool calls) on reload.\n`false` keeps them across reload.",
+          "type": "boolean",
+          "default": true
+        },
+        "epoch_budget_ms": {
+          "description": "Uninterrupted wasm execution allowed after grace expires, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
+          "minimum": 0
+        },
+        "inbox_bound": {
+          "description": "How many events a single agent inbox buffers before sends fail.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1024,
+          "minimum": 0
+        },
+        "loop_backoff_cap_secs": {
+          "description": "Backoff cap for `loop` restarts on failure, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
+        "loop_backoff_start_ms": {
+          "description": "Backoff start for `loop` restarts on failure, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
+          "minimum": 0
+        },
+        "recv_slice_ms": {
+          "description": "How long `recv_while` parks between early-abort checks, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        },
+        "recv_timeout_secs": {
+          "description": "How long a blocking `recv` waits before timing out, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60,
+          "minimum": 0
+        },
+        "reload_grace_secs": {
+          "description": "How long the supervisor waits for a cooperative exit, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5,
+          "minimum": 0
+        },
+        "reload_poll_ms": {
+          "description": "How long the blocking-call helper waits between reload checks, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        },
+        "session_buffer": {
+          "description": "How many deltas a single endpoint session buffers before drops.",
+          "type": "integer",
+          "format": "uint",
+          "default": 8192,
+          "minimum": 0
+        },
+        "watch_debounce_ms": {
+          "description": "How long to coalesce the burst of file events a single save produces,\nin ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        }
+      }
     }
   }
 }

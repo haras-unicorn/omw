@@ -26,3 +26,5 @@ ignoreWords:
   - envsubst
   - rmcp
   - modelcontextprotocol
+  - tunables
+  - backoffs

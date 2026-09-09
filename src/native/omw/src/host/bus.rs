@@ -24,9 +24,16 @@ fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
 type AgentChannels = (Sender<EventEnvelope>, Receiver<EventEnvelope>);
 
 /// A shared bus of per-agent inboxes plus the subscription registry.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MessageBus {
   inner: Mutex<BusInner>,
+  tunables: crate::config::Tunables,
+}
+
+impl Default for MessageBus {
+  fn default() -> Self {
+    Self::with_tunables(crate::config::Tunables::default())
+  }
 }
 
 /// The mutable state behind the bus lock.
@@ -55,6 +62,13 @@ struct BusInner {
 impl MessageBus {
   pub fn new() -> Self {
     Self::default()
+  }
+
+  pub fn with_tunables(tunables: crate::config::Tunables) -> Self {
+    Self {
+      inner: Mutex::new(BusInner::default()),
+      tunables,
+    }
   }
 
   /// Subscribe `subscriber` to messages from `source`, returning a fresh UUID
@@ -285,9 +299,9 @@ impl MessageBus {
 
   /// Blocking receive (with a timeout) of the next event from `name`'s
   /// inbox. Takes an optional shutdown predicate (checked roughly every
-  /// 200ms) that aborts the wait early — for example a hot-reload request.
-  /// Slices only return what is already queued, so pending events stay in
-  /// the inbox for whoever runs next.
+  /// slice, see `tunables.recv_slice_ms`) that aborts the wait early — for
+  /// example a hot-reload request. Slices only return what is already queued,
+  /// so pending events stay in the inbox for whoever runs next.
   pub fn recv(
     &self,
     name: &str,
@@ -307,7 +321,7 @@ impl MessageBus {
   ) -> anyhow::Result<EventEnvelope> {
     let (_, rx) = self.channels(name);
     let start = std::time::Instant::now();
-    let slice = RECV_SLICE;
+    let slice = self.tunables.recv_slice();
     loop {
       if should_stop() {
         return Err(anyhow::anyhow!("stop requested"));
@@ -400,10 +414,11 @@ impl MessageBus {
 
   /// Get (creating if missing) the channel pair for `name`, holding the lock.
   fn channels_locked(&self, inner: &mut BusInner, name: &str) -> AgentChannels {
+    let bound = self.tunables.inbox_bound;
     inner
       .inboxes
       .entry(name.to_string())
-      .or_insert_with(|| kanal::bounded(INBOX_BOUND))
+      .or_insert_with(|| kanal::bounded(bound))
       .clone()
   }
 }
@@ -412,12 +427,6 @@ impl MessageBus {
 pub fn new_uuid() -> String {
   uuid::Uuid::new_v4().to_string()
 }
-
-/// How many events a single agent inbox buffers before sends fail.
-pub const INBOX_BOUND: usize = 1024;
-
-/// How long `recv_while` parks between early-abort checks.
-pub const RECV_SLICE: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests {

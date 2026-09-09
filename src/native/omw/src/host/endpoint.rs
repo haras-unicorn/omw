@@ -15,12 +15,6 @@ use crate::host::bus::MessageBus;
 use crate::host::events::{EndpointSessionEnd, Event};
 use crate::provider::ChatDelta;
 
-/// The number of deltas a single session's local buffer holds before further
-/// `endpoint-stream` calls drop chunks (with a `tracing::warn`). Generous,
-/// since a reply streams many small chunks, so the warn path is an emergency
-/// lane rather than a throttle.
-pub const SESSION_BUFFER: usize = 8192;
-
 /// What an endpoint HTTP handler receives from the session channel.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outbound {
@@ -92,21 +86,33 @@ struct Session {
 pub struct EndpointRegistry {
   bus: Arc<MessageBus>,
   sessions: Mutex<HashMap<String, Session>>,
+  session_buffer: usize,
 }
 
 impl EndpointRegistry {
   pub fn new(bus: Arc<MessageBus>) -> Self {
+    Self::with_tunables(bus, crate::config::Tunables::default())
+  }
+
+  pub fn with_tunables(
+    bus: Arc<MessageBus>,
+    tunables: crate::config::Tunables,
+  ) -> Self {
     Self {
       bus,
       sessions: Mutex::new(HashMap::new()),
+      session_buffer: tunables.session_buffer,
     }
   }
 
   /// Open a new session for `agent` under `subscription`, returning the
-  /// receiver half plus the session's metadata.
+  /// receiver half plus the session's metadata. The channel holds
+  /// `tunables.session_buffer` deltas; generous, since a reply streams many
+  /// small chunks, so the warn path is an emergency lane rather than a
+  /// throttle.
   pub fn open(self: Arc<Self>, agent: &str, subscription: &str) -> OpenSession {
     let session = crate::host::bus::new_uuid();
-    let (tx, rx) = mpsc::channel(SESSION_BUFFER);
+    let (tx, rx) = mpsc::channel(self.session_buffer);
     let mut guards = self.locked();
     guards.insert(
       session.clone(),
@@ -132,8 +138,8 @@ impl EndpointRegistry {
   /// Stream one delta into the session's buffer, non-blocking. Errors if the
   /// session is unknown, belongs to another agent, or has already ended
   /// (terminal finish, abort, or unsubscribe); errors if the receiver is
-  /// gone. A full buffer only warns and drops the chunk (8192 emergency
-  /// lane). A terminal `finish-reason` delta ends the session normally: the
+  /// gone. A full buffer only warns and drops the chunk (the session-buffer
+  /// emergency lane). A terminal `finish-reason` delta ends the session normally: the
   /// entry is removed, and a `Close` is queued so the HTTP handler can flush
   /// the reply.
   pub fn push(

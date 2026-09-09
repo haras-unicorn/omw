@@ -12,22 +12,22 @@ together. The concrete interfaces are documented in [host](./host.md).
 
 ## The single inbox
 
-Every agent gets exactly one inbox: a bounded channel on a shared message bus.
-Nothing is routed to the brain directly — chat deltas, tool results, timers, and
-messages from other agents all land in the same inbox as an
-[`EventEnvelope`][events] carrying:
+Every agent gets exactly one inbox: a bounded channel (see `inbox_bound` in
+[tunables](./tunables.md)) on a shared message bus. Nothing is routed to the
+brain directly — chat deltas, tool results, timers, and messages from other
+agents all land in the same inbox as an [`EventEnvelope`][events] carrying:
 
 - `id` — the UUID of the _subscribed source_ the event came from.
 - `event` — the strongly-typed payload (`message`, `error`, `timer`,
   `chat-delta`, `stream-end`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`).
 
-The brain consumes events with `host.recv` (a blocking receive with a 60 second
-host-side timeout) or `host.try-recv` (a non-blocking poll). Because every event
-is tagged with a UUID, a single inbox is enough to multiplex many concurrent
-sources — the brain correlates a delta or timer to the specific handle that
-opened it by matching the envelope `id` against the UUID returned by the call
-that created it.
+The brain consumes events with `host.recv` (a blocking receive with a host-side
+timeout, see `recv_timeout_secs` in [tunables](./tunables.md)) or
+`host.try-recv` (a non-blocking poll). Because every event is tagged with a
+UUID, a single inbox is enough to multiplex many concurrent sources — the brain
+correlates a delta or timer to the specific handle that opened it by matching
+the envelope `id` against the UUID returned by the call that created it.
 
 ## Nothing is shared by default
 

@@ -37,6 +37,146 @@ pub struct EndpointConfig {
   pub listen: String,
 }
 
+/// Runtime tunables: channel sizes, timeouts, and backoffs. All optional;
+/// omitted values fall back to the built-in defaults.
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(default)]
+pub struct Tunables {
+  /// How many events a single agent inbox buffers before sends fail.
+  #[serde(default = "default_inbox_bound")]
+  pub inbox_bound: usize,
+  /// How long `recv_while` parks between early-abort checks, in ms.
+  #[serde(default = "default_recv_slice_ms")]
+  pub recv_slice_ms: u64,
+  /// How long a blocking `recv` waits before timing out, in seconds.
+  #[serde(default = "default_recv_timeout_secs")]
+  pub recv_timeout_secs: u64,
+  /// How long the blocking-call helper waits between reload checks, in ms.
+  #[serde(default = "default_reload_poll_ms")]
+  pub reload_poll_ms: u64,
+  /// Uninterrupted wasm execution allowed after grace expires, in ms.
+  #[serde(default = "default_epoch_budget_ms")]
+  pub epoch_budget_ms: u64,
+  /// How long the supervisor waits for a cooperative exit, in seconds.
+  #[serde(default = "default_reload_grace_secs")]
+  pub reload_grace_secs: u64,
+  /// Backoff start for `loop` restarts on failure, in ms.
+  #[serde(default = "default_loop_backoff_start_ms")]
+  pub loop_backoff_start_ms: u64,
+  /// Backoff cap for `loop` restarts on failure, in seconds.
+  #[serde(default = "default_loop_backoff_cap_secs")]
+  pub loop_backoff_cap_secs: u64,
+  /// How long to coalesce the burst of file events a single save produces,
+  /// in ms.
+  #[serde(default = "default_watch_debounce_ms")]
+  pub watch_debounce_ms: u64,
+  /// How many deltas a single endpoint session buffers before drops.
+  #[serde(default = "default_session_buffer")]
+  pub session_buffer: usize,
+  /// Cancel open pumps (streams, timers, resources, tool calls) on reload.
+  /// `false` keeps them across reload.
+  #[serde(default = "default_cancel_pumps_on_reload")]
+  pub cancel_pumps_on_reload: bool,
+}
+
+fn default_inbox_bound() -> usize {
+  1024
+}
+
+fn default_recv_slice_ms() -> u64 {
+  200
+}
+
+fn default_recv_timeout_secs() -> u64 {
+  60
+}
+
+fn default_reload_poll_ms() -> u64 {
+  200
+}
+
+fn default_epoch_budget_ms() -> u64 {
+  100
+}
+
+fn default_reload_grace_secs() -> u64 {
+  5
+}
+
+fn default_loop_backoff_start_ms() -> u64 {
+  100
+}
+
+fn default_loop_backoff_cap_secs() -> u64 {
+  30
+}
+
+fn default_watch_debounce_ms() -> u64 {
+  200
+}
+
+fn default_session_buffer() -> usize {
+  8192
+}
+
+fn default_cancel_pumps_on_reload() -> bool {
+  true
+}
+
+impl Default for Tunables {
+  fn default() -> Self {
+    Self {
+      inbox_bound: default_inbox_bound(),
+      recv_slice_ms: default_recv_slice_ms(),
+      recv_timeout_secs: default_recv_timeout_secs(),
+      reload_poll_ms: default_reload_poll_ms(),
+      epoch_budget_ms: default_epoch_budget_ms(),
+      reload_grace_secs: default_reload_grace_secs(),
+      loop_backoff_start_ms: default_loop_backoff_start_ms(),
+      loop_backoff_cap_secs: default_loop_backoff_cap_secs(),
+      watch_debounce_ms: default_watch_debounce_ms(),
+      session_buffer: default_session_buffer(),
+      cancel_pumps_on_reload: default_cancel_pumps_on_reload(),
+    }
+  }
+}
+
+impl Tunables {
+  pub fn recv_slice(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.recv_slice_ms)
+  }
+
+  pub fn recv_timeout(&self) -> std::time::Duration {
+    std::time::Duration::from_secs(self.recv_timeout_secs)
+  }
+
+  pub fn reload_poll(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.reload_poll_ms)
+  }
+
+  pub fn epoch_budget(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.epoch_budget_ms)
+  }
+
+  pub fn reload_grace(&self) -> std::time::Duration {
+    std::time::Duration::from_secs(self.reload_grace_secs)
+  }
+
+  pub fn loop_backoff_start(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.loop_backoff_start_ms)
+  }
+
+  pub fn loop_backoff_cap(&self) -> std::time::Duration {
+    std::time::Duration::from_secs(self.loop_backoff_cap_secs)
+  }
+
+  pub fn watch_debounce(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.watch_debounce_ms)
+  }
+}
+
 /// OMW configuration.
 #[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
 pub struct Config {
@@ -56,6 +196,9 @@ pub struct Config {
   pub endpoint: Option<EndpointConfig>,
   #[serde(default)]
   pub agents: Vec<AgentConfig>,
+  /// Global runtime tunables; all optional with built-in defaults.
+  #[serde(default)]
+  pub tunables: Tunables,
 }
 
 /// A single agent wiring itself to the globals above.
@@ -366,6 +509,24 @@ mod tests {
       .ok_or_else(|| anyhow::anyhow!("missing custom provider"))?;
     assert_eq!(provider.kind, "custom-thing");
     assert_eq!(provider.params["foo"], "bar");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn tunables_default_and_override() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.toml");
+    std::fs::write(&path, "[tunables]\nrecv_timeout_secs = 30\n")?;
+    let cfg = cli(path).load_config()?;
+    assert_eq!(cfg.tunables.recv_timeout_secs, 30);
+    assert_eq!(
+      cfg.tunables,
+      Tunables {
+        recv_timeout_secs: 30,
+        ..Tunables::default()
+      }
+    );
     Ok(())
   }
 
