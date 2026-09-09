@@ -8,8 +8,9 @@
 //! ended cooperatively and the next iteration starts immediately. The shared
 //! registries (providers, tooling, bus, endpoint) are kept alive across
 //! reloads, so inboxes, agent subscriptions and endpoint models survive: the
-//! inbox queue is never drained or dropped on reload, and only open
-//! stream/timer/resource/tool-call pumps are cancelled. Rhai brains re-read
+//! inbox queue is never drained or dropped on reload, and open
+//! stream/timer/resource/tool-call pumps are cancelled unless
+//! `tunables.cancel_pumps_on_reload` is false. Rhai brains re-read
 //! `ctx.script` and wasm brains reload the component on every iteration, so no
 //! script cache needs invalidating.
 
@@ -17,7 +18,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::future::join_all;
@@ -35,14 +35,6 @@ use crate::provider::build_registry as build_providers;
 use crate::runtime::RunOutcome;
 use crate::tooling::build_registry as build_tooling;
 use crate::watch::ScriptWatcher;
-
-/// How long the supervisor waits for a cooperative exit after requesting a
-/// reload or shutdown before reporting it and moving on.
-pub const RELOAD_GRACE: Duration = Duration::from_secs(5);
-
-/// Backoff for `loop_agents` restarts on failure: start and cap.
-pub const LOOP_BACKOFF_START: Duration = Duration::from_millis(100);
-pub const LOOP_BACKOFF_CAP: Duration = Duration::from_secs(30);
 
 /// Run every configured agent once, then aggregate their results.
 ///
@@ -81,7 +73,8 @@ pub async fn run_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
 }
 
 /// Run every configured agent in a loop forever, restarting immediately on
-/// success and with exponential backoff (100ms doubling up to a 30s cap) on
+/// success and with exponential backoff (doubling up to a cap, see
+/// `tunables.loop_backoff_*`) on
 /// failure so a wedged agent does not spin the CPU.
 ///
 /// With `watch`, a script change restarts the agent immediately (without
@@ -95,12 +88,14 @@ pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
     let shared = Arc::clone(&shared);
     let watch_tx = watch_tx.clone();
     tokio::spawn(async move {
-      let mut delay = LOOP_BACKOFF_START;
+      let backoff_start = config.tunables.loop_backoff_start();
+      let backoff_cap = config.tunables.loop_backoff_cap();
+      let mut delay = backoff_start;
       loop {
         match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
           Ok(AgentStop::Completed(completed)) => {
             tracing::info!(agent = %agent.name, ?completed, "agent iteration completed");
-            delay = LOOP_BACKOFF_START;
+            delay = backoff_start;
           }
           Ok(AgentStop::Shutdown) => {
             tracing::info!(agent = %agent.name, "agent shutting down");
@@ -114,7 +109,7 @@ pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
               "backing off before retrying the agent"
             );
             tokio::time::sleep(delay).await;
-            delay = delay.saturating_mul(2).min(LOOP_BACKOFF_CAP);
+            delay = delay.saturating_mul(2).min(backoff_cap);
           }
         }
       }
@@ -169,7 +164,7 @@ async fn run_agent(
   })?;
   let runtime =
     crate::runtime::build(&agent.runtime, &impl_cfg.kind, &impl_cfg.params)?;
-  let ctx = AgentContext::new(
+  let ctx = AgentContext::with_tunables(
     agent.name.clone(),
     PathBuf::from(&agent.script),
     shared.providers.clone(),
@@ -180,6 +175,7 @@ async fn run_agent(
     Arc::new(CancelRegistry::new()),
     Arc::new(CancelRegistry::new()),
     shared.endpoint_registry.clone(),
+    config.tunables,
   )?;
   // Startup gate: a broken script never produces a first iteration.
   // Without `--watch` this fails fast, same as today. With `--watch` the
@@ -244,15 +240,18 @@ async fn run_agent(
         tracing::info!(agent = %agent.name, "agent run reloaded, restarting with the new script");
         // A reload abort leaves the current iteration's pumps (chat
         // streams, timers, resource subs, tool calls) registered but
-        // ownerless; cancel them so they cannot deliver stale events into
-        // the next iteration. The shared bus (inboxes, subscriptions) is
-        // untouched, and the inbox queue carries over. The same context is
-        // reused, and rhai brains re-read `ctx.script` while wasm brains
+        // ownerless; `cancel_pumps_on_reload = false` keeps them across
+        // reload, otherwise they are cancelled so stale events cannot leak
+        // into the next iteration. The shared bus (inboxes, subscriptions)
+        // is untouched, and the inbox queue carries over. The same context
+        // is reused, and rhai brains re-read `ctx.script` while wasm brains
         // reload the component, so the next iteration picks up the edit.
-        ctx.streams.cancel_all();
-        ctx.timers.cancel_all();
-        ctx.resources.cancel_all();
-        ctx.tool_calls.cancel_all();
+        if config.tunables.cancel_pumps_on_reload {
+          ctx.streams.cancel_all();
+          ctx.timers.cancel_all();
+          ctx.resources.cancel_all();
+          ctx.tool_calls.cancel_all();
+        }
         drain_reload(&mut reload_rx);
         continue;
       }
@@ -351,8 +350,8 @@ fn classify_finished(
   }
 }
 
-/// Give a requested abort `RELOAD_GRACE` to exit cooperatively, then trap
-/// unyielding wasm loops via the epoch and allow `EPOCH_BUDGET` to unwind.
+/// Give a requested abort the reload grace to exit cooperatively, then trap
+/// unyielding wasm loops via the epoch and allow the epoch budget to unwind.
 /// A settled run classifies via flags; an unsettled one reports the abort.
 async fn abort_grace<F>(
   finished: &mut std::pin::Pin<Box<F>>,
@@ -362,7 +361,8 @@ async fn abort_grace<F>(
 where
   F: std::future::Future<Output = anyhow::Result<RunOutcome>> + Send + ?Sized,
 {
-  match tokio::time::timeout(RELOAD_GRACE, &mut *finished).await {
+  let tunables = ctx.tunables();
+  match tokio::time::timeout(tunables.reload_grace(), &mut *finished).await {
     Ok(outcome) => classify_finished(outcome, ctx),
     Err(_) => {
       // Grace expired: cooperative tiers (recv abort, `block_on_reload`)
@@ -371,8 +371,7 @@ where
       // this only kills pure-compute spinners. Then give the trap a brief
       // budget to unwind.
       ctx.increment_epoch();
-      match tokio::time::timeout(crate::host::ctx::EPOCH_BUDGET, &mut *finished)
-        .await
+      match tokio::time::timeout(tunables.epoch_budget(), &mut *finished).await
       {
         Ok(outcome) => classify_finished(outcome, ctx),
         Err(_) => RunEnd::Aborted(abort),
@@ -459,7 +458,7 @@ fn start_watcher(
     senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
   };
   let pump_reload = reload.clone();
-  let mut watcher = ScriptWatcher::new(&cfg.agents)?;
+  let mut watcher = ScriptWatcher::with_tunables(&cfg.agents, cfg.tunables)?;
   if watcher.is_empty() {
     tracing::warn!("--watch is set but no agent script can be watched");
     return Ok(None);
@@ -508,11 +507,14 @@ impl Shared {
   async fn build(cfg: &Config) -> anyhow::Result<Self> {
     let providers = build_providers(cfg)?;
     let tooling = build_tooling(cfg).await?;
-    let bus = Arc::new(MessageBus::new());
+    let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
     let (endpoint_registry, endpoint_task) = if let Some(endpoint) =
       &cfg.endpoint
     {
-      let registry = Arc::new(EndpointRegistry::new(Arc::clone(&bus)));
+      let registry = Arc::new(EndpointRegistry::with_tunables(
+        Arc::clone(&bus),
+        cfg.tunables,
+      ));
       let addr = endpoint.listen.parse::<SocketAddr>().with_context(|| {
         format!(
           "endpoint listen address {:?} is not a valid socket address",

@@ -217,6 +217,7 @@ mod tests {
       runtime: HashMap::new(),
       endpoint: None,
       agents: Vec::new(),
+      tunables: crate::config::Tunables::default(),
     };
     assert!(build_registry(&cfg)?.is_empty());
     Ok(())
@@ -240,6 +241,7 @@ mod tests {
         runtime: "rhai".to_string(),
         script: "s".to_string(),
       }],
+      tunables: crate::config::Tunables::default(),
     };
     let reg = build_registry(&cfg)?;
     let entry = reg

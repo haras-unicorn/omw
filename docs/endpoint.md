@@ -46,8 +46,9 @@ Errors — unknown roles, malformed tools, unknown models — are reported as Op
 
 ## Session lifecycle
 
-The session buffer holds 8192 deltas before further chunks are dropped with a
-`tracing::warn` — an emergency lane, not a throttle. A terminal `finish-reason`
-delta is queued first, then the session entry is removed, then a `Close` marker,
-and exactly one `endpoint-session-end` fires. The host fns and events are
-documented in [host](./host.md).
+The session buffer (see `session_buffer` in [tunables](./tunables.md)) holds
+deltas before further chunks are dropped with a `tracing::warn` — an emergency
+lane, not a throttle. A terminal `finish-reason` delta is queued first, then the
+session entry is removed, then a `Close` marker, and exactly one
+`endpoint-session-end` fires. The host fns and events are documented in
+[host](./host.md).

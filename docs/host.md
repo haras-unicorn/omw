@@ -65,7 +65,8 @@ the UUID the opening call returned — for example the UUID from
   the recipient's inbox if it subscribed to the sender, tagged with that
   subscription's UUID.
 - `recv()` — blocking receive of the next event from this agent's single inbox,
-  with a 60 second host-side timeout. Returns an `event-envelope` or an error.
+  with a host-side timeout (see `recv_timeout_secs` in
+  [tunables](./tunables.md)). Returns an `event-envelope` or an error.
 - `try-recv()` — non-blocking poll of the next event; returns `none` when the
   inbox is empty.
 

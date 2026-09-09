@@ -20,7 +20,8 @@ omw loop --config omw.toml --watch
 
 The watcher tracks each agent's `script` path. It watches parent directories
 non-recursively (editors that save via `write temp + rename` still trigger) and
-debounces 200ms, so one save restarts the agent once.
+debounces (see `watch_debounce_ms` in [tunables](./tunables.md)), so one save
+restarts the agent once.
 
 ## What survives and what dies
 
@@ -37,7 +38,9 @@ Discarded on reload:
 
 - Wasm memory/stack (a fresh `Store` per run).
 - Open pump tasks: chat streams, timers, resource subscriptions, tool calls.
-  They are cancelled so stale events cannot leak into the next run.
+  They are cancelled so stale events cannot leak into the next run (unless
+  `cancel_pumps_on_reload = false` in [tunables](./tunables.md), which keeps
+  them across reload).
 
 Rhai brains re-read the script file and wasm brains reload the component on
 every iteration, so the next run picks up the edit.
@@ -58,13 +61,14 @@ fixing the script validates, then starts normally.
 
 Three tiers, mirroring SIGTERM/SIGKILL:
 
-1. Cooperative: `recv` aborts on the next 200ms poll without draining the inbox,
-   blocking calls abort through a helper, and a `reload`/`shutdown` event covers
-   `try-recv` pollers. Fast (≤200ms for `recv`).
-2. Grace timeout (5s): the supervisor stops waiting and reports the abort.
-   Bounds restart latency.
-3. Preemptive (epoch trap, 100ms after grace): one epoch increment traps wasm
-   loops that never yield to the host.
+1. Cooperative: `recv` aborts on the next poll slice (see `recv_slice_ms` in
+   [tunables](./tunables.md)) without draining the inbox, blocking calls abort
+   through a helper, and a `reload`/`shutdown` event covers `try-recv` pollers.
+2. Grace timeout (see `reload_grace_secs` in [tunables](./tunables.md)): the
+   supervisor stops waiting and reports the abort. Bounds restart latency.
+3. Preemptive (epoch trap, `epoch_budget_ms` after grace — see
+   [tunables](./tunables.md)): one epoch increment traps wasm loops that never
+   yield to the host.
 
 Shutdown reuses the same three tiers, but is terminal: `run` collects it as an
 error, `loop` breaks instead of restarting.
@@ -73,29 +77,18 @@ Every host call parks somewhere different, so each needs its own interrupt:
 
 | Brain is stuck in                                                       | Where it parks                       | Interrupt                                                                                                          | Upstream sees                             |
 | ----------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
-| `host.recv`                                                             | inbox slices (200ms)                 | flag poll, `Err("agent reloaded"/"agent shutting down")`, inbox kept; plus a `reload`/`shutdown` event for pollers | nothing (pure local wait)                 |
+| `host.recv`                                                             | inbox slices (`recv_slice_ms`)       | flag poll, `Err("agent reloaded"/"agent shutting down")`, inbox kept; plus a `reload`/`shutdown` event for pollers | nothing (pure local wait)                 |
 | `host.try-recv` / `send` / etc                                          | returns immediately                  | nothing needed; pollers observe the queued `reload`/`shutdown` event                                               | nothing                                   |
 | `provider.chat-stream` pump                                             | biased `select!` on cancel           | open streams are cancelled, pump breaks                                                                            | TCP close, OpenAI sees client disconnect  |
 | `host.wait-*` / timers                                                  | `select!` on cancel                  | open timers are cancelled                                                                                          | nothing                                   |
 | resource subscription pumps                                             | stream + cancel select               | open subscriptions are cancelled                                                                                   | depends on transport                      |
 | `tooling.call-tool` pump                                                | `select!` on the future              | abort drops the in-flight call                                                                                     | MCP call dropped client-side              |
-| blocking `provider.chat`                                                | 200ms abort slices                   | abort handle, `Err("agent reloaded")`                                                                              | normal completed request, result dropped  |
+| blocking `provider.chat`                                                | abort slices (`reload_poll_ms`)      | abort handle, `Err("agent reloaded")`                                                                              | normal completed request, result dropped  |
 | blocking `call-tool-blocking`, `list-*`, `read-resource`, `subscribe-*` | same helper                          | same as above                                                                                                      | server runs to completion, result dropped |
 | blocking `sleep-duration/timestamp/cron`                                | same helper                          | same as above = true cancel                                                                                        | nothing                                   |
-| pure wasm `while true {}`                                               | executing wasm, never yields to host | epoch trap after grace + 100ms                                                                                     | nothing                                   |
+| pure wasm `while true {}`                                               | executing wasm, never yields to host | epoch trap after grace + `epoch_budget_ms`                                                                         | nothing                                   |
 
-Tuning constants (not configurable):
-
-| Knob                  | Value                 |
-| --------------------- | --------------------- |
-| Watch debounce        | 200ms                 |
-| Recv poll slice       | 200ms                 |
-| Recv timeout          | 60s                   |
-| Inbox bound           | 1024 events           |
-| Reload/shutdown grace | 5s                    |
-| Blocking-call poll    | 200ms                 |
-| Epoch budget          | 100ms after grace     |
-| Loop backoff          | 100ms doubling to 30s |
+All values are [tunables](./tunables.md) with the defaults listed there.
 
 ## Writing a reload-safe brain
 
@@ -163,8 +156,9 @@ if sub == () {
 
 ## Troubleshooting
 
-- "Reload takes 5s": the brain is stuck in a blocking call or unyielding loop
-  and the grace expired. Prefer evented calls, or yield to the host regularly.
+- "Reload takes a while": the brain is stuck in a blocking call or unyielding
+  loop and the grace (`reload_grace_secs`) expired. Prefer evented calls, or
+  yield to the host regularly.
 - "Agent restarts twice": two saves in quick succession, or a stale `reload`
   event surviving into the next run. The drain at iteration start drops queued
   system events; check the watcher debounce vs your editor's save burst.
