@@ -136,3 +136,15 @@ reported in-band).
 - `new-uuid()` — a fresh v4 UUID string. Every handle used across the host
   (subscriptions, streams, timers) is one of these. The guest can also use it
   for its own purposes.
+
+## Memory
+
+Per-agent string store that survives hot reloads:
+
+- `memory-get(key)` — read a value; none when absent.
+- `memory-set(key, value)` — store a value, overwriting.
+- `memory-del(key)` — delete; true when a value was present.
+
+Scoped to the calling agent, so agents cannot race each other. Treat entries
+like variables: subscription handles, state-machine state, small checkpoints.
+Not a database — keep values small.

@@ -10,6 +10,7 @@ use anyhow::Context as _;
 
 use crate::host::bus::MessageBus;
 use crate::host::endpoint::EndpointRegistry;
+use crate::host::memory::Memory;
 use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
@@ -41,6 +42,9 @@ pub struct AgentContext {
   /// Every configured tooling, keyed by name.
   pub tooling: HashMap<String, ToolingEntry>,
   pub bus: Arc<MessageBus>,
+  /// Per-agent memory that survives hot reloads (same context is reused
+  /// across reload iterations). Scoped to this agent only.
+  pub memory: Arc<Memory>,
   /// Registry of this agent's open chat streams, keyed by UUID.
   pub streams: Arc<StreamRegistry>,
   /// Registry of this agent's pending timers, keyed by UUID.
@@ -92,6 +96,7 @@ impl AgentContext {
       providers,
       tooling,
       bus,
+      memory: Arc::new(Memory::new()),
       streams,
       timers,
       resources,
@@ -208,6 +213,7 @@ impl std::fmt::Debug for AgentContext {
       .field("script", &self.script)
       .field("providers", &self.providers)
       .field("tooling", &self.tooling)
+      .field("memory", &self.memory)
       .finish_non_exhaustive()
   }
 }

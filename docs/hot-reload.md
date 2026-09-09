@@ -29,6 +29,9 @@ Preserved across reload:
 - Inboxes (queued events are never drained or dropped).
 - Agent subscriptions and endpoint subscriptions.
 - Providers, tooling, and endpoint sessions.
+- Per-agent memory (`host.memory-get` / `memory-set` / `memory-del`): the same
+  `AgentContext` is reused, so stored handles and state-machine state carry
+  over. Treat entries like variables, not a database.
 
 Discarded on reload:
 
@@ -128,6 +131,17 @@ Rules:
   `e.id == lifecycle_uuid && e.kind == "error"` and read the validation message
   from the payload. The host always logs regardless, so the event is the brain's
   chance to notify itself, not the only signal.
+- Keep subscription handles in memory so the next run can reuse them instead of
+  re-subscribing blindly:
+
+```rhai
+let sub = omw::host::memory_get("other-sub");
+if sub == () {
+  sub = omw::host::subscribe("other");
+  omw::host::memory_set("other-sub", sub);
+}
+```
+
 - The live run never exits on an invalid edit. If you see `error` on the
   lifecycle handle, keep running.
 - Exit on `reload` (`break`, do cleanup); exit terminally on `shutdown`. `recv`
@@ -137,8 +151,9 @@ Rules:
   (`chat`, `call-tool-blocking`, `sleep-*`): both cancel promptly, but evented
   handles keep delivering while blocking ones abort the handle.
 - Re-subscribe at the top of the script. Handles are one-shot UUIDs that die
-  with the run (lifecycle included). There is no cross-reload memory yet:
-  rebuild any cached handles from scratch on each run.
+  with the run (lifecycle included). Read them back from memory when they can
+  outlive the run; otherwise rebuild any cached handles from scratch on each
+  run.
 - Never `while true {}` without a host yield; an unyielding loop can only die by
   epoch trap.
 - Pollers should use `try-recv` + small `wait-duration`, so the `reload` /
