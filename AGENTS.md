@@ -39,9 +39,10 @@ A Cargo workspace with three crates plus a single WIT contract.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`) with
     `engine.rs` (the generic WASM component loader + a generic `run` that calls
-    the exported `runtime.run`), `wasm.rs` (loads the agent's `.wasm` or `.wat`
-    brain) and `rhai.rs` (the bundled Rhai evaluator that loads `.rhai` brains
-    enabled by the `rhai` feature).
+    the exported `runtime.run`, plus the per-runtime `WasiConfig`/`Preopen`
+    sandbox flattened into each wasm-based runtime's config), `wasm.rs` (loads
+    the agent's `.wasm` or `.wat` brain) and `rhai.rs` (the bundled Rhai
+    evaluator that loads `.rhai` brains enabled by the `rhai` feature).
 
   - `endpoint/` — the optional OpenAI-compatible HTTP server (`[endpoint]`
     config, axum; zero extra features, started only when configured: exposing
@@ -135,9 +136,11 @@ A Cargo workspace with three crates plus a single WIT contract.
     spawned pump tasks (chat streams, timers, resource subscriptions) pass
     `agent = %name` explicitly.
 
-  - Secrets are never logged: `api_key` (openai) and `auth_token` (mcp) are
-    redacted via custom `Debug` helpers and config debug output goes through
-    `redacted_config`.
+  - Secrets are never logged: `Secret` (`secret.rs`) wraps secret strings in a
+    locked (`mlock`), zeroized-on-drop `Box<[u8]>` and redacts on
+    `Debug`/`Serialize`, so `?`-logging configs is safe. `mlock` failure fails
+    config deserialization (hard fail at startup). `ImplConfig` debug output
+    only lists param keys, never values.
 
 - The wasm engine is synchronous and runs on a `spawn_blocking` thread, not a
   tokio worker. Async is bridged through a dedicated tokio runtime held in

@@ -2564,6 +2564,7 @@ dependencies = [
  "kanal",
  "notify",
  "notify-debouncer-mini",
+ "os-memlock",
  "reqwest",
  "rmcp",
  "schemars 1.2.2",
@@ -2580,6 +2581,7 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -2626,6 +2628,16 @@ checksum = "49203cdcae0030493bad186b28da2fa25645fa276a51b6fec8010d281e02ef79"
 dependencies = [
  "dlv-list",
  "hashbrown 0.14.5",
+]
+
+[[package]]
+name = "os-memlock"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aa44f4e322c4388383b6fb5a6808bbfd4446edc3737e2b27903a620a0414242"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5748,6 +5760,21 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+dependencies = [
+ "serde",
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"
