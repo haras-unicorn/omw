@@ -3,9 +3,9 @@
 `omw` ships an optional OpenAI-compatible HTTP endpoint: a small axum server
 exposing `/v1/models` and `POST /v1/chat/completions`. Each agent subscribes
 itself to the endpoint under one or more model names with
-`host.endpoint-subscribe`; a chat request arrives in the agent's inbox as an
+`host.subscribe-endpoint`; a chat request arrives in the agent's inbox as an
 `endpoint-message` event, and the agent streams its reply back with
-`host.endpoint-stream` — SSE chunks for streaming clients, or one buffered JSON
+`host.stream-endpoint` — SSE chunks for streaming clients, or one buffered JSON
 completion otherwise. This makes an `omw` agent drivable by any
 OpenAI-compatible client.
 
@@ -23,12 +23,12 @@ Only one listener is supported.
 
 ## The agent side
 
-An agent becomes a model by subscribing: `host.endpoint-subscribe(model)`
+An agent becomes a model by subscribing: `host.subscribe-endpoint(model)`
 returns a UUID handle, lists the model on `/v1/models`, and routes inbound
 requests as `endpoint-message` events tagged with it; an agent may subscribe
-many names, and `host.endpoint-unsubscribe(uuid)` drops a model and abruptly
+many names, and `host.unsubscribe-endpoint(uuid)` drops a model and abruptly
 ends every in-flight session of that subscription. The agent streams deltas back
-with `host.endpoint-stream(session, delta)`, non-blocking; a delta carrying a
+with `host.stream-endpoint(session, delta)`, non-blocking; a delta carrying a
 `finish-reason` ends the session. Sessions end exactly once: normally when the
 reply completes, or abruptly on client disconnect or unsubscribe. Each end fires
 exactly one `endpoint-session-end` event into the owning agent's inbox. Errors

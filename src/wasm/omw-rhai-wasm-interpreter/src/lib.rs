@@ -81,7 +81,7 @@ fn install_omw(engine: &mut Engine) {
   engine.register_fn("provider_chat_stream", provider_chat_stream);
   engine.register_fn("provider_is_open", provider_is_open);
   engine.register_fn("provider_cancel", provider_cancel);
-  engine.register_fn("provider_models", provider_models);
+  engine.register_fn("provider_list_models", provider_list_models);
   engine.register_fn("provider_kind", provider_kind);
   engine.register_fn("tooling_list_tools", tooling_list_tools);
   engine.register_fn("tooling_call_tool", tooling_call_tool);
@@ -111,23 +111,20 @@ fn install_omw(engine: &mut Engine) {
 
   let mut host = Module::new();
   host.set_native_fn("log", host_log);
-  host.set_native_fn("now", host_now);
-  host.set_native_fn("timestamp_add", host_timestamp_add);
-  host.set_native_fn("timestamp_sub", host_timestamp_sub);
-  host.set_native_fn("timestamp_diff", host_timestamp_diff);
-  host.set_native_fn("timestamp_format", host_timestamp_format);
-  host.set_native_fn("wait_timestamp", host_wait_timestamp);
-  host.set_native_fn("wait_duration", host_wait_duration);
+  host.set_native_fn("time_now", host_time_now);
+  host.set_native_fn("time_format", host_time_format);
+  host.set_native_fn("wait_until", host_wait_until);
+  host.set_native_fn("wait_for", host_wait_for);
   host.set_native_fn("wait_cron", host_wait_cron);
-  host.set_native_fn("sleep_duration", host_sleep_duration);
-  host.set_native_fn("sleep_timestamp", host_sleep_timestamp);
+  host.set_native_fn("sleep_for", host_sleep_for);
+  host.set_native_fn("sleep_until", host_sleep_until);
   host.set_native_fn("sleep_cron", host_sleep_cron);
-  host.set_native_fn("cancel", host_cancel);
-  host.set_native_fn("subscribe", host_subscribe);
-  host.set_native_fn("unsubscribe", host_unsubscribe);
-  host.set_native_fn("lifecycle_subscribe", host_lifecycle_subscribe);
-  host.set_native_fn("lifecycle_unsubscribe", host_lifecycle_unsubscribe);
-  host.set_native_fn("send", host_send);
+  host.set_native_fn("cancel_timer", host_cancel_timer);
+  host.set_native_fn("subscribe_agent", host_subscribe_agent);
+  host.set_native_fn("unsubscribe_agent", host_unsubscribe_agent);
+  host.set_native_fn("subscribe_lifecycle", host_subscribe_lifecycle);
+  host.set_native_fn("unsubscribe_lifecycle", host_unsubscribe_lifecycle);
+  host.set_native_fn("send_agent", host_send_agent);
   host.set_native_fn("recv", host_recv);
   host.set_native_fn("try_recv", host_try_recv);
   host.set_native_fn("new_uuid", host_new_uuid);
@@ -135,11 +132,11 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("base64_decode", host_base64_decode);
   host.set_native_fn("memory_get", host_memory_get);
   host.set_native_fn("memory_set", host_memory_set);
-  host.set_native_fn("memory_del", host_memory_del);
+  host.set_native_fn("memory_remove", host_memory_remove);
 
-  host.set_native_fn("endpoint_subscribe", host_endpoint_subscribe);
-  host.set_native_fn("endpoint_unsubscribe", host_endpoint_unsubscribe);
-  host.set_native_fn("endpoint_stream", host_endpoint_stream);
+  host.set_native_fn("subscribe_endpoint", host_subscribe_endpoint);
+  host.set_native_fn("unsubscribe_endpoint", host_unsubscribe_endpoint);
+  host.set_native_fn("stream_endpoint", host_stream_endpoint);
   let mut omw = Module::new();
   omw.set_sub_module("provider", provider);
   omw.set_sub_module("tooling", tooling);
@@ -160,7 +157,7 @@ fn provider_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
   m.insert("chat_stream".into(), method("provider_chat_stream")?.into());
   m.insert("is_open".into(), method("provider_is_open")?.into());
   m.insert("cancel".into(), method("provider_cancel")?.into());
-  m.insert("models".into(), method("provider_models")?.into());
+  m.insert("list_models".into(), method("provider_list_models")?.into());
   m.insert("kind".into(), method("provider_kind")?.into());
   Ok(m)
 }
@@ -223,9 +220,9 @@ fn provider_cancel(handle: Map, uuid: &str) -> Result<(), Box<EvalAltResult>> {
   Ok(())
 }
 
-fn provider_models(handle: Map) -> Result<Array, Box<EvalAltResult>> {
+fn provider_list_models(handle: Map) -> Result<Array, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
-  let models = provider::get(&name).map_err(to_error)?.models();
+  let models = provider::get(&name).map_err(to_error)?.list_models();
   Ok(models.into_iter().map(|m| m.into()).collect())
 }
 
@@ -471,76 +468,62 @@ fn host_log(level: &str, message: &str) -> Result<(), Box<EvalAltResult>> {
 // The time helpers take/return rhai `i64` (rhai's default integer type) and
 // convert at the boundary to the WIT `u64`/`s64`, so scripts can pass plain
 // integer literals.
-fn host_now() -> Result<i64, Box<EvalAltResult>> {
-  i64::try_from(host::now()).map_err(to_error)
+fn host_time_now() -> Result<i64, Box<EvalAltResult>> {
+  i64::try_from(host::time_now()).map_err(to_error)
 }
 
-fn host_timestamp_add(ts: i64, ms: i64) -> Result<i64, Box<EvalAltResult>> {
-  let out = host::timestamp_add(to_u64(ts)?, to_u64(ms)?);
-  i64::try_from(out).map_err(to_error)
-}
-
-fn host_timestamp_sub(ts: i64, ms: i64) -> Result<i64, Box<EvalAltResult>> {
-  let out = host::timestamp_sub(to_u64(ts)?, to_u64(ms)?);
-  i64::try_from(out).map_err(to_error)
-}
-
-fn host_timestamp_diff(a: i64, b: i64) -> Result<i64, Box<EvalAltResult>> {
-  Ok(host::timestamp_diff(to_u64(a)?, to_u64(b)?))
-}
-
-fn host_timestamp_format(
+fn host_time_format(
   ts: i64,
   format: &str,
 ) -> Result<String, Box<EvalAltResult>> {
-  Ok(host::timestamp_format(to_u64(ts)?, format))
+  Ok(host::time_format(to_u64(ts)?, format))
 }
 
-fn host_wait_timestamp(ts: i64) -> Result<String, Box<EvalAltResult>> {
-  host::wait_timestamp(to_u64(ts)?).map_err(to_error)
+fn host_wait_until(ts: i64) -> Result<String, Box<EvalAltResult>> {
+  host::wait_until(to_u64(ts)?).map_err(to_error)
 }
 
-fn host_wait_duration(ms: i64) -> Result<String, Box<EvalAltResult>> {
-  host::wait_duration(to_u64(ms)?).map_err(to_error)
+fn host_wait_for(ms: i64) -> Result<String, Box<EvalAltResult>> {
+  host::wait_for(to_u64(ms)?).map_err(to_error)
 }
 
 fn host_wait_cron(spec: &str) -> Result<String, Box<EvalAltResult>> {
   host::wait_cron(spec).map_err(to_error)
 }
 
-fn host_sleep_duration(ms: i64) -> Result<(), Box<EvalAltResult>> {
-  host::sleep_duration(to_u64(ms)?);
+fn host_sleep_for(ms: i64) -> Result<(), Box<EvalAltResult>> {
+  host::sleep_for(to_u64(ms)?);
   Ok(())
 }
 
-fn host_sleep_timestamp(ts: i64) -> Result<(), Box<EvalAltResult>> {
-  host::sleep_timestamp(to_u64(ts)?).map_err(to_error)
+fn host_sleep_until(ts: i64) -> Result<(), Box<EvalAltResult>> {
+  host::sleep_until(to_u64(ts)?).map_err(to_error)
 }
 
 fn host_sleep_cron(spec: &str) -> Result<(), Box<EvalAltResult>> {
   host::sleep_cron(spec).map_err(to_error)
 }
 
-fn host_cancel(uuid: &str) -> Result<(), Box<EvalAltResult>> {
-  host::cancel(uuid);
+fn host_cancel_timer(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::cancel_timer(uuid);
   Ok(())
 }
 
-fn host_subscribe(agent: &str) -> Result<String, Box<EvalAltResult>> {
-  host::subscribe(agent).map_err(to_error)
+fn host_subscribe_agent(agent: &str) -> Result<String, Box<EvalAltResult>> {
+  host::subscribe_agent(agent).map_err(to_error)
 }
 
-fn host_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
-  host::unsubscribe(uuid);
+fn host_unsubscribe_agent(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::unsubscribe_agent(uuid);
   Ok(())
 }
 
-fn host_lifecycle_subscribe() -> Result<String, Box<EvalAltResult>> {
-  host::lifecycle_subscribe().map_err(to_error)
+fn host_subscribe_lifecycle() -> Result<String, Box<EvalAltResult>> {
+  host::subscribe_lifecycle().map_err(to_error)
 }
 
-fn host_lifecycle_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
-  host::lifecycle_unsubscribe(uuid);
+fn host_unsubscribe_lifecycle(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::unsubscribe_lifecycle(uuid);
   Ok(())
 }
 
@@ -549,8 +532,11 @@ fn to_u64(v: i64) -> Result<u64, Box<EvalAltResult>> {
   u64::try_from(v).map_err(|_| to_error("expected a non-negative integer"))
 }
 
-fn host_send(agent: &str, payload: &str) -> Result<(), Box<EvalAltResult>> {
-  host::send(agent, payload);
+fn host_send_agent(
+  agent: &str,
+  payload: &str,
+) -> Result<(), Box<EvalAltResult>> {
+  host::send_agent(agent, payload);
   Ok(())
 }
 
@@ -595,32 +581,32 @@ fn host_memory_set(key: &str, value: &str) -> Result<(), Box<EvalAltResult>> {
   Ok(())
 }
 
-fn host_memory_del(key: &str) -> Result<bool, Box<EvalAltResult>> {
-  Ok(host::memory_del(key))
+fn host_memory_remove(key: &str) -> Result<bool, Box<EvalAltResult>> {
+  Ok(host::memory_remove(key))
 }
 
 /// Subscribe this agent to the endpoint under the model name `model`. Returns
 /// the subscription UUID; inbound endpoint requests arrive as
 /// `"endpoint-message"` events tagged with it.
-fn host_endpoint_subscribe(model: &str) -> Result<String, Box<EvalAltResult>> {
-  host::endpoint_subscribe(model).map_err(to_error)
+fn host_subscribe_endpoint(model: &str) -> Result<String, Box<EvalAltResult>> {
+  host::subscribe_endpoint(model).map_err(to_error)
 }
 
-/// Unsubscribe by a UUID that `endpoint_subscribe` returned; the model is
+/// Unsubscribe by a UUID that `subscribe_endpoint` returned; the model is
 /// dropped and every in-flight session of that subscription is terminated.
-fn host_endpoint_unsubscribe(uuid: &str) -> Result<(), Box<EvalAltResult>> {
-  host::endpoint_unsubscribe(uuid);
+fn host_unsubscribe_endpoint(uuid: &str) -> Result<(), Box<EvalAltResult>> {
+  host::unsubscribe_endpoint(uuid);
   Ok(())
 }
 
 /// Stream one `chat-delta` map to the endpoint session identified by `session`,
 /// non-blocking. A map carrying a `finish_reason` ends the session.
-fn host_endpoint_stream(
+fn host_stream_endpoint(
   session: &str,
   delta: Map,
 ) -> Result<(), Box<EvalAltResult>> {
   let delta = delta_from_map(&delta).map_err(to_error)?;
-  host::endpoint_stream(session, &delta).map_err(to_error)
+  host::stream_endpoint(session, &delta).map_err(to_error)
 }
 
 /// Map a `host::EventEnvelope` into a rhai map `#{ id, kind, payload }` so
@@ -637,7 +623,7 @@ fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
     types::Event::ChatDelta(delta) => {
       ("chat-delta", delta_to_map(delta).into())
     }
-    types::Event::StreamEnd => ("stream-end", ().into()),
+    types::Event::ChatEnd => ("chat-end", ().into()),
     types::Event::ToolResult(result) => {
       ("tool-result", tool_result_to_map(result).into())
     }

@@ -30,7 +30,7 @@ impl Memory {
     self.inner.insert(key, value);
   }
 
-  pub fn del(&self, key: &str) -> bool {
+  pub fn remove(&self, key: &str) -> bool {
     self.inner.remove(key).is_some()
   }
 }
@@ -61,13 +61,13 @@ mod tests {
   }
 
   #[test]
-  fn del_removes_and_reports_presence() {
+  fn remove_reports_presence() {
     let memory = Memory::new();
-    assert!(!memory.del("missing"));
+    assert!(!memory.remove("missing"));
     memory.set("k".to_string(), "v".to_string());
-    assert!(memory.del("k"));
+    assert!(memory.remove("k"));
     assert_eq!(memory.get("k"), None);
-    assert!(!memory.del("k"));
+    assert!(!memory.remove("k"));
   }
 
   #[test]

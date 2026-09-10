@@ -15,7 +15,7 @@ pub struct ToolResult {
 
 /// An inbound endpoint request routed to a subscribed agent. `session`
 /// distinguishes the request from others in the same subscription, and
-/// addresses the agent's streamed deltas back out through `endpoint-stream`.
+/// addresses the agent's streamed deltas back out through `stream-endpoint`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EndpointMessage {
   pub session: String,
@@ -48,7 +48,7 @@ pub enum Event {
   /// A chat-stream delta.
   ChatDelta(ChatDelta),
   /// A chat stream finished.
-  StreamEnd,
+  ChatEnd,
   /// A queued tool invocation returned; carries the tool result.
   ToolResult(ToolResult),
   /// The subscribed resource list changed.

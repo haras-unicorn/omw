@@ -12,7 +12,7 @@ A provider exposes, through the WIT `provider` interface:
 - `kind()` — which implementation this is (e.g. `openai`), letting a guest break
   the abstraction when it chooses to.
 - `name()` — the configured name of the instance.
-- `models()` — the model names this provider exposes.
+- `list-models()` — the model names this provider exposes.
 - `chat(model, messages, tools)` — run a chat conversation to completion, and
   return the full [`chat-result`] in-band: the concatenated content, the
   reassembled tool calls, and the terminal finish reason. No events are
@@ -20,7 +20,7 @@ A provider exposes, through the WIT `provider` interface:
   be cancelled.
 - `chat-stream(model,messages,tools)` — open a _streaming_ chat response.
   Returns a UUID handle; deltas flow into the agent's inbox as `chat-delta`
-  events until a terminal `stream-end` (or `error`) event closes the stream.
+  events until a terminal `chat-end` (or `error`) event closes the stream.
 - `is-open(uuid)` — whether a chat stream identified by `uuid` is still open.
 - `cancel(uuid)` — cancel an open stream by `uuid`.
 
@@ -36,14 +36,14 @@ host bridge at once:
 - **Open and return.** The call starts a chat-stream pump on the bridge runtime
   and returns the stream's UUID immediately; it does not block the brain.
 - **Consume in the inbox.** The pump delivers each chunk as a `chat-delta`
-  event, then a `stream-end` event, all tagged with the returned UUID. The brain
+  event, then a `chat-end` event, all tagged with the returned UUID. The brain
   collects them with `recv`/`try-recv`.
 
 Two contracts matter when writing or using a provider implementation:
 
 - Implementations must return an **error before the first delta** on transport
   or authentication failure, rather than a silent empty stream — the guest sees
-  the failure as an `error` event instead of a misleading `stream-end`.
+  the failure as an `error` event instead of a misleading `chat-end`.
 - **Dropping the returned stream aborts the in-flight request**, unsubscribing
   any pump reading it. This is how cancellation is granted for free.
 

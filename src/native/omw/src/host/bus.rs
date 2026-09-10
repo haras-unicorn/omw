@@ -54,7 +54,7 @@ struct BusInner {
   /// `BTreeMap` so `/v1/models` enumerates models in deterministic order.
   endpoint_by_model: BTreeMap<String, (String, String)>,
   /// Endpoint `subscription uuid` -> `(agent, model)` reverse index, so
-  /// `endpoint-unsubscribe` can remove by handle instead of again walking
+  /// `unsubscribe-endpoint` can remove by handle instead of again walking
   /// the model map.
   endpoint_by_uuid: HashMap<String, (String, String)>,
 }

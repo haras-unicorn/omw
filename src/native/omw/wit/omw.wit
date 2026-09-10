@@ -128,10 +128,10 @@ interface types {
   }
 
   /// An inbound chat request routed from the endpoint to a subscribed agent,
-  /// tagged with the subscription UUID the `endpoint-subscribe` call returned.
+  /// tagged with the subscription UUID the `subscribe-endpoint` call returned.
   record endpoint-message {
     /// UUID of the session this request belongs to; deltas streamed back via
-    /// `host.endpoint-stream` address this.
+    /// `host.stream-endpoint` address this.
     session: string,
 
     /// The chat history as submitted by the endpoint client.
@@ -176,7 +176,7 @@ interface types {
     chat-delta(chat-delta),
 
     /// A chat stream finished.
-    stream-end,
+    chat-end,
 
     /// A queued tool invocation returned; carries the tool result.
     tool-result(tool-result),
@@ -225,7 +225,7 @@ interface provider {
     kind: func() -> string;
 
     /// Model names this provider exposes.
-    models: func() -> list<string>;
+    list-models: func() -> list<string>;
 
     /// Run a chat conversation to completion and return the full result in-band.
     /// Unlike `chat-stream`, no events are delivered; the call only returns
@@ -238,7 +238,7 @@ interface provider {
 
     /// Open a streaming chat response. Returns a UUID handle; deltas flow
     /// into the agent's inbox as `"chat-delta"` events until a terminal
-    /// `"stream-end"` (or `"error"`) event closes the stream.
+    /// `"chat-end"` (or `"error"`) event closes the stream.
     chat-stream: func(
       model: string,
       messages: list<chat-message>,
@@ -323,45 +323,36 @@ interface host {
   log: func(level: string, message: string);
 
   /// Current wall clock as ticks (milliseconds since epoch).
-  now: func() -> u64;
-
-  /// Add `ms` milliseconds to a timestamp.
-  timestamp-add: func(ts: u64, ms: u64) -> u64;
-
-  /// Subtract `ms` milliseconds from a timestamp.
-  timestamp-sub: func(ts: u64, ms: u64) -> u64;
-
-  /// Milliseconds between `a` and `b` (signed; `a - b`).
-  timestamp-diff: func(a: u64, b: u64) -> s64;
+  time-now: func() -> u64;
 
   /// Format a timestamp using a strftime-ish format string.
-  timestamp-format: func(ts: u64, format: string) -> string;
+  time-format: func(ts: u64, format: string) -> string;
 
   /// Wait until a timestamp fires. Errors if `ts <= now`; the fired `timer`
   /// event is tagged with the returned UUID.
-  wait-timestamp: func(ts: u64) -> result<string, string>;
+  wait-until: func(ts: u64) -> result<string, string>;
 
   /// Wait for `ms` milliseconds; the fired `timer` event is tagged with the
   /// returned UUID.
-  wait-duration: func(ms: u64) -> result<string, string>;
+  wait-for: func(ms: u64) -> result<string, string>;
 
   /// Wait until the next fire of a cron spec; the fired `timer` event is
   /// tagged with the returned UUID.
   wait-cron: func(spec: string) -> result<string, string>;
 
-  /// Cancel a pending wait (`wait-timestamp` / `wait-duration` / `wait-cron`) by
+  /// Cancel a pending wait (`wait-until` / `wait-for` / `wait-cron`) by
   /// the UUID handle it returned. No further `"timer"` event is delivered.
-  cancel: func(uuid: string);
+  cancel-timer: func(uuid: string);
 
   /// Blocking wait for `ms` milliseconds; returns once the delay elapses.
-  /// Unlike `wait-duration`, no `"timer"` event is delivered; the call only
+  /// Unlike `wait-for`, no `"timer"` event is delivered; the call only
   /// returns after the wait finishes, and cannot be cancelled.
-  sleep-duration: func(ms: u64);
+  sleep-for: func(ms: u64);
 
   /// Blocking wait until a timestamp fires. Errors if `ts <= now`. Unlike
-  /// `wait-timestamp`, no `"timer"` event is delivered; the call only returns
+  /// `wait-until`, no `"timer"` event is delivered; the call only returns
   /// after the wait finishes, and cannot be cancelled.
-  sleep-timestamp: func(ts: u64) -> result<_, string>;
+  sleep-until: func(ts: u64) -> result<_, string>;
 
   /// Blocking wait until the next fire of a cron spec. Unlike `wait-cron`,
   /// no `"timer"` event is delivered; the call only returns after the wait
@@ -371,45 +362,46 @@ interface host {
   /// Subscribe to lifecycle events (`reload`, `shutdown`, and reload-failure
   /// `error`). Returns a UUID handle; lifecycle events arrive tagged with it.
   /// Errors on a second subscribe (one lifecycle subscription per run).
-  lifecycle-subscribe: func() -> result<string, string>;
+  subscribe-lifecycle: func() -> result<string, string>;
 
-  /// Unsubscribe by the UUID `lifecycle-subscribe` returned. A foreign UUID
+  /// Unsubscribe by the UUID `subscribe-lifecycle` returned. A foreign UUID
   /// is a no-op, like the other `unsubscribe`s.
-  lifecycle-unsubscribe: func(uuid: string);
+  unsubscribe-lifecycle: func(uuid: string);
 
   /// Subscribe to messages from another agent. Returns a UUID handle; events
   /// from that agent arrive tagged with it. Nothing arrives without
   /// a subscription.
-  subscribe: func(agent: string) -> result<string, string>;
+  subscribe-agent: func(agent: string) -> result<string, string>;
 
-  /// Unsubscribe from another agent's messages by the UUID handle `subscribe`
-  /// returned. No further `"message"` events are delivered on that handle.
-  unsubscribe: func(uuid: string);
+  /// Unsubscribe from another agent's messages by the UUID handle
+  /// `subscribe-agent` returned. No further `"message"` events are delivered
+  /// on that handle.
+  unsubscribe-agent: func(uuid: string);
 
   /// Subscribe this agent to the endpoint under the model name `model`.
   /// Returns a UUID handle: inbound endpoint requests for that model arrive
   /// as `"endpoint-message"` events tagged with it, and the model shows up on
   /// `GET /v1/models` while subscribed. An agent may subscribe multiple
   /// model names, each its own handle. Errors if `model` is already taken.
-  endpoint-subscribe: func(model: string) -> result<string, string>;
+  subscribe-endpoint: func(model: string) -> result<string, string>;
 
-  /// Unsubscribe by the UUID `endpoint-subscribe` returned. The model is
+  /// Unsubscribe by the UUID `subscribe-endpoint` returned. The model is
   /// dropped from `/v1/models`, no further requests route to the agent, and
   /// every in-flight session of that subscription is abruptly terminated
   /// (each delivering an `"endpoint-session-end"` event with an error).
-  endpoint-unsubscribe: func(uuid: string);
+  unsubscribe-endpoint: func(uuid: string);
 
   /// Stream one `chat-delta` to the endpoint session identified by `session`.
   /// Non-blocking: the delta is queued to the session's local buffer and the
   /// call returns once queued, never waiting for the endpoint client. Errors
   /// if the session is unknown, belongs to another agent, or has already
   /// ended. A delta carrying a `finish-reason` ends the session.
-  endpoint-stream: func(session: string, delta: chat-delta) -> result<_, string>;
+  stream-endpoint: func(session: string, delta: chat-delta) -> result<_, string>;
 
   /// Send a payload to another agent. The sender is taken from the calling
   /// agent's context; the message lands in the recipient's inbox only if it
   /// subscribed to the sender, tagged with the subscription's UUID.
-  send: func(agent: string, payload: string);
+  send-agent: func(agent: string, payload: string);
 
   /// Blocking receive (with a host-side timeout) of the next event from this
   /// agent's single inbox.
@@ -437,7 +429,7 @@ interface host {
   memory-set: func(key: string, value: string);
 
   /// Delete a memory value by key. Returns true when a value was present.
-  memory-del: func(key: string) -> bool;
+  memory-remove: func(key: string) -> bool;
 }
 
 /// The agent runtime: invoked once per iteration by the host.

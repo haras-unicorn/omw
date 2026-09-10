@@ -72,7 +72,7 @@ impl Provider for MockProvider {
     "mock"
   }
 
-  async fn models(&self) -> Vec<String> {
+  async fn list_models(&self) -> Vec<String> {
     vec!["mock-model".to_string()]
   }
 

@@ -1,9 +1,9 @@
 //! The OpenAI-compatible HTTP endpoint. When `[endpoint]` is configured,
 //! a small axum server is started exposing `/v1/models` and `POST
 //! /v1/chat/completions`. Each subscribed agent is addressable as a model
-//! under the name it `host.endpoint-subscribe`d; a request opens a session and
+//! under the name it `host.subscribe-endpoint`d; a request opens a session and
 //! delivers an `endpoint-message` event into the owning agent's inbox. The
-//! agent streams its reply back with `host.endpoint-stream`, which queues into a
+//! agent streams its reply back with `host.stream-endpoint`, which queues into a
 //! per-session buffer the server drains: as SSE chunks for `stream: true`, or
 //! buffered into a single JSON completion for `stream: false`.
 

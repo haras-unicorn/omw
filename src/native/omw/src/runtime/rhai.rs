@@ -318,7 +318,7 @@ mod tests {
       loop {
         let e = omw::host::recv();
         if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
-        if e.id == id && e.kind == "stream-end" { break; }
+        if e.id == id && e.kind == "chat-end" { break; }
       }
       let t = omw::tooling::get("mock-tooling");
       let tool_res = t.call_tool_blocking("some-tool", #{ a: 1 });
@@ -405,7 +405,7 @@ mod tests {
       loop {
         let e = omw::host::recv();
         if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
-        if e.id == id && e.kind == "stream-end" { break; }
+        if e.id == id && e.kind == "chat-end" { break; }
       }
       out
     "#;
@@ -419,7 +419,7 @@ mod tests {
     assert_eq!(
       outcome,
       RunOutcome::Exited("Hello, world".to_string()),
-      "chat deltas should accumulate in order until stream-end"
+      "chat deltas should accumulate in order until chat-end"
     );
     Ok(())
   }
@@ -455,7 +455,7 @@ mod tests {
   }
 
   #[test]
-  fn host_subscribe_send_recv_between_agents_on_shared_bus()
+  fn host_subscribe_agent_send_recv_between_agents_on_shared_bus()
   -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
 
@@ -464,7 +464,7 @@ mod tests {
     // Alice subscribes to bob; the returned UUID is the handle her inbox
     // deliveries from bob will be tagged with.
     let subscribe_path = dir.path().join("subscribe.rhai");
-    std::fs::write(&subscribe_path, r#"omw::host::subscribe("bob")"#)?;
+    std::fs::write(&subscribe_path, r#"omw::host::subscribe_agent("bob")"#)?;
     let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let alice = test_ctx_with_bus("alice", subscribe_path, Arc::clone(&bus))?;
     let outcome = run(&runtime, &alice)?;
@@ -485,7 +485,7 @@ mod tests {
     let send_path = dir.path().join("send.rhai");
     std::fs::write(
       &send_path,
-      r#"omw::host::send("alice", "hello from bob")"#,
+      r#"omw::host::send_agent("alice", "hello from bob")"#,
     )?;
     let bob = test_ctx_with_bus("bob", send_path, Arc::clone(&bus))?;
     let outcome = run(&runtime, &bob)?;
@@ -507,14 +507,14 @@ mod tests {
   }
 
   #[test]
-  fn host_wait_duration_delivers_a_timer_event() -> anyhow::Result<()> {
+  fn host_wait_for_delivers_a_timer_event() -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
 
     let dir = tempdir()?;
     let path = dir.path().join("wait.rhai");
     std::fs::write(
       &path,
-      r#"let id = omw::host::wait_duration(10); let e = omw::host::recv(); id == e.id && e.kind == "timer""#,
+      r#"let id = omw::host::wait_for(10); let e = omw::host::recv(); id == e.id && e.kind == "timer""#,
     )?;
 
     let ctx = test_ctx_with_bus("test-agent", path, bus)?;
@@ -523,7 +523,7 @@ mod tests {
     assert_eq!(
       outcome,
       RunOutcome::Exited("true".to_string()),
-      "wait_duration then recv should yield a timer event tagged with the uuid"
+      "wait_for then recv should yield a timer event tagged with the uuid"
     );
     Ok(())
   }
@@ -603,57 +603,38 @@ mod tests {
   }
 
   #[test]
-  fn host_wait_timestamp_in_the_past_errors() -> anyhow::Result<()> {
+  fn host_wait_until_in_the_past_errors() -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
 
     let dir = tempdir()?;
     let path = dir.path().join("wait_past.rhai");
     // 1ms since epoch is far in the past relative to `now`.
-    std::fs::write(&path, r#"omw::host::wait_timestamp(1)"#)?;
+    std::fs::write(&path, r#"omw::host::wait_until(1)"#)?;
 
     let ctx = test_ctx_with_bus("test-agent", path, bus)?;
     let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let result = run(&runtime, &ctx);
     assert!(
       result.is_err(),
-      "wait_timestamp in the past should error, got {result:?}"
+      "wait_until in the past should error, got {result:?}"
     );
     Ok(())
   }
 
   #[test]
-  fn host_sleep_duration_blocks_and_returns() -> anyhow::Result<()> {
-    let bus = Arc::new(MessageBus::new());
-
-    let dir = tempdir()?;
-    let path = dir.path().join("sleep.rhai");
-    std::fs::write(&path, r#"omw::host::sleep_duration(0); "slept""#)?;
-
-    let ctx = test_ctx_with_bus("test-agent", path, bus)?;
-    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
-    let outcome = run(&runtime, &ctx)?;
-    assert_eq!(
-      outcome,
-      RunOutcome::Exited("slept".to_string()),
-      "sleep_duration should block briefly then let the script continue"
-    );
-    Ok(())
-  }
-
-  #[test]
-  fn host_sleep_timestamp_in_the_past_errors() -> anyhow::Result<()> {
+  fn host_sleep_until_in_the_past_errors() -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
 
     let dir = tempdir()?;
     let path = dir.path().join("sleep_past.rhai");
-    std::fs::write(&path, r#"omw::host::sleep_timestamp(1)"#)?;
+    std::fs::write(&path, r#"omw::host::sleep_until(1)"#)?;
 
     let ctx = test_ctx_with_bus("test-agent", path, bus)?;
     let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let result = run(&runtime, &ctx);
     assert!(
       result.is_err(),
-      "sleep_timestamp in the past should error, got {result:?}"
+      "sleep_until in the past should error, got {result:?}"
     );
     Ok(())
   }
@@ -692,7 +673,7 @@ mod tests {
   }
 
   #[test]
-  fn host_endpoint_subscribe_routes_message_visible_to_script()
+  fn host_subscribe_endpoint_routes_message_visible_to_script()
   -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
     let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
@@ -704,7 +685,7 @@ mod tests {
     std::fs::write(
       &path,
       r#"
-        let sub = omw::host::endpoint_subscribe("gpt-4o");
+        let sub = omw::host::subscribe_endpoint("gpt-4o");
         let e = omw::host::recv();
         let m = e.payload.messages[0];
         let t = e.payload.tools[0];
@@ -773,7 +754,7 @@ mod tests {
   }
 
   #[test]
-  fn host_endpoint_stream_sends_deltas_visible_on_session_channel()
+  fn host_stream_endpoint_sends_deltas_visible_on_session_channel()
   -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
     let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
@@ -794,8 +775,8 @@ mod tests {
       &path,
       format!(
         r#"
-        omw::host::endpoint_stream("{session}", #{{ content: "Hello" }});
-        omw::host::endpoint_stream("{session}", #{{ finish_reason: "stop" }});
+        omw::host::stream_endpoint("{session}", #{{ content: "Hello" }});
+        omw::host::stream_endpoint("{session}", #{{ finish_reason: "stop" }});
         "streamed"
       "#
       ),
@@ -830,7 +811,8 @@ mod tests {
   }
 
   #[test]
-  fn host_memory_get_set_del_roundtrip_through_script() -> anyhow::Result<()> {
+  fn host_memory_get_set_remove_roundtrip_through_script() -> anyhow::Result<()>
+  {
     let dir = tempdir()?;
     let path = dir.path().join("memory.rhai");
     std::fs::write(
@@ -840,9 +822,9 @@ mod tests {
         let first = omw::host::memory_get("k");
         omw::host::memory_set("k", "v2");
         let second = omw::host::memory_get("k");
-        let deleted = omw::host::memory_del("k");
+        let deleted = omw::host::memory_remove("k");
         let missing = omw::host::memory_get("k");
-        let deleted_again = omw::host::memory_del("k");
+        let deleted_again = omw::host::memory_remove("k");
         let missing_str = if missing == () { "none" } else { missing };
         first + "|" + second + "|" + deleted + "|" + missing_str + "|" + deleted_again
       "#,
@@ -916,7 +898,7 @@ mod tests {
   }
 
   #[test]
-  fn host_endpoint_stream_unknown_session_errors_in_script()
+  fn host_stream_endpoint_unknown_session_errors_in_script()
   -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
     let registry = Arc::new(crate::host::endpoint::EndpointRegistry::new(
@@ -927,7 +909,7 @@ mod tests {
     let path = dir.path().join("endpoint_bad_session.rhai");
     std::fs::write(
       &path,
-      r#"omw::host::endpoint_stream("nope", #{ content: "hi" })"#,
+      r#"omw::host::stream_endpoint("nope", #{ content: "hi" })"#,
     )?;
     let ctx = test_endpoint_ctx(path, bus, registry)?;
 
@@ -935,7 +917,7 @@ mod tests {
     let result = run(&runtime, &ctx);
     assert!(
       result.is_err(),
-      "endpoint_stream on an unknown session should error, got {result:?}"
+      "stream_endpoint on an unknown session should error, got {result:?}"
     );
     Ok(())
   }

@@ -1,7 +1,7 @@
 //! Host-side chat-stream pumps. Each `provider.chat-stream` call opens a stream
 //! registered by UUID in a [`StreamRegistry`]; a pump task on the bridge
 //! runtime reads the provider's stream and delivers `chat-delta` events into the
-//! requesting agent's inbox, then a terminal `stream-end` (or an `error` on
+//! requesting agent's inbox, then a terminal `chat-end` (or an `error` on
 //! failure) event closes it. `is-open`/`cancel` go through the registry, which
 //! doubles as the cancel signal: dropping an entry's sender wakes its pump's
 //! cancel receiver.
@@ -107,7 +107,7 @@ impl StreamRegistry {
 )]
 /// Spawn a pump task on `rt` that drains `provider.chat_stream(...)` and delivers its
 /// deltas into `name`'s inbox tagged with `uuid`. The pump runs to a terminal
-/// `stream-end` event on natural end (or an `error` event on failure) and then
+/// `chat-end` event on natural end (or an `error` event on failure) and then
 /// deregisters its stream.
 pub fn spawn_pump(
   provider: Arc<dyn Provider>,
@@ -161,7 +161,7 @@ pub fn spawn_pump(
           }
           None => {
             tracing::debug!(agent, uuid = %uuid, "chat stream ended");
-            bus.deliver(&name,&uuid, Event::StreamEnd);
+            bus.deliver(&name,&uuid, Event::ChatEnd);
             break;
           }
         },
@@ -203,7 +203,7 @@ mod tests {
   }
 
   #[test]
-  fn pump_delivers_deltas_then_stream_end() -> anyhow::Result<()> {
+  fn pump_delivers_deltas_then_chat_end() -> anyhow::Result<()> {
     let rt = Arc::new(
       tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -239,10 +239,10 @@ mod tests {
       other => anyhow::bail!("expected a delta, got {other:?}"),
     }
     let end = bus.recv("alice", Duration::from_secs(5))?;
-    assert_eq!(end.event, Event::StreamEnd);
+    assert_eq!(end.event, Event::ChatEnd);
     assert!(
       streams.wait_for(&uuid, false, Duration::from_secs(5)),
-      "stream should deregister after StreamEnd"
+      "stream should deregister after ChatEnd"
     );
     Ok(())
   }

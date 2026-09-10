@@ -130,11 +130,11 @@ listen = "127.0.0.1:8080"
 ```
 
 ```rhai
-let sub = omw::host::endpoint_subscribe("gpt-4o");
+let sub = omw::host::subscribe_endpoint("gpt-4o");
 ```
 
 Inbound requests arrive in the agent's inbox as `endpoint-message` events; the
-brain streams its reply back with `endpoint-stream` (SSE for `stream: true`, one
+brain streams its reply back with `stream_endpoint` (SSE for `stream: true`, one
 buffered JSON completion otherwise). `GET /v1/models` lists subscribed models.
 
 Edit brains live with `--watch` on either mode: when a brain file changes, the
@@ -143,7 +143,7 @@ subscriptions, and sessions survive on the shared bus. The new script is
 validated _before_ the live run ends, so a bad edit keeps the good run alive
 (plus an `error` event if the brain subscribed to lifecycle events) — and a
 broken script never starts (parks under `--watch`, fails fast without it).
-Brains opt in to `reload` / `shutdown` notices with `lifecycle_subscribe`.
+Brains opt in to `reload` / `shutdown` notices with `subscribe_lifecycle`.
 
 See the [endpoint] and [hot reload] pages for the full reference.
 

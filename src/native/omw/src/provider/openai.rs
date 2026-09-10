@@ -61,7 +61,7 @@ impl Provider for OpenAIProvider {
     "openai"
   }
 
-  async fn models(&self) -> Vec<String> {
+  async fn list_models(&self) -> Vec<String> {
     self
       .config
       .model
