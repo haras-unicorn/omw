@@ -12,6 +12,7 @@
     };
     settings.tooling.fs = {
       kind = "mcp";
+      transport = "stdio";
       command = "npx";
       args = [
         "-y"
