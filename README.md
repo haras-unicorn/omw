@@ -100,6 +100,7 @@ model = "gpt-4o"
 
 [tooling.mcp]
 kind = "mcp"
+transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-everything"]
 

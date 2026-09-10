@@ -7,21 +7,21 @@ the `initialize` lifecycle itself, mapping `rmcp`'s typed results onto omw's
 
 ## Transports
 
-| transport | default | config keys              | speaks over                    |
-| --------- | ------- | ------------------------ | ------------------------------ |
-| `stdio`   | yes     | `command`, `args`, `env` | a server subprocess, JSON-RPC  |
-| `http`    | no      | `url`, `auth_token`      | a streamable-HTTP MCP endpoint |
+| transport | config keys              | speaks over                    |
+| --------- | ------------------------ | ------------------------------ |
+| `stdio`   | `command`, `args`, `env` | a server subprocess, JSON-RPC  |
+| `http`    | `url`, `auth_token`      | a streamable-HTTP MCP endpoint |
 
 ## Configuration
 
-| key          | type   | transport | meaning                           |
-| ------------ | ------ | --------- | --------------------------------- |
-| `transport`  | string | both      | `stdio` (default) or `http`       |
-| `command`    | string | stdio     | the server executable             |
-| `args`       | list   | stdio     | extra arguments for the command   |
-| `env`        | attrs  | stdio     | extra environment for the command |
-| `url`        | string | http      | the endpoint URL                  |
-| `auth_token` | string | http      | sent as a `Bearer` token          |
+| key          | type   | transport | meaning                  |
+| ------------ | ------ | --------- | ------------------------ |
+| `transport`  | string | both      | `stdio` or `http`        |
+| `command`    | string | stdio     | the server executable    |
+| `args`       | list   | stdio     | extra arguments          |
+| `env`        | attrs  | stdio     | extra server environment |
+| `url`        | string | http      | the endpoint URL         |
+| `auth_token` | string | http      | sent as a `Bearer` token |
 
 The `auth_token` and `env` values are never logged: they are `Secret`s (locked
 with `mlock`, zeroized on drop) that redact on `Debug` and serialize, and `omw`
@@ -30,6 +30,7 @@ fails at startup if the lock cannot be taken.
 ```toml
 [tooling.mcp]
 kind = "mcp"
+transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-everything"]
 ```

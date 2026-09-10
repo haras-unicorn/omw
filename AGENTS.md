@@ -34,8 +34,9 @@ A Cargo workspace with three crates plus a single WIT contract.
     configured `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
-    implemented as a stdio JSON-RPC client in `mcp.rs`. The `build` factory
-    dispatches on the configured `kind`.
+    implemented as an MCP client in `mcp.rs` with a `transport`-tagged config
+    enum (`stdio` / `http`). The `build` factory dispatches on the configured
+    `kind`.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`) with
     `engine.rs` (the generic WASM component loader + a generic `run` that calls

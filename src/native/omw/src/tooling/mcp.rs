@@ -32,37 +32,23 @@ use super::{
 };
 use crate::secret::Secret;
 
-/// Which client transport to use for a single MCP server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Transport {
-  #[default]
-  Stdio,
-  #[serde(rename = "http")]
-  Http,
-}
-
-/// Impl-specific configuration for a single MCP server.
+/// Impl-specific configuration for a single MCP server, selected by
+/// transport.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Config {
-  /// Transport selection; defaults to `stdio`.
-  #[serde(default)]
-  pub transport: Option<Transport>,
-
-  // stdio transport options.
-  #[serde(default)]
-  pub command: Option<String>,
-  #[serde(default)]
-  pub args: Vec<String>,
-  #[serde(default)]
-  pub env: HashMap<String, Secret>,
-
-  // http transport options.
-  #[serde(default)]
-  pub url: Option<String>,
-  /// Optional bearer token sent as the `Authorization` header.
-  #[serde(default)]
-  pub auth_token: Option<Secret>,
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum Config {
+  Stdio {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, Secret>,
+  },
+  Http {
+    url: String,
+    #[serde(default)]
+    auth_token: Option<Secret>,
+  },
 }
 
 /// An MCP tooling bridge over one server, owned by an rmcp [`RoleClient`].
@@ -100,13 +86,7 @@ pub async fn build(name: &str, params: &Value) -> anyhow::Result<ToolingEntry> {
   let config = Config::deserialize(params)
     .with_context(|| format!("invalid mcp tooling config for {name:?}"))?;
 
-  tracing::debug!(
-    name,
-    transport = ?config.transport.unwrap_or_default(),
-    command = config.command.as_deref(),
-    url = config.url.as_deref(),
-    "built mcp tooling"
-  );
+  tracing::debug!(name, config = ?config, "built mcp tooling");
 
   let running: rmcp::service::RunningService<RoleClient, ()> = connect(&config)
     .await
@@ -125,15 +105,11 @@ pub async fn build(name: &str, params: &Value) -> anyhow::Result<ToolingEntry> {
 async fn connect(
   config: &Config,
 ) -> anyhow::Result<rmcp::service::RunningService<RoleClient, ()>> {
-  match config.transport.unwrap_or_default() {
-    Transport::Stdio => {
-      let command = config
-        .command
-        .as_ref()
-        .context("stdio transport requires `command`")?;
+  match config {
+    Config::Stdio { command, args, env } => {
       let mut cmd = tokio::process::Command::new(command);
-      cmd.args(&config.args);
-      for (key, value) in &config.env {
+      cmd.args(args);
+      for (key, value) in env {
         cmd.env(key, value.expose());
       }
       let transport = TokioChildProcess::new(cmd)
@@ -142,13 +118,9 @@ async fn connect(
         .await
         .map_err(anyhow::Error::msg)
     }
-    Transport::Http => {
-      let url = config
-        .url
-        .as_ref()
-        .context("http transport requires `url`")?;
+    Config::Http { url, auth_token } => {
       let mut cfg = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-      if let Some(token) = &config.auth_token {
+      if let Some(token) = auth_token {
         cfg.auth_header = Some(format!("Bearer {}", token.expose()));
       }
       let transport = StreamableHttpClientTransport::from_config(cfg);
@@ -337,4 +309,55 @@ fn resource_stream(
   Box::pin(futures_util::stream::unfold(rx, |mut rx| async move {
     rx.recv().await.map(|item| (item, rx))
   }))
+}
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use super::*;
+
+  #[test]
+  fn stdio_requires_command_but_defaults_args_and_env() -> anyhow::Result<()> {
+    let config = Config::deserialize(json!({
+      "transport": "stdio",
+      "command": "npx",
+    }))?;
+    let Config::Stdio { command, args, env } = config else {
+      return Err(anyhow::anyhow!("expected stdio config"));
+    };
+    assert_eq!(command, "npx");
+    assert!(args.is_empty());
+    assert!(env.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  fn http_requires_url_but_defaults_auth_token() -> anyhow::Result<()> {
+    let config = Config::deserialize(json!({
+      "transport": "http",
+      "url": "http://127.0.0.1:8080/mcp",
+    }))?;
+    let Config::Http { url, auth_token } = config else {
+      return Err(anyhow::anyhow!("expected http config"));
+    };
+    assert_eq!(url, "http://127.0.0.1:8080/mcp");
+    assert!(auth_token.is_none());
+    Ok(())
+  }
+
+  #[test]
+  fn missing_transport_is_rejected() {
+    assert!(Config::deserialize(json!({ "command": "npx" })).is_err());
+  }
+
+  #[test]
+  fn stdio_without_command_is_rejected() {
+    assert!(Config::deserialize(json!({ "transport": "stdio" })).is_err());
+  }
+
+  #[test]
+  fn http_without_url_is_rejected() {
+    assert!(Config::deserialize(json!({ "transport": "http" })).is_err());
+  }
 }

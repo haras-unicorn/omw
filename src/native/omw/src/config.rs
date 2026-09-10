@@ -411,6 +411,7 @@ mod tests {
 
         [tooling.mcp]
         kind = "mcp"
+        transport = "stdio"
         command = "npx"
         args = ["-y", "@modelcontextprotocol/server-everything"]
 
