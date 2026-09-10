@@ -138,6 +138,13 @@ reported in-band).
   (subscriptions, streams, timers) is one of these. The guest can also use it
   for its own purposes.
 
+## Base64
+
+- `base64-encode(bytes)` — encode raw bytes as standard padded base64 (RFC 4648
+  §4), matching the encoding of MCP `blob` resource contents.
+- `base64-decode(data)` — decode standard padded base64 back to raw bytes.
+  Errors on invalid input.
+
 ## Memory
 
 Per-agent string store that survives hot reloads:

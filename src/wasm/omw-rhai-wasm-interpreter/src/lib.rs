@@ -30,7 +30,7 @@ wit_bindgen::generate!({
 });
 
 use rhai_rt::{
-  Array, Dynamic, Engine, EvalAltResult, FnPtr, Map, Module, Position,
+  Array, Blob, Dynamic, Engine, EvalAltResult, FnPtr, Map, Module, Position,
 };
 
 /// The `runtime` interface is our export.
@@ -131,6 +131,8 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("recv", host_recv);
   host.set_native_fn("try_recv", host_try_recv);
   host.set_native_fn("new_uuid", host_new_uuid);
+  host.set_native_fn("base64_encode", host_base64_encode);
+  host.set_native_fn("base64_decode", host_base64_decode);
   host.set_native_fn("memory_get", host_memory_get);
   host.set_native_fn("memory_set", host_memory_set);
   host.set_native_fn("memory_del", host_memory_del);
@@ -568,6 +570,16 @@ fn host_try_recv() -> Result<Dynamic, Box<EvalAltResult>> {
 
 fn host_new_uuid() -> Result<String, Box<EvalAltResult>> {
   Ok(host::new_uuid())
+}
+
+/// Encode raw bytes (a rhai blob) as standard padded base64.
+fn host_base64_encode(bytes: Blob) -> Result<String, Box<EvalAltResult>> {
+  Ok(host::base64_encode(&bytes))
+}
+
+/// Decode standard padded base64 back to raw bytes (a rhai blob).
+fn host_base64_decode(data: &str) -> Result<Blob, Box<EvalAltResult>> {
+  host::base64_decode(data).map_err(to_error)
 }
 
 fn host_memory_get(key: &str) -> Result<Dynamic, Box<EvalAltResult>> {

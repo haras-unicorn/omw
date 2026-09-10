@@ -859,6 +859,42 @@ mod tests {
   }
 
   #[test]
+  fn host_base64_roundtrips_through_script() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("base64.rhai");
+    std::fs::write(
+      &path,
+      r#"
+        let decoded = omw::host::base64_decode("AAEC/w==");
+        let reencoded = omw::host::base64_encode(decoded);
+        reencoded + "|" + decoded.len()
+      "#,
+    )?;
+    let ctx = test_ctx(path, HashMap::new(), HashMap::new())?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(outcome, RunOutcome::Exited("AAEC/w==|4".to_string()),);
+    Ok(())
+  }
+
+  #[test]
+  fn host_base64_decode_rejects_invalid_through_script() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("base64_bad.rhai");
+    std::fs::write(&path, r#"omw::host::base64_decode("!!!")"#)?;
+    let ctx = test_ctx(path, HashMap::new(), HashMap::new())?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    let result = run(&runtime, &ctx);
+    assert!(
+      result.is_err(),
+      "base64_decode on invalid input should error, got {result:?}"
+    );
+    Ok(())
+  }
+
+  #[test]
   fn host_memory_survives_across_runs_on_the_same_context() -> anyhow::Result<()>
   {
     let dir = tempdir()?;
