@@ -63,8 +63,9 @@ sub-modules that expose the WIT interfaces to the script:
   `timestamp_sub`, `timestamp_diff`, `timestamp_format`, `wait_timestamp`,
   `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`,
   `endpoint_subscribe`, `endpoint_unsubscribe`, `endpoint_stream`, `send`,
-  `recv`, `try_recv`, `new_uuid`, `memory_get`, `memory_set`, `memory_del`,
-  `sleep_duration`, `sleep_timestamp`, and `sleep_cron`.
+  `recv`, `try_recv`, `new_uuid`, `base64_encode`, `base64_decode`,
+  `memory_get`, `memory_set`, `memory_del`, `sleep_duration`, `sleep_timestamp`,
+  and `sleep_cron`.
 
 Handles are Rhai maps. Methods are `FnPtr`s stored on them, so scripts call them
 method-style (`provider.chat_stream(...)`, `tooling.call-tool(...)`). The time
@@ -89,7 +90,8 @@ Events come back as maps shaped `#{ id, kind, payload }`:
   `{ name, description?, input_schema }`), a map for `endpoint-session-end`
   (`{ session, error? }`), and unit otherwise. The `content` field holds actual
   text for textual formats and base64 for anything else — match on `mime_type`
-  to tell which.
+  to tell which. Decode binary payloads with `omw::host::base64_decode` (which
+  returns a blob) and encode back with `omw::host::base64_encode`.
 
 ## Example brain
 

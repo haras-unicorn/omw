@@ -40,3 +40,5 @@ ignoreWords:
   - memlock
   - zeroize
   - rlimit
+  - reencoded
+  - aaec

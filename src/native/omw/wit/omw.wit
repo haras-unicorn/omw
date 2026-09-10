@@ -421,6 +421,14 @@ interface host {
   /// A fresh v4 UUID string (also used internally for every handle).
   new-uuid: func() -> string;
 
+  /// Encode raw bytes as standard padded base64 (RFC 4648 §4), matching the
+  /// encoding of MCP `blob` resource contents.
+  base64-encode: func(bytes: list<u8>) -> string;
+
+  /// Decode standard padded base64 back to raw bytes. Errors on invalid
+  /// input.
+  base64-decode: func(data: string) -> result<list<u8>, string>;
+
   /// Read a memory value by key. Returns none when the key is absent.
   /// Memory is per agent and survives hot reloads.
   memory-get: func(key: string) -> option<string>;

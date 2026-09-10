@@ -682,6 +682,29 @@ impl host_bindings::Host for Host {
     crate::host::bus::new_uuid()
   }
 
+  fn base64_encode(&mut self, bytes: Vec<u8>) -> String {
+    use base64::Engine as _;
+    tracing::trace!(
+      agent = %self.ctx.name,
+      bytes = bytes.len(),
+      "host base64-encode"
+    );
+    base64::prelude::BASE64_STANDARD.encode(bytes)
+  }
+
+  fn base64_decode(&mut self, data: String) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let result = base64::prelude::BASE64_STANDARD
+      .decode(data)
+      .map_err(|e| e.to_string())?;
+    tracing::trace!(
+      agent = %self.ctx.name,
+      bytes = result.len(),
+      "host base64-decode"
+    );
+    Ok(result)
+  }
+
   fn memory_get(&mut self, key: String) -> Option<String> {
     tracing::trace!(agent = %self.ctx.name, key = %key, "host memory-get");
     self.ctx.memory.get(&key)
@@ -1045,6 +1068,37 @@ mod tests {
     let parsed = uuid::Uuid::parse_str(&uuid)
       .map_err(|_| anyhow::anyhow!("not a valid uuid: {uuid:?}"))?;
     assert_eq!(parsed.get_version(), Some(uuid::Version::Random));
+    Ok(())
+  }
+
+  #[test]
+  fn base64_roundtrips_bytes() -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    let encoded = host.base64_encode(vec![0, 1, 2, 255]);
+    assert_eq!(encoded, "AAEC/w==");
+    let decoded = host
+      .base64_decode(encoded)
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert_eq!(decoded, vec![0, 1, 2, 255]);
+    Ok(())
+  }
+
+  #[test]
+  fn base64_empty_roundtrips() -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    let encoded = host.base64_encode(Vec::new());
+    assert_eq!(encoded, "");
+    let decoded = host
+      .base64_decode(encoded)
+      .map_err(|e| anyhow::anyhow!(e))?;
+    assert!(decoded.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  fn base64_decode_rejects_invalid() -> anyhow::Result<()> {
+    let mut host = test_host()?;
+    assert!(host.base64_decode("!!!".to_string()).is_err());
     Ok(())
   }
 
