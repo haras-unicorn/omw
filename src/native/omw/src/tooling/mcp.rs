@@ -30,6 +30,7 @@ use super::{
   ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
   ToolingEntry,
 };
+use crate::secret::Secret;
 
 /// Which client transport to use for a single MCP server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -42,7 +43,7 @@ pub enum Transport {
 }
 
 /// Impl-specific configuration for a single MCP server.
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
   /// Transport selection; defaults to `stdio`.
   #[serde(default)]
@@ -54,30 +55,14 @@ pub struct Config {
   #[serde(default)]
   pub args: Vec<String>,
   #[serde(default)]
-  pub env: HashMap<String, String>,
+  pub env: HashMap<String, Secret>,
 
   // http transport options.
   #[serde(default)]
   pub url: Option<String>,
   /// Optional bearer token sent as the `Authorization` header.
   #[serde(default)]
-  pub auth_token: Option<String>,
-}
-
-impl std::fmt::Debug for Config {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("Config")
-      .field("transport", &self.transport)
-      .field("command", &self.command)
-      .field("args", &self.args)
-      .field("env_keys", &self.env.keys().collect::<Vec<_>>())
-      .field("url", &self.url)
-      .field(
-        "auth_token",
-        &self.auth_token.as_ref().map(|_| "<redacted>"),
-      )
-      .finish()
-  }
+  pub auth_token: Option<Secret>,
 }
 
 /// An MCP tooling bridge over one server, owned by an rmcp [`RoleClient`].
@@ -149,7 +134,7 @@ async fn connect(
       let mut cmd = tokio::process::Command::new(command);
       cmd.args(&config.args);
       for (key, value) in &config.env {
-        cmd.env(key, value);
+        cmd.env(key, value.expose());
       }
       let transport = TokioChildProcess::new(cmd)
         .context("failed to spawn MCP server process")?;
@@ -164,7 +149,7 @@ async fn connect(
         .context("http transport requires `url`")?;
       let mut cfg = StreamableHttpClientTransportConfig::with_uri(url.as_str());
       if let Some(token) = &config.auth_token {
-        cfg.auth_header = Some(format!("Bearer {token}"));
+        cfg.auth_header = Some(format!("Bearer {}", token.expose()));
       }
       let transport = StreamableHttpClientTransport::from_config(cfg);
       ().serve_with_lifecycle(transport, ClientLifecycleMode::Initialize)

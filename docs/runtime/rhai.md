@@ -15,7 +15,7 @@ at build time instead.
 
 ## Configuration
 
-The rhai runtime takes no required parameters:
+The rhai runtime takes no required parameters beyond the shared WASI sandbox:
 
 ```toml
 [runtime.rhai]
@@ -29,7 +29,20 @@ script = "brain.rhai"
 
 A custom interpreter component can be substituted via the runtime's
 `interpreter` parameter; otherwise the interpreter compiled into the binary is
-used.
+used. The same WASI sandbox keys as the [wasm runtime](wasm.md) apply, flattened
+alongside `interpreter`:
+
+```toml
+[runtime.rhai]
+kind = "rhai"
+inherit_env = true
+env = { FOO = "bar" }
+
+[[runtime.rhai.preopens]]
+host_path = "./data"
+guest_path = "/data"
+perms = "read_only"
+```
 
 ## The interpreter and the WIT bindings
 

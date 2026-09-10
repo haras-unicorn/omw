@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{ChatDelta, ChatMessage, Provider, ProviderEntry, Role, ToolCall};
+use crate::secret::Secret;
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-family provider.
@@ -22,22 +23,9 @@ pub struct Config {
   #[serde(default)]
   pub base_url: Option<String>,
   #[serde(default)]
-  pub api_key: Option<String>,
+  pub api_key: Option<Secret>,
   #[serde(default)]
   pub model: Option<String>,
-}
-
-impl Config {
-  /// A debug-friendly view with `api_key` redacted, so it can be logged
-  /// without leaking the secret.
-  fn debug_redacted(&self) -> String {
-    serde_json::json!({
-      "base_url": self.base_url,
-      "api_key": self.api_key.as_ref().map(|_| "<redacted>"),
-      "model": self.model,
-    })
-    .to_string()
-  }
 }
 
 /// An OpenAI-compatible chat provider backed by `reqwest`.
@@ -50,7 +38,7 @@ pub struct OpenAIProvider {
 pub fn build(name: &str, params: &Value) -> anyhow::Result<ProviderEntry> {
   let config = Config::deserialize(params)
     .with_context(|| format!("invalid openai provider config for {name:?}"))?;
-  tracing::debug!(name, config = %config.debug_redacted(), "built openai provider");
+  tracing::debug!(name, config = ?config, "built openai provider");
   Ok(ProviderEntry {
     name: name.to_string(),
     kind: OpenAIProvider::kind(),
@@ -115,7 +103,7 @@ impl Provider for OpenAIProvider {
 
     let mut request = self.client.post(&url);
     if let Some(api_key) = &self.config.api_key {
-      request = request.bearer_auth(api_key);
+      request = request.bearer_auth(api_key.expose());
     }
     let resp = request
       .json(&body)
@@ -630,7 +618,7 @@ mod tests {
         "model": "gpt-test",
     }))?;
     assert_eq!(cfg.base_url.as_deref(), Some("https://example.com/v1"));
-    assert_eq!(cfg.api_key.as_deref(), Some("sk-test"));
+    assert_eq!(cfg.api_key.as_ref().map(|k| k.expose()), Some("sk-test"));
     assert_eq!(cfg.model.as_deref(), Some("gpt-test"));
     Ok(())
   }

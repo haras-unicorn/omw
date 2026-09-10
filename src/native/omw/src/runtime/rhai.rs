@@ -13,7 +13,7 @@ use serde::de::IntoDeserializer;
 use serde_json::Value;
 
 use crate::host::ctx::AgentContext;
-use crate::runtime::engine::WasmEngine;
+use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{RunOutcome, Runtime};
 
 const RHAI_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
@@ -24,6 +24,8 @@ const RHAI_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
 pub struct Config {
   #[serde(default)]
   pub interpreter: Option<PathBuf>,
+  #[serde(default, flatten)]
+  pub wasi: WasiConfig,
 }
 
 /// Wraps a [`WasmEngine`] pointed at the rhai interpreter component.
@@ -43,7 +45,7 @@ pub struct RhaiWasmRuntime {
 impl RhaiWasmRuntime {
   /// Load a rhai evaluator component.
   pub fn new(name: String, config: Config) -> anyhow::Result<Self> {
-    tracing::info!(name = %name, config = ?config, "loading rhai interpreter");
+    tracing::info!(name = %name, interpreter = ?config.interpreter, "loading rhai interpreter");
     let wasm = if let Some(interpreter) = config.interpreter.clone() {
       WasmEngine::from_path(&interpreter)?
     } else {
@@ -91,13 +93,15 @@ impl Runtime for RhaiWasmRuntime {
 
     let wasm = self.wasm.clone();
     let ctx = ctx.clone();
+    let wasi = self.config.wasi.clone();
 
     // The wasm engine here is synchronous; push it off the tokio worker so
     // the host imports (which use `Runtime::block_on`) run on a thread that
     // is not itself inside a tokio runtime.
-    let outcome = tokio::task::spawn_blocking(move || wasm.run(ctx, script))
-      .await
-      .context("rhai runtime task failed")??;
+    let outcome =
+      tokio::task::spawn_blocking(move || wasm.run(ctx, script, &wasi))
+        .await
+        .context("rhai runtime task failed")??;
 
     Ok(outcome.map_or(RunOutcome::Completed, RunOutcome::Exited))
   }
@@ -112,9 +116,12 @@ impl Runtime for RhaiWasmRuntime {
     let wasm = self.wasm.clone();
     let ctx_clone = ctx.clone();
     let check_script = script.clone();
-    tokio::task::spawn_blocking(move || wasm.check(ctx_clone, check_script))
-      .await
-      .context("rhai check task failed")??;
+    let wasi = self.config.wasi.clone();
+    tokio::task::spawn_blocking(move || {
+      wasm.check(ctx_clone, check_script, &wasi)
+    })
+    .await
+    .context("rhai check task failed")??;
     if let Ok(mut slot) = self.last_good.lock() {
       *slot = Some(script);
     }

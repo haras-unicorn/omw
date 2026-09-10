@@ -28,3 +28,10 @@ ignoreWords:
   - modelcontextprotocol
   - tunables
   - backoffs
+  - preopen
+  - preopens
+  - preopened
+  - sandboxing
+  - mlock
+  - zeroize
+  - zeroized

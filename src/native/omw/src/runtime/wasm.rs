@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::host::ctx::AgentContext;
-use crate::runtime::engine::WasmEngine;
+use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{RunOutcome, Runtime};
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -13,7 +13,10 @@ use serde::de::IntoDeserializer;
 use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct Config {}
+pub struct Config {
+  #[serde(default, flatten)]
+  pub wasi: WasiConfig,
+}
 
 /// Loads the agent's wasm brain from `ctx.script` and runs it.
 #[derive(Clone, Default)]
@@ -58,15 +61,17 @@ impl Runtime for WasmRuntime {
       }
     };
     let ctx = ctx.clone();
+    let wasi = self.config.wasi.clone();
 
     // The wasm engine here is synchronous; push it off the tokio worker so
     // the host imports (which use `Runtime::block_on`) run on a thread that
     // is not itself inside a tokio runtime. The script argument is unused by
     // wasm brains; their brain is the component itself.
-    let outcome =
-      tokio::task::spawn_blocking(move || engine.run(ctx, String::new()))
-        .await
-        .context("wasm brain task failed")??;
+    let outcome = tokio::task::spawn_blocking(move || {
+      engine.run(ctx, String::new(), &wasi)
+    })
+    .await
+    .context("wasm brain task failed")??;
 
     Ok(outcome.map_or(RunOutcome::Completed, RunOutcome::Exited))
   }
@@ -75,9 +80,12 @@ impl Runtime for WasmRuntime {
     let engine = WasmEngine::from_path(&ctx.script)
       .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))?;
     let ctx_clone = ctx.clone();
-    tokio::task::spawn_blocking(move || engine.check(ctx_clone, String::new()))
-      .await
-      .context("wasm check task failed")??;
+    let wasi = self.config.wasi.clone();
+    tokio::task::spawn_blocking(move || {
+      engine.check(ctx_clone, String::new(), &wasi)
+    })
+    .await
+    .context("wasm check task failed")??;
     if let Ok(fresh) = WasmEngine::from_path(&ctx.script)
       && let Ok(mut slot) = self.last_good.lock()
     {

@@ -13,8 +13,9 @@ services.
 | `api_key`  | string | unset (no auth)             | sent as a `Bearer` token             |
 | `model`    | string | unset                       | the model reported by `models()`     |
 
-All keys are optional. The `api_key` is never logged: the config's value is
-redacted in debug output and in the provider's `Debug` impl.
+All keys are optional. The `api_key` is never logged: it is a `Secret` (locked
+with `mlock`, zeroized on drop) that redacts on `Debug` and serialize, and `omw`
+fails at startup if the lock cannot be taken.
 
 ```toml
 [providers.openai]

@@ -23,8 +23,9 @@ the `initialize` lifecycle itself, mapping `rmcp`'s typed results onto omw's
 | `url`        | string | http      | the endpoint URL                  |
 | `auth_token` | string | http      | sent as a `Bearer` token          |
 
-The `auth_token` is never logged: it is redacted in the tooling's debug output,
-along with the configured environment keys.
+The `auth_token` and `env` values are never logged: they are `Secret`s (locked
+with `mlock`, zeroized on drop) that redact on `Debug` and serialize, and `omw`
+fails at startup if the lock cannot be taken.
 
 ```toml
 [tooling.mcp]

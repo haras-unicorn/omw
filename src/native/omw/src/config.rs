@@ -18,13 +18,33 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A single configured implementation: which kind plus opaque params.
-#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
+#[derive(Deserialize, Clone, Serialize, JsonSchema)]
 pub struct ImplConfig {
   /// Which implementation this is.
   pub kind: String,
   /// Impl-specific options, validated at construction time.
   #[serde(flatten)]
   pub params: serde_json::Value,
+}
+
+impl std::fmt::Debug for ImplConfig {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self.params.as_object() {
+      Some(map) => {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        f.debug_struct("ImplConfig")
+          .field("kind", &self.kind)
+          .field("params_keys", &keys)
+          .finish()
+      }
+      None => f
+        .debug_struct("ImplConfig")
+        .field("kind", &self.kind)
+        .field("params", &"<non-object>")
+        .finish(),
+    }
+  }
 }
 
 /// Optional HTTP endpoint configuration: starts an OpenAI-compatible chat
@@ -303,46 +323,9 @@ impl RunArgs {
       agents = config.agents.len(),
       "configuration loaded"
     );
-    tracing::debug!(
-      config = %redacted_config(&config),
-      "configuration details"
-    );
+    tracing::debug!(config = ?config, "configuration details");
     Ok(config)
   }
-}
-
-/// Redact known secret keys (`api_key`, `auth_token`) from a JSON value,
-/// descending into nested objects and arrays.
-fn redact(value: &mut serde_json::Value) {
-  match value {
-    serde_json::Value::Object(map) => {
-      for (key, child) in map {
-        if matches!(key.as_str(), "api_key" | "auth_token") {
-          *child = serde_json::Value::String("<redacted>".to_string());
-        } else {
-          redact(child);
-        }
-      }
-    }
-    serde_json::Value::Array(items) => {
-      for item in items {
-        redact(item);
-      }
-    }
-    _ => {}
-  }
-}
-
-/// A debug render of a [`Config`] with known secret params redacted, so the
-/// full shape can be logged without leaking `api_key` / `auth_token`.
-fn redacted_config(cfg: &Config) -> String {
-  let mut json = match serde_json::to_value(cfg) {
-    Ok(json) => json,
-    Err(_) => return "<unserializable>".to_string(),
-  };
-  redact(&mut json);
-  serde_json::to_string(&json)
-    .unwrap_or_else(|_| "<unserializable>".to_string())
 }
 
 /// Generate the JSON schema for the configuration and write it to `path`.

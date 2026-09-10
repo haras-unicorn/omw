@@ -27,6 +27,7 @@ futures-util = "0.3.34"
 kanal = "0.1.1"
 notify = { version = "8.2.0", features = ["serde"] }
 notify-debouncer-mini = "0.7.0"
+os-memlock = "0.2.0"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 rmcp = { version = "3.1.4", features = [
   "client",
@@ -57,6 +58,7 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 wat.workspace = true
+zeroize = { version = "1.9.0", features = ["derive", "serde"] }
 
 [build-dependencies]
 wasmtime.workspace = true

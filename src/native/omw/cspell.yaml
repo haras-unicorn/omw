@@ -30,3 +30,13 @@ ignoreWords:
   - debouncer
   - toctou
   - dashmap
+  - preopen
+  - preopens
+  - preopened
+  - mlock
+  - munlock
+  - madvise
+  - dontdump
+  - memlock
+  - zeroize
+  - rlimit

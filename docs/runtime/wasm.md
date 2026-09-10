@@ -7,8 +7,31 @@ component, the brain is fully portable and the host never sees its logic.
 
 ## Configuration
 
-The wasm runtime takes no parameters — the brain is a file named by the agent's
-`script`:
+The wasm runtime's brain is a file named by the agent's `script`, plus an
+optional WASI sandbox (deny-by-default, like `WasiCtxBuilder`):
+
+```toml
+[runtime.wasm]
+kind = "wasm"
+inherit_env = true
+env = { FOO = "bar" }
+args = ["--flag"]
+initial_cwd = "/work"
+
+[[runtime.wasm.preopens]]
+host_path = "./data"
+guest_path = "/data"
+perms = "read_write" # or "read_only" (default)
+```
+
+Available keys: `inherit_stdio` (shorthand for all three below), `inherit_stdin`
+/ `inherit_stdout` / `inherit_stderr`, `inherit_env`, `env`, `inherit_args`,
+`args`, `initial_cwd`, `preopens`, `allow_blocking_current_thread`,
+`insecure_random_seed`, `max_random_size`, `allow_tcp` / `allow_udp` /
+`allow_ip_name_lookup`, and `inherit_network` (enables all three network flags
+with a permissive address check). The whole block is per named `[runtime.*]`
+entry: to give another agent different sandboxing, declare another runtime and
+point the agent at it.
 
 ```toml
 [runtime.wasm]

@@ -17,6 +17,7 @@ pub mod host;
 pub mod log;
 pub mod provider;
 pub mod runtime;
+pub mod secret;
 pub mod tooling;
 pub mod watch;
 
