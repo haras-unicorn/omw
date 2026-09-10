@@ -19,7 +19,7 @@ agents all land in the same inbox as an [`EventEnvelope`][events] carrying:
 
 - `id` — the UUID of the _subscribed source_ the event came from.
 - `event` — the strongly-typed payload (`message`, `error`, `timer`,
-  `chat-delta`, `stream-end`, `resource-list-updated`, `resource-updated`,
+  `chat-delta`, `chat-end`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`).
 
 The brain consumes events with `host.recv` (a blocking receive with a host-side
@@ -34,9 +34,9 @@ the envelope `id` against the UUID returned by the call that created it.
 Inter-agent messaging is subscription-based. An agent does not receive anything
 from another agent unless it explicitly subscribed:
 
-- `host.subscribe(agent)` returns a new UUID handle for that source.
-- `host.unsubscribe(uuid)` removes a subscription by handle.
-- `host.send(agent, payload)` delivers the message only if the _recipient_
+- `host.subscribe-agent(agent)` returns a new UUID handle for that source.
+- `host.unsubscribe-agent(uuid)` removes a subscription by handle.
+- `host.send-agent(agent, payload)` delivers the message only if the _recipient_
   subscribed to the _sender_. Each recipient's message is tagged with the UUID
   of _its own_ subscription to the sender, not a global topic, so a sender
   fanning out to many subscribers reaches each one through a distinct handle.
@@ -52,25 +52,25 @@ runtime (the `AgentContext.rt` tokio runtime), which pushes events into the
 inbox:
 
 - a `provider.chat-stream` call spawns a [chat-stream pump][streams] that
-  delivers `chat-delta` events as chunks arrive and a terminal `stream-end` (or
+  delivers `chat-delta` events as chunks arrive and a terminal `chat-end` (or
   `error`) event when the stream closes.
 - a `tooling.call-tool` queues a [tool-call pump][tools] that delivers a
   `tool-result` (or `error` on failure) event.
 - a `tooling.subscribe-resource-list` / `subscribe-resource` call spawns a
   [resource pump][resources] that delivers `resource-list-updated` /
   `resource-updated` events.
-- a `host.wait-timestamp` / `wait-duration` / `wait-cron` call schedules a
-  [timer][time] that pushes a `Timer` event at the deadline.
+- a `host.wait-until` / `wait-for` / `wait-cron` call schedules a [timer][time]
+  that pushes a `Timer` event at the deadline.
 
 Every pump holds a cancel signal keyed by its UUID handle: `provider.cancel`,
-`host.cancel`, and the `tooling.unsubscribe-*` calls can drop it early, stopping
-further deliveries before the source naturally ends.
+`host.cancel-timer`, and the `tooling.unsubscribe-*` calls can drop it early,
+stopping further deliveries before the source naturally ends.
 
-Pull-style calls (`models`, `list-tools`, `list-resources`) are far shorter, so
-the host runs them to completion with `rt.block_on` instead of spawning a pump.
-Both approaches run _off_ the wasm thread — pump tasks on the tokio runtime,
-blocking calls on the `spawn_blocking` thread the engine runs on — so the
-synchronous engine never blocks a tokio worker.
+Pull-style calls (`list-models`, `list-tools`, `list-resources`) are far
+shorter, so the host runs them to completion with `rt.block_on` instead of
+spawning a pump. Both approaches run _off_ the wasm thread — pump tasks on the
+tokio runtime, blocking calls on the `spawn_blocking` thread the engine runs on
+— so the synchronous engine never blocks a tokio worker.
 
 ## Endpoint requests
 

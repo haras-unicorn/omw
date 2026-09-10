@@ -93,7 +93,7 @@ pub trait Provider: Send + Sync {
     Self: Sized;
 
   /// The model names this provider exposes to agents at runtime.
-  async fn models(&self) -> Vec<String>;
+  async fn list_models(&self) -> Vec<String>;
 
   async fn chat(
     &self,

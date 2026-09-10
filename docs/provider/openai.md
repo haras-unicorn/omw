@@ -7,11 +7,11 @@ services.
 
 ## Configuration
 
-| key        | type   | default                     | meaning                              |
-| ---------- | ------ | --------------------------- | ------------------------------------ |
-| `base_url` | string | `https://api.openai.com/v1` | API base, before `/chat/completions` |
-| `api_key`  | string | unset (no auth)             | sent as a `Bearer` token             |
-| `model`    | string | unset                       | the model reported by `models()`     |
+| key        | type   | default                     | meaning                               |
+| ---------- | ------ | --------------------------- | ------------------------------------- |
+| `base_url` | string | `https://api.openai.com/v1` | API base, before `/chat/completions`  |
+| `api_key`  | string | unset (no auth)             | sent as a `Bearer` token              |
+| `model`    | string | unset                       | the model reported by `list-models()` |
 
 All keys are optional. The `api_key` is never logged: it is a `Secret` (locked
 with `mlock`, zeroized on drop) that redacts on `Debug` and serialize, and `omw`
@@ -32,7 +32,7 @@ returned as an error _before any delta_ — satisfying the interface's streaming
 contract. On success the response body is decoded line by line:
 
 - lines are split on newlines and stripped of their `data:` prefix;
-- a `[DONE]` marker ends the stream with a final `stream-end`,
+- a `[DONE]` marker ends the stream with a final `chat-end`,
 - each JSON chunk contributes one `delta` event.
 
 ### Tool-call reassembly

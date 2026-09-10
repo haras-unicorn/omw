@@ -30,8 +30,8 @@ Preserved across reload:
 - Inboxes (queued events are never drained or dropped).
 - Agent subscriptions and endpoint subscriptions.
 - Providers, tooling, and endpoint sessions.
-- Per-agent memory (`host.memory-get` / `memory-set` / `memory-del`): the same
-  `AgentContext` is reused, so stored handles and state-machine state carry
+- Per-agent memory (`host.memory-get` / `memory-set` / `memory-remove`): the
+  same `AgentContext` is reused, so stored handles and state-machine state carry
   over. Treat entries like variables, not a database.
 
 Discarded on reload:
@@ -85,7 +85,7 @@ Every host call parks somewhere different, so each needs its own interrupt:
 | `tooling.call-tool` pump                                                | `select!` on the future              | abort drops the in-flight call                                                                                     | MCP call dropped client-side              |
 | blocking `provider.chat`                                                | abort slices (`reload_poll_ms`)      | abort handle, `Err("agent reloaded")`                                                                              | normal completed request, result dropped  |
 | blocking `call-tool-blocking`, `list-*`, `read-resource`, `subscribe-*` | same helper                          | same as above                                                                                                      | server runs to completion, result dropped |
-| blocking `sleep-duration/timestamp/cron`                                | same helper                          | same as above = true cancel                                                                                        | nothing                                   |
+| blocking `sleep-for/until/cron`                                         | same helper                          | same as above = true cancel                                                                                        | nothing                                   |
 | pure wasm `while true {}`                                               | executing wasm, never yields to host | epoch trap after grace + `epoch_budget_ms`                                                                         | nothing                                   |
 
 All values are [tunables](./tunables.md) with the defaults listed there.
@@ -96,8 +96,8 @@ Subscribe to lifecycle events explicitly and correlate by UUID, like every other
 subscription in the actor model (see [host](./host.md)):
 
 ```rhai
-let lc = omw::host::lifecycle_subscribe();
-let sub = omw::host::subscribe("other");
+let lc = omw::host::subscribe_lifecycle();
+let sub = omw::host::subscribe_agent("other");
 loop {
   let e = omw::host::recv();
   if e.id == lc {
@@ -110,12 +110,12 @@ loop {
   }
   // ... handle e ...
 }
-omw::host::lifecycle_unsubscribe(lc);
+omw::host::unsubscribe_lifecycle(lc);
 ```
 
 Rules:
 
-- Lifecycle is opt-in: `lifecycle_subscribe` returns a UUID; `reload`,
+- Lifecycle is opt-in: `subscribe_lifecycle` returns a UUID; `reload`,
   `shutdown`, and reload-failure `error` events arrive tagged with it. A second
   subscribe errors (one lifecycle subscription per run). Unsubscribed brains
   still get aborted on a _valid_ reload (`recv` errors), but get no events and
@@ -130,7 +130,7 @@ Rules:
 ```rhai
 let sub = omw::host::memory_get("other-sub");
 if sub == () {
-  sub = omw::host::subscribe("other");
+  sub = omw::host::subscribe_agent("other");
   omw::host::memory_set("other-sub", sub);
 }
 ```
@@ -149,8 +149,8 @@ if sub == () {
   run.
 - Never `while true {}` without a host yield; an unyielding loop can only die by
   epoch trap.
-- Pollers should use `try-recv` + small `wait-duration`, so the `reload` /
-  `error` events are observed promptly.
+- Pollers should use `try-recv` + small `wait-for`, so the `reload` / `error`
+  events are observed promptly.
 - A broken script never starts, so the first thing a fresh brain can assume is
   that it compiled.
 
@@ -166,8 +166,8 @@ if sub == () {
   Reload cancels all open pumps; if you held the UUID, re-check `is-open` after
   `reload` instead of assuming it is alive.
 - "CPU spins after save": a `while true {}` without a host yield. Only the epoch
-  trap can kill it, after the grace. Add a `recv`, `wait-duration`, or
-  `sleep-duration` to the loop.
+  trap can kill it, after the grace. Add a `recv`, `wait-for`, or `sleep-for` to
+  the loop.
 - "Edit did nothing": the script was invalid. Check host logs for the warning
   and, if subscribed, the lifecycle `error` payload. The live run kept going;
   fix the script and save again.

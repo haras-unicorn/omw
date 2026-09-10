@@ -52,20 +52,20 @@ The bundled guest (`omw-rhai-wasm-interpreter`) exports the `runtime` interface
 sub-modules that expose the WIT interfaces to the script:
 
 - `omw::provider::get(name)` — returns a provider handle map whose blocking
-  `chat`, streaming `chat_stream`, `is-open`, `cancel`, `models`, and `kind`
-  entries are methods.
+  `chat`, streaming `chat_stream`, `is-open`, `cancel`, `list_models`, and
+  `kind` entries are methods.
 - `omw::tooling::get(name)` — returns a tooling handle map whose `list-tools`,
   `call-tool`, `is-open`, `cancel`, `call-tool-blocking`, `list-resources`,
   `read-resource`, `subscribe-resource-list`, `subscribe-resource`,
   `unsubscribe-resource-list`, `unsubscribe-resource`, and `kind` entries are
   methods.
-- `omw::host::*` — the host helpers: `log`, `now`, `timestamp_add`,
-  `timestamp_sub`, `timestamp_diff`, `timestamp_format`, `wait_timestamp`,
-  `wait_duration`, `wait_cron`, `cancel`, `subscribe`, `unsubscribe`,
-  `endpoint_subscribe`, `endpoint_unsubscribe`, `endpoint_stream`, `send`,
+- `omw::host::*` — the host helpers: `log`, `time_now`, `time_format`,
+  `wait_until`, `wait_for`, `wait_cron`, `cancel_timer`, `subscribe_agent`,
+  `unsubscribe_agent`, `subscribe_lifecycle`, `unsubscribe_lifecycle`,
+  `subscribe_endpoint`, `unsubscribe_endpoint`, `stream_endpoint`, `send_agent`,
   `recv`, `try_recv`, `new_uuid`, `base64_encode`, `base64_decode`,
-  `memory_get`, `memory_set`, `memory_del`, `sleep_duration`, `sleep_timestamp`,
-  and `sleep_cron`.
+  `memory_get`, `memory_set`, `memory_remove`, `sleep_for`, `sleep_until`, and
+  `sleep_cron`.
 
 Handles are Rhai maps. Methods are `FnPtr`s stored on them, so scripts call them
 method-style (`provider.chat_stream(...)`, `tooling.call-tool(...)`). The time
@@ -77,7 +77,7 @@ integers to the WIT `u64` tick type at the boundary (rejecting negatives).
 Events come back as maps shaped `#{ id, kind, payload }`:
 
 - `id` — the envelope's UUID;
-- `kind` — one of `message`, `error`, `timer`, `chat-delta`, `stream-end`,
+- `kind` — one of `message`, `error`, `timer`, `chat-delta`, `chat-end`,
   `tool-result`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, a map for `chat-delta` (with
@@ -105,7 +105,7 @@ let out = "";
 loop {
   let ev = omw::host::recv();
   if ev.kind == "chat-delta" { out += ev.payload.content }
-  if ev.kind == "stream-end" { break }
+  if ev.kind == "chat-end" { break }
   if ev.kind == "error" { throw ev.payload }
 }
 out
@@ -116,10 +116,10 @@ The script's final value becomes its terminal message when it is not unit.
 ## Memory
 
 `memory_get` returns the value or unit when absent; `memory_set` stores;
-`memory_del` returns true when a value was present:
+`memory_remove` returns true when a value was present:
 
 ```rhai
-omw::host::memory_set("timer", omw::host::wait_duration(1000));
+omw::host::memory_set("timer", omw::host::wait_for(1000));
 // ... after a reload, the same context still has it:
 let timer = omw::host::memory_get("timer");
 ```

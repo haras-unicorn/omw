@@ -6,7 +6,7 @@ let
   tick-script = ''
     loop {
       omw::host::log("info", "tick");
-      let id = omw::host::wait_duration(200);
+      let id = omw::host::wait_for(200);
       let e = omw::host::recv();
     }
   '';

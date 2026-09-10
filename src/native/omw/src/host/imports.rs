@@ -5,7 +5,7 @@
 //! Because the wasm engine runs synchronously here, async work is bridged two
 //! ways:
 //!   * `provider.chat-stream` spawns a pump task (see `host/streams.rs`) on the
-//!     shared tokio runtime that delivers `chat-delta` / `stream-end` events into the
+//!     shared tokio runtime that delivers `chat-delta` / `chat-end` events into the
 //!     agent's inbox.
 //!   * `tooling.*` and `host.*` results are obtained with
 //!     [`Runtime::block_on`], which is only legal on threads that are not
@@ -75,14 +75,14 @@ impl provider_bindings::HostProvider for Host {
       .unwrap_or_default()
   }
 
-  fn models(&mut self, self_: Resource<ProviderEntry>) -> Vec<String> {
+  fn list_models(&mut self, self_: Resource<ProviderEntry>) -> Vec<String> {
     let Some(entry) = self.table.get(&self_).ok() else {
       return Vec::new();
     };
     let entry_name = entry.name.clone();
     let agent = self.ctx.name.clone();
     let provider = Arc::clone(&entry.provider);
-    let list = async move { provider.models().await };
+    let list = async move { provider.list_models().await };
     match self.ctx.block_on_reload(list) {
       Ok(models) => models,
       Err(error) => {
@@ -434,29 +434,17 @@ impl host_bindings::Host for Host {
     }
   }
 
-  fn now(&mut self) -> u64 {
+  fn time_now(&mut self) -> u64 {
     crate::host::time::now_ticks()
   }
 
-  fn timestamp_add(&mut self, ts: u64, ms: u64) -> u64 {
-    crate::host::time::add(ts, ms)
-  }
-
-  fn timestamp_sub(&mut self, ts: u64, ms: u64) -> u64 {
-    crate::host::time::sub(ts, ms)
-  }
-
-  fn timestamp_diff(&mut self, a: u64, b: u64) -> i64 {
-    crate::host::time::diff(a, b)
-  }
-
-  fn timestamp_format(&mut self, ts: u64, format: String) -> String {
+  fn time_format(&mut self, ts: u64, format: String) -> String {
     crate::host::time::format(ts, &format)
   }
 
-  fn wait_timestamp(&mut self, ts: u64) -> Result<String, String> {
+  fn wait_until(&mut self, ts: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
-    crate::host::time::wait_timestamp(
+    crate::host::time::wait_until(
       &self.ctx.bus,
       &self.ctx.rt(),
       &self.ctx.timers,
@@ -467,9 +455,9 @@ impl host_bindings::Host for Host {
     Ok(uuid)
   }
 
-  fn wait_duration(&mut self, ms: u64) -> Result<String, String> {
+  fn wait_for(&mut self, ms: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
-    crate::host::time::wait_duration(
+    crate::host::time::wait_for(
       &self.ctx.bus,
       &self.ctx.rt(),
       &self.ctx.timers,
@@ -493,55 +481,55 @@ impl host_bindings::Host for Host {
     Ok(uuid)
   }
 
-  fn send(&mut self, agent: String, payload: String) {
-    tracing::debug!(caller = %self.ctx.name, dest = %agent, "host send");
+  fn send_agent(&mut self, agent: String, payload: String) {
+    tracing::debug!(caller = %self.ctx.name, dest = %agent, "host send-agent");
     self.ctx.bus.send(&self.ctx.name, &agent, payload);
   }
 
-  fn subscribe(&mut self, agent: String) -> Result<String, String> {
+  fn subscribe_agent(&mut self, agent: String) -> Result<String, String> {
     let uuid = self.ctx.bus.subscribe(&self.ctx.name, &agent);
-    tracing::info!(agent = %self.ctx.name, source = %agent, uuid = %uuid, "host subscribe");
+    tracing::info!(agent = %self.ctx.name, source = %agent, uuid = %uuid, "host subscribe-agent");
     Ok(uuid)
   }
 
-  fn lifecycle_subscribe(&mut self) -> Result<String, String> {
+  fn subscribe_lifecycle(&mut self) -> Result<String, String> {
     let result = self.ctx.bus.lifecycle_subscribe(&self.ctx.name);
     match &result {
       Ok(uuid) => {
-        tracing::info!(agent = %self.ctx.name, uuid = %uuid, "host lifecycle-subscribe")
+        tracing::info!(agent = %self.ctx.name, uuid = %uuid, "host subscribe-lifecycle")
       }
       Err(error) => {
-        tracing::warn!(agent = %self.ctx.name, error = %error, "host lifecycle-subscribe rejected")
+        tracing::warn!(agent = %self.ctx.name, error = %error, "host subscribe-lifecycle rejected")
       }
     }
     result
   }
 
-  fn lifecycle_unsubscribe(&mut self, uuid: String) {
+  fn unsubscribe_lifecycle(&mut self, uuid: String) {
     let removed = self.ctx.bus.lifecycle_unsubscribe(&self.ctx.name, &uuid);
     tracing::debug!(
       agent = %self.ctx.name,
       uuid = %uuid,
       removed,
-      "host lifecycle-unsubscribe"
+      "host unsubscribe-lifecycle"
     );
   }
 
-  fn unsubscribe(&mut self, uuid: String) {
+  fn unsubscribe_agent(&mut self, uuid: String) {
     let removed = self.ctx.bus.unsubscribe(&self.ctx.name, &uuid);
     tracing::debug!(
       agent = %self.ctx.name,
       uuid = %uuid,
       removed,
-      "host unsubscribe"
+      "host unsubscribe-agent"
     );
   }
 
-  fn endpoint_subscribe(&mut self, model: String) -> Result<String, String> {
+  fn subscribe_endpoint(&mut self, model: String) -> Result<String, String> {
     if self.ctx.endpoint.is_none() {
       tracing::warn!(
         agent = %self.ctx.name,
-        "host endpoint-subscribe rejected: the endpoint is not configured"
+        "host subscribe-endpoint rejected: the endpoint is not configured"
       );
       return Err("the endpoint is not configured".to_string());
     }
@@ -550,24 +538,24 @@ impl host_bindings::Host for Host {
       Ok(uuid) => tracing::info!(
         agent = %self.ctx.name,
         uuid = %uuid,
-        "host endpoint-subscribe"
+        "host subscribe-endpoint"
       ),
       Err(error) => tracing::warn!(
         agent = %self.ctx.name,
         error = %error,
-        "host endpoint-subscribe rejected"
+        "host subscribe-endpoint rejected"
       ),
     }
     result
   }
 
-  fn endpoint_unsubscribe(&mut self, uuid: String) {
+  fn unsubscribe_endpoint(&mut self, uuid: String) {
     let model = self.ctx.bus.endpoint_unsubscribe(&self.ctx.name, &uuid);
     tracing::info!(
       agent = %self.ctx.name,
       uuid = %uuid,
       model = ?model.as_deref(),
-      "host endpoint-unsubscribe"
+      "host unsubscribe-endpoint"
     );
     if model.is_some()
       && let Some(registry) = &self.ctx.endpoint
@@ -576,7 +564,7 @@ impl host_bindings::Host for Host {
     }
   }
 
-  fn endpoint_stream(
+  fn stream_endpoint(
     &mut self,
     session: String,
     delta: types_bindings::ChatDelta,
@@ -587,36 +575,36 @@ impl host_bindings::Host for Host {
     tracing::debug!(
       agent = %self.ctx.name,
       session = %session,
-      "host endpoint-stream"
+      "host stream-endpoint"
     );
     registry.push(&self.ctx.name, &session, in_delta(delta))
   }
 
-  fn cancel(&mut self, uuid: String) {
+  fn cancel_timer(&mut self, uuid: String) {
     self.ctx.timers.cancel(&uuid);
-    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"host cancel");
+    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"host cancel-timer");
   }
 
-  fn sleep_duration(&mut self, ms: u64) {
-    tracing::debug!(agent = %self.ctx.name,ms,"host sleep-duration");
+  fn sleep_for(&mut self, ms: u64) {
+    tracing::debug!(agent = %self.ctx.name,ms,"host sleep-for");
     if let Err(error) = self
       .ctx
       .block_on_reload(crate::host::time::sleep_future(ms))
     {
-      tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-duration aborted");
+      tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-for aborted");
     }
   }
 
-  fn sleep_timestamp(&mut self, ts: u64) -> Result<(), String> {
+  fn sleep_until(&mut self, ts: u64) -> Result<(), String> {
     let delay = crate::host::time::delay_until(ts).map_err(|error| {
-      tracing::warn!(agent = %self.ctx.name,error,ts,"host sleep-timestamp rejected");
+      tracing::warn!(agent = %self.ctx.name,error,ts,"host sleep-until rejected");
       error
     })?;
     self
       .ctx
       .block_on_reload(crate::host::time::sleep_future_ms(delay))
       .map_err(|error| {
-        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-timestamp aborted");
+        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-until aborted");
         error
       })
   }
@@ -715,9 +703,9 @@ impl host_bindings::Host for Host {
     self.ctx.memory.set(key, value);
   }
 
-  fn memory_del(&mut self, key: String) -> bool {
-    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-del");
-    self.ctx.memory.del(&key)
+  fn memory_remove(&mut self, key: String) -> bool {
+    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-remove");
+    self.ctx.memory.remove(&key)
   }
 }
 
@@ -731,7 +719,7 @@ fn out_event(event: Event) -> types_bindings::Event {
     Event::Reload => types_bindings::Event::Reload,
     Event::Shutdown => types_bindings::Event::Shutdown,
     Event::ChatDelta(d) => types_bindings::Event::ChatDelta(out_msg(d)),
-    Event::StreamEnd => types_bindings::Event::StreamEnd,
+    Event::ChatEnd => types_bindings::Event::ChatEnd,
     Event::ToolResult(r) => {
       types_bindings::Event::ToolResult(types_bindings::ToolResult {
         name: r.name,
@@ -799,7 +787,7 @@ fn out_chat_msg(m: ChatMessage) -> provider_bindings::ChatMessage {
   }
 }
 
-/// Map one wire [`ChatDelta`] (from `host.endpoint-stream`) back onto the
+/// Map one wire [`ChatDelta`] (from `host.stream-endpoint`) back onto the
 /// host-side delta type.
 fn in_delta(d: types_bindings::ChatDelta) -> ChatDelta {
   ChatDelta {
@@ -943,7 +931,7 @@ mod tests {
   }
 
   #[test]
-  fn endpoint_stream_errors_when_endpoint_not_configured() -> anyhow::Result<()>
+  fn stream_endpoint_errors_when_endpoint_not_configured() -> anyhow::Result<()>
   {
     let mut host = test_host()?;
     let delta = out_msg(ChatDelta {
@@ -952,23 +940,23 @@ mod tests {
       finish_reason: None,
     });
     let err = host
-      .endpoint_stream("session-1".to_string(), delta)
+      .stream_endpoint("session-1".to_string(), delta)
       .unwrap_err();
     assert_eq!(err, "the endpoint is not configured");
     Ok(())
   }
 
   #[test]
-  fn endpoint_subscribe_errors_when_endpoint_not_configured()
+  fn subscribe_endpoint_errors_when_endpoint_not_configured()
   -> anyhow::Result<()> {
     let mut host = test_host()?;
-    let err = host.endpoint_subscribe("gpt-4o".to_string()).unwrap_err();
+    let err = host.subscribe_endpoint("gpt-4o".to_string()).unwrap_err();
     assert_eq!(err, "the endpoint is not configured");
     Ok(())
   }
 
   #[tokio::test]
-  async fn endpoint_stream_errors_when_receiver_closed() -> anyhow::Result<()> {
+  async fn stream_endpoint_errors_when_receiver_closed() -> anyhow::Result<()> {
     let mut host = test_host_with_endpoint()?;
     let registry = host
       .ctx
@@ -979,7 +967,7 @@ mod tests {
     let mut open = registry.open("test-agent", "sub-1");
     open.rx.close();
     let err = host
-      .endpoint_stream(
+      .stream_endpoint(
         open.session.clone(),
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
@@ -993,7 +981,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn endpoint_stream_queues_non_terminal_deltas_and_rejects_after_termination()
+  async fn stream_endpoint_queues_non_terminal_deltas_and_rejects_after_termination()
   -> anyhow::Result<()> {
     let mut host = test_host_with_endpoint()?;
     let registry = host
@@ -1004,7 +992,7 @@ mod tests {
       .clone();
     let mut open = registry.open("test-agent", "sub-1");
     host
-      .endpoint_stream(
+      .stream_endpoint(
         open.session.clone(),
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
@@ -1020,7 +1008,7 @@ mod tests {
       other => assert!(false, "unexpected outbound: {other:?}"),
     }
     host
-      .endpoint_stream(
+      .stream_endpoint(
         open.session.clone(),
         out_msg(ChatDelta {
           content: None,
@@ -1040,7 +1028,7 @@ mod tests {
       Some(crate::host::endpoint::Outbound::Close)
     );
     let err = host
-      .endpoint_stream(
+      .stream_endpoint(
         open.session.clone(),
         out_msg(ChatDelta {
           content: None,
@@ -1103,17 +1091,17 @@ mod tests {
   }
 
   #[test]
-  fn memory_get_set_del_roundtrips() -> anyhow::Result<()> {
+  fn memory_get_set_remove_roundtrips() -> anyhow::Result<()> {
     let mut host = test_host()?;
     assert_eq!(host.memory_get("k".to_string()), None);
-    assert!(!host.memory_del("k".to_string()));
+    assert!(!host.memory_remove("k".to_string()));
     host.memory_set("k".to_string(), "v".to_string());
     assert_eq!(host.memory_get("k".to_string()), Some("v".to_string()));
     host.memory_set("k".to_string(), "v2".to_string());
     assert_eq!(host.memory_get("k".to_string()), Some("v2".to_string()));
-    assert!(host.memory_del("k".to_string()));
+    assert!(host.memory_remove("k".to_string()));
     assert_eq!(host.memory_get("k".to_string()), None);
-    assert!(!host.memory_del("k".to_string()));
+    assert!(!host.memory_remove("k".to_string()));
     Ok(())
   }
 

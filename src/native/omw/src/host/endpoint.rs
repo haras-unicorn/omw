@@ -1,6 +1,6 @@
 //! Host-side endpoint session registry. An endpoint request routed to an
 //! agent opens a session: a tagged, buffered channel the agent streams
-//! `chat-delta`s back into with `host.endpoint-stream`, non-blocking, and the
+//! `chat-delta`s back into with `host.stream-endpoint`, non-blocking, and the
 //! endpoint's HTTP handler drains. Sessions end exactly once: normally when the
 //! agent's reply reaches a terminal `finish-reason`, or abruptly when the
 //! client disconnects (receiver drop) or the subscription is cancelled; each

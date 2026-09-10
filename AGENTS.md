@@ -49,7 +49,7 @@ A Cargo workspace with three crates plus a single WIT contract.
     config, axum; zero extra features, started only when configured: exposing
     `GET /v1/models` and `POST /v1/chat/completions`, routing each request as an
     `endpoint-message` inbox event under the model name the calling agent
-    subscribed to, and streaming the agent's `endpoint-stream` deltas back as
+    subscribed to, and streaming the agent's `stream-endpoint` deltas back as
     SSE or a buffered JSON completion.
 
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
@@ -72,7 +72,7 @@ A Cargo workspace with three crates plus a single WIT contract.
     - `time.rs` is the tick/timer helpers + cancellable timer pump.
 
     - `streams.rs` is the chat-stream pump registry keyed by UUID that delivers
-      `chat-delta`/`stream-end` events into inboxes (its `CancelRegistry` alias
+      `chat-delta`/`chat-end` events into inboxes (its `CancelRegistry` alias
       also backs timer/resource pumps).
 
     - `resources.rs` is the cancellable resource-subscription pump that delivers
@@ -146,7 +146,7 @@ A Cargo workspace with three crates plus a single WIT contract.
 - The wasm engine is synchronous and runs on a `spawn_blocking` thread, not a
   tokio worker. Async is bridged through a dedicated tokio runtime held in
   `AgentContext` (`ctx.rt`). `provider.chat-stream` spawns a chat-stream pump on
-  `rt` that delivers `chat-delta`/`stream-end` events into the inbox via
+  `rt` that delivers `chat-delta`/`chat-end` events into the inbox via
   `bus.deliver` (using `futures_util` + `tokio::select!`), and the
   `tooling.*`/`host.try-recv` imports use `rt.block_on`. `kanal` is used only
   for the per-agent `MessageBus` inboxes.

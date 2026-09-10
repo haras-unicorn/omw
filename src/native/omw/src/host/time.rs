@@ -20,8 +20,8 @@ pub fn now_ticks() -> u64 {
 }
 
 /// Milliseconds between `now` and a future `ts`, rejecting timestamps already
-/// passed. Used by both the cancellable `wait-timestamp` and the blocking
-/// `sleep-timestamp`.
+/// passed. Used by both the cancellable `wait-until` and the blocking
+/// `sleep-until`.
 pub fn delay_until(ts: u64) -> Result<Duration, String> {
   let now = now_ticks();
   if ts <= now {
@@ -51,24 +51,6 @@ fn now_ms() -> i64 {
   chrono::Utc::now().timestamp_millis()
 }
 
-/// Add `ms` milliseconds to a timestamp, saturating on overflow.
-pub fn add(ts: u64, ms: u64) -> u64 {
-  ts.saturating_add(ms)
-}
-
-/// Subtract `ms` milliseconds from a timestamp, saturating at zero.
-pub fn sub(ts: u64, ms: u64) -> u64 {
-  ts.saturating_sub(ms)
-}
-
-/// Milliseconds between `a` and `b` (signed; `a - b`).
-pub fn diff(a: u64, b: u64) -> i64 {
-  let a = i128::from(a);
-  let b = i128::from(b);
-  a.saturating_sub(b)
-    .clamp(i64::MIN as i128, i64::MAX as i128) as i64
-}
-
 /// Format a timestamp using a strftime-style format string via `chrono`.
 pub fn format(ts: u64, format: &str) -> String {
   match chrono_from_ticks(ts) {
@@ -84,7 +66,7 @@ fn chrono_from_ticks(ts: u64) -> Option<chrono::DateTime<Utc>> {
 
 /// Wait until a timestamp fires, pushing a `timer` event tagged with `uuid`
 /// into `name`'s inbox. Errors synchronously if `ts <= now`.
-pub fn wait_timestamp(
+pub fn wait_until(
   bus: &Arc<MessageBus>,
   rt: &Arc<tokio::runtime::Runtime>,
   timers: &Arc<CancelRegistry>,
@@ -106,7 +88,7 @@ pub fn wait_timestamp(
 
 /// Wait for `ms` milliseconds, pushing a `timer` event tagged with `uuid` into
 /// `name`'s inbox.
-pub fn wait_duration(
+pub fn wait_for(
   bus: &Arc<MessageBus>,
   rt: &Arc<tokio::runtime::Runtime>,
   timers: &Arc<CancelRegistry>,
@@ -147,9 +129,9 @@ pub fn wait_cron(
   Ok(())
 }
 
-/// Block `ms` milliseconds on the bridge runtime; like `wait_duration` but
+/// Block `ms` milliseconds on the bridge runtime; like `wait_for` but
 /// holding the thread instead of scheduling a `timer` event. Not cancellable.
-pub fn sleep_duration(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
+pub fn sleep_for(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
   let delay = Duration::from_millis(ms);
   rt.block_on(sleep_future_ms(delay));
 }
@@ -166,9 +148,9 @@ pub async fn sleep_future_ms(delay: Duration) {
 }
 
 /// Block until a future timestamp fires on the bridge runtime, rejecting
-/// timestamps already passed. Like `wait_timestamp` but holding the thread
+/// timestamps already passed. Like `wait_until` but holding the thread
 /// instead of scheduling a `timer` event. Not cancellable.
-pub fn sleep_timestamp(
+pub fn sleep_until(
   rt: &Arc<tokio::runtime::Runtime>,
   ts: u64,
 ) -> Result<(), String> {
@@ -226,27 +208,6 @@ mod tests {
   use super::*;
 
   #[test]
-  fn add_saturates_on_overflow() {
-    assert_eq!(add(1, 2), 3);
-    assert_eq!(add(u64::MAX, 1), u64::MAX);
-    assert_eq!(add(u64::MAX, u64::MAX), u64::MAX);
-  }
-
-  #[test]
-  fn sub_saturates_at_zero() {
-    assert_eq!(sub(5, 3), 2);
-    assert_eq!(sub(3, 5), 0);
-    assert_eq!(sub(3, u64::MAX), 0);
-  }
-
-  #[test]
-  fn diff_is_signed_and_absolute() {
-    assert_eq!(diff(5, 3), 2);
-    assert_eq!(diff(3, 5), -2);
-    assert_eq!(diff(u64::MAX, 0), i64::MAX);
-  }
-
-  #[test]
   fn format_renders_a_known_timestamp() {
     // 1970-01-01T00:00:00.123Z in UTC.
     let formatted = format(123, "%Y-%m-%dT%H:%M:%S%.3fZ");
@@ -254,10 +215,10 @@ mod tests {
   }
 
   #[test]
-  fn wait_timestamp_rejects_the_past() -> anyhow::Result<()> {
+  fn wait_until_rejects_the_past() -> anyhow::Result<()> {
     let rt = Arc::new(tokio::runtime::Builder::new_current_thread().build()?);
     let bus = Arc::new(MessageBus::new());
-    let err = wait_timestamp(
+    let err = wait_until(
       &bus,
       &rt,
       &Arc::new(CancelRegistry::new()),
@@ -272,9 +233,9 @@ mod tests {
   }
 
   #[test]
-  fn sleep_timestamp_rejects_the_past() -> anyhow::Result<()> {
+  fn sleep_until_rejects_the_past() -> anyhow::Result<()> {
     let rt = Arc::new(tokio::runtime::Builder::new_current_thread().build()?);
-    let err = sleep_timestamp(&rt, 1)
+    let err = sleep_until(&rt, 1)
       .err()
       .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
     assert!(err.contains("future"), "{err}");
@@ -303,7 +264,7 @@ mod tests {
     let uuid = crate::host::bus::new_uuid();
     // A far-future delay: the sleep can never win, so cancel is the only
     // way the pump exits — no race with a 0ms timer firing first.
-    wait_duration(&bus, &rt, &timers, "alice", &uuid, 60_000);
+    wait_for(&bus, &rt, &timers, "alice", &uuid, 60_000);
     assert!(
       timers.wait_for(&uuid, true, Duration::from_secs(5)),
       "timer should register before cancel"

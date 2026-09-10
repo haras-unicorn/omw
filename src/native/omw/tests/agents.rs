@@ -118,7 +118,7 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
       loop {
         let e = omw::host::recv();
         if e.id == id && e.kind == "chat-delta" { out += e.payload.content; }
-        if e.id == id && e.kind == "stream-end" { break; }
+        if e.id == id && e.kind == "chat-end" { break; }
       }
       let t = omw::tooling::get("mcp");
       let tid = t.call_tool("echo", #{ input: "hi" });
@@ -207,7 +207,7 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
   std::fs::write(
     &brain,
     r#"
-      let lc = omw::host::lifecycle_subscribe();
+      let lc = omw::host::subscribe_lifecycle();
       let p = omw::provider::get("openai");
       let ready = p.chat("gpt-test", [ #{ role: "user", content: "ready-marker" } ], []);
       loop {
