@@ -1,6 +1,8 @@
 //! Runtime abstractions: how an agent brain is loaded and driven.
 
 pub mod engine;
+#[cfg(feature = "js")]
+pub mod js;
 #[cfg(feature = "rhai")]
 pub mod rhai;
 pub mod wasm;
@@ -53,6 +55,8 @@ pub fn build(
     "wasm" => wasm::build(name, params),
     #[cfg(feature = "rhai")]
     "rhai" => rhai::build(name, params),
+    #[cfg(feature = "js")]
+    "js" => js::build(name, params),
     other => anyhow::bail!("unsupported runtime kind {other:?}"),
   }?;
 
@@ -74,6 +78,8 @@ mod tests {
     assert!(build("wasm", "wasm", &Value::Object(Map::new())).is_ok());
     #[cfg(feature = "rhai")]
     assert!(build("rhai", "rhai", &Value::Object(Map::new())).is_ok());
+    #[cfg(feature = "js")]
+    assert!(build("js", "js", &Value::Object(Map::new())).is_ok());
     Ok(())
   }
 

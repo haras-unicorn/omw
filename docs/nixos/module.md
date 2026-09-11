@@ -64,8 +64,9 @@ hot-reload agent scripts (a changed brain file restarts its agent while inboxes
 and subscriptions survive).
 
 `variant` selects which package flavor runs: `default` (the crates.io-equivalent
-build, no rhai runtime) or `rhai` (the `omw-rhai` package, which compiles the
-bundled rhai interpreter in). Overridable entirely with `package`.
+build, no script runtime), `rhai` (the `omw-rhai` package, which compiles the
+bundled rhai interpreter in) or `js` (the `omw-js` package, which compiles the
+bundled js interpreter in). Overridable entirely with `package`.
 
 ## Users and state
 

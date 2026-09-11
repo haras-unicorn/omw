@@ -5,7 +5,8 @@
 //! The guests are intentionally *not* a `[dependencies]` of `omw`: their `export!`
 //! ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the host
 //! target. Instead we build it as part of `omw`'s own build, only when the
-//! `rhai` (the embedded rhai interpreter) or `mock` (a test-only wasm mock
+//! `rhai` (the embedded rhai interpreter), `js` (the embedded js interpreter)
+//! or `mock` (a test-only wasm mock
 //! brain) feature is enabled. A featureless build runs no wasm tooling at all,
 //! so `cargo publish` (the default crate) verifies without `wasm-tools` or a
 //! `wasm32-wasip2` target.
@@ -21,6 +22,9 @@ use std::process::Command;
 fn main() {
   if env::var_os("CARGO_FEATURE_RHAI").is_some() {
     compile_guest("omw-wasm-rhai-interpreter");
+  }
+  if env::var_os("CARGO_FEATURE_JS").is_some() {
+    compile_guest("omw-wasm-js-interpreter");
   }
   if env::var_os("CARGO_FEATURE_MOCK").is_some() {
     compile_guest("omw-wasm-mock");

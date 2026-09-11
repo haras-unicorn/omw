@@ -159,6 +159,34 @@ let
           {
             omw-rhai-unwrapped = rhai-unwrapped;
           };
+      js-unwrapped = craneLib.buildPackage (
+        depArgs
+        // {
+          cargoArtifacts = craneLib.buildDepsOnly depArgs;
+          cargoExtraArgs = "-p omw --features js";
+          pname = "omw-js";
+          meta.mainProgram = "omw";
+        }
+      );
+
+      js-package =
+        pkgs.callPackage
+          (
+            {
+              symlinkJoin,
+              omw-js-unwrapped,
+            }:
+            symlinkJoin {
+              name = "omw-js";
+              paths = [
+                omw-js-unwrapped
+              ];
+              meta.mainProgram = "omw";
+            }
+          )
+          {
+            omw-js-unwrapped = js-unwrapped;
+          };
     in
     {
       inherit
@@ -171,6 +199,8 @@ let
         package
         rhai-unwrapped
         rhai-package
+        js-unwrapped
+        js-package
         ;
     };
 in
@@ -192,6 +222,8 @@ in
           omw-unwrapped = packages.unwrapped;
           omw-rhai = packages.rhai-package;
           omw-rhai-unwrapped = packages.rhai-unwrapped;
+          omw-js = packages.js-package;
+          omw-js-unwrapped = packages.js-unwrapped;
         };
     in
     {
@@ -379,6 +411,8 @@ in
           unwrapped = makeApp packages.unwrapped "OMW = OpenAI + MCP + WASM (unwrapped)";
           rhai = makeApp packages.rhai-package "OMW = OpenAI + MCP + WASM (rhai)";
           rhai-unwrapped = makeApp packages.rhai-unwrapped "OMW = OpenAI + MCP + WASM (rhai, unwrapped)";
+          js = makeApp packages.js-package "OMW = OpenAI + MCP + WASM (js)";
+          js-unwrapped = makeApp packages.js-unwrapped "OMW = OpenAI + MCP + WASM (js, unwrapped)";
         in
         {
           default = app;
@@ -389,6 +423,9 @@ in
 
           omw-rhai = rhai;
           omw-rhai-unwrapped = rhai-unwrapped;
+
+          omw-js = js;
+          omw-js-unwrapped = js-unwrapped;
         };
 
       packages =
@@ -449,6 +486,9 @@ in
 
           omw-rhai = packages.rhai-package;
           omw-rhai-unwrapped = packages.rhai-unwrapped;
+
+          omw-js = packages.js-package;
+          omw-js-unwrapped = packages.js-unwrapped;
         };
     };
 }

@@ -34,7 +34,10 @@ jobs:
           nix build --show-trace .#omw-rhai-unwrapped
           cp -L result/bin/omw release/omw-rhai-${{ matrix.arch }}
           tar -czf omw-rhai-${{ matrix.arch }}.tar.gz -C release omw-rhai-${{ matrix.arch }}
+          nix build --show-trace .#omw-js-unwrapped
+          cp -L result/bin/omw release/omw-js-${{ matrix.arch }}
+          tar -czf omw-js-${{ matrix.arch }}.tar.gz -C release omw-js-${{ matrix.arch }}
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" omw-${{ matrix.arch }}.tar.gz omw-rhai-${{ matrix.arch }}.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" omw-${{ matrix.arch }}.tar.gz omw-rhai-${{ matrix.arch }}.tar.gz omw-js-${{ matrix.arch }}.tar.gz --clobber

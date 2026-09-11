@@ -152,10 +152,11 @@ null
 ## services\.omw\.variant
 
 Which package flavor to run: `default` (the crates\.io-equivalent build, without
-the rhai runtime) or `rhai` (adds the bundled rhai interpreter via the
-`omw-rhai` package)\. Overridable with `package`\.
+the rhai runtime), `rhai` (adds the bundled rhai interpreter via the `omw-rhai`
+package) or `js` (adds the bundled js interpreter via the `omw-js` package)\.
+Overridable with `package`\.
 
-_Type:_ one of “default”, “rhai”
+_Type:_ one of “default”, “rhai”, “js”
 
 _Default:_
 
