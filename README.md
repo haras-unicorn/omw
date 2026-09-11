@@ -34,7 +34,9 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
   as an opt-in flavor. The default `omw` package/binary (crates.io-equivalent,
   no rhai feature) ships without the rhai runtime, whereas the `omw-rhai`
   package / `omw-rhai-<arch>.tar.gz` binary (`--features rhai`) includes it.
-  Both see the same `omw` host interface.
+  Both see the same `omw` host interface. To write a pure Rust brain, depend on
+  the `omw-wasm-rust` guest SDK crate instead of running `wit-bindgen` yourself;
+  see [Rust brains].
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 - **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`
@@ -147,6 +149,9 @@ Brains opt in to `reload` / `shutdown` notices with `subscribe_lifecycle`.
 
 See the [endpoint] and [hot reload] pages for the full reference.
 
+To write a pure Rust brain, depend on the `omw-wasm-rust` guest SDK crate
+instead of running `wit-bindgen` yourself; see [Rust brains].
+
 Configuration can also be layered from the environment (`OMW__` prefix) or
 generated as a JSON schema:
 
@@ -209,6 +214,7 @@ from an overlay, add the following to your nix configuration:
 [docs]: https://haras-unicorn.github.io/omw/
 [endpoint]: https://haras-unicorn.github.io/omw/endpoint.html
 [hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
+[Rust brains]: https://haras-unicorn.github.io/omw/runtime/wasm.html#rust-brains
 [The NixOS module]: https://haras-unicorn.github.io/omw/nixos.html
 
 <!-- ANCHOR_END: body -->

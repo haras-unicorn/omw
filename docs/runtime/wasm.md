@@ -47,6 +47,48 @@ The file may be `.wat` (text), `.wasm` (binary), or `.cwasm` (AOT-compiled, also
 the fastest to load). The component model is enabled, and the component must
 export the `omw.runtime` interface.
 
+## Rust brains
+
+A pure Rust brain is a library crate depending on the `omw-wasm-rust` guest SDK,
+which re-exports the WIT bindings plus typed `Provider`/`Tooling` handles,
+`host` helpers, and RAII guards. There is no single-file support: keep the brain
+a real crate so rust-analyzer keeps working.
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+omw-wasm-rust = "0.1"
+```
+
+```rust
+// src/lib.rs
+#![no_main]
+
+omw_wasm_rust::brain!(|| {
+  omw_wasm_rust::host::info("hello from a rust brain");
+  Ok(())
+});
+```
+
+Build it for `wasm32-wasip2` and point this runtime at the component:
+
+```sh
+cargo build --target wasm32-wasip2
+```
+
+```toml
+[runtime.wasm]
+kind = "wasm"
+
+[[agents]]
+name = "server"
+runtime = "wasm"
+script = "target/wasm32-wasip2/debug/brain.wasm"
+```
+
 ## The engine
 
 The shared `WasmEngine` (in `runtime::engine`) is deliberately generic: it has

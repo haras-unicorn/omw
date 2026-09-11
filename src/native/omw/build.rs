@@ -20,7 +20,7 @@ use std::process::Command;
 
 fn main() {
   if env::var_os("CARGO_FEATURE_RHAI").is_some() {
-    compile_guest("omw-rhai-wasm-interpreter");
+    compile_guest("omw-wasm-rhai-interpreter");
   }
   if env::var_os("CARGO_FEATURE_MOCK").is_some() {
     compile_guest("omw-wasm-mock");

@@ -12,35 +12,12 @@
 #![deny(clippy::allow_attributes_without_reason)]
 #![no_main]
 
-//! The bundled test component.
+//! The bundled test component, built on the `omw-wasm-rust` SDK.
 //!
 //! Compiles to `wasm32-wasip2` and exports `omw:omw/runtime`: `run(script)`
 //! prints a simple "Hello, world!".
 
-wit_bindgen::generate!({
-    world: "omw",
-    path: "../../native/omw/wit",
+omw_wasm_rust::brain!(|| {
+  println!("Hello, world!");
+  Ok(())
 });
-
-/// The `runtime` interface is our export.
-use crate::exports::omw::omw::runtime::Guest;
-
-/// Our exported world implementation.
-struct Component;
-
-impl Guest for Component {
-  fn kind() -> String {
-    "wasm".to_string()
-  }
-
-  fn run(_script: String) -> Result<Option<String>, String> {
-    println!("Hello, world!");
-    Ok(None)
-  }
-
-  fn check(_script: String) -> Result<(), String> {
-    Ok(())
-  }
-}
-
-export!(Component);

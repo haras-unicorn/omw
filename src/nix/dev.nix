@@ -253,33 +253,6 @@ in
           dev -h
         }
 
-        def --wrapped "main run" [...args: string] {
-          cd (flake-root)
-          $in | cargo run --bin omw -- run ...($args)
-        }
-
-        def --wrapped "main loop" [...args: string] {
-          cd (flake-root)
-          $in | cargo run --bin omw -- loop ...($args)
-        }
-
-        def --wrapped "main schema" [...args: string] {
-          cd (flake-root)
-          $in | cargo run --bin omw -- schema ...($args)
-        }
-
-        def "main format" [] {
-          cd (flake-root)
-          open --raw (nix build --no-link --print-out-paths ".#options")
-            | save -f "./docs/nixos/options.md"
-          open --raw (nix build --no-link --print-out-paths ".#schema")
-            | save -f "./assets/schema.json"
-          prettier --write .
-          nixfmt ...(fd '.*\.nix$' . | lines)
-          cargo fmt --all
-          cargo clippy --fix --allow-dirty
-        }
-
         def "main test" [] {
           cd (flake-root)
           cargo clippy --all-features -- -D warnings
@@ -306,8 +279,37 @@ in
             ...($args))
         }
 
+        def "main format" [] {
+          cd (flake-root)
+          for crate in (
+            (ls ./src/native | get name)
+            ++ (ls ./src/wasm | get name)
+          ) {
+            mkdir $"($crate)/wit"
+            cp -f ./assets/omw.wit $"($crate)/wit"
+          }
+          open --raw (nix build --no-link --print-out-paths ".#options")
+            | save -f "./docs/nixos/options.md"
+          open --raw (nix build --no-link --print-out-paths ".#schema")
+            | save -f "./assets/schema.json"
+          prettier --write .
+          nixfmt ...(fd '.*\.nix$' . | lines)
+          cargo fmt --all
+          cargo clippy --fix --allow-dirty
+        }
+
         def "main lint" [] {
           cd (flake-root)
+          for crate in (
+            (ls ./src/native | get name)
+            ++ (ls ./src/wasm | get name)
+          ) {
+            if ((open --raw ./assets/omw.wit)
+              != (open --raw $"($crate)/wit/omw.wit")) {
+              print -e $"($crate)/wit/omw.wit does not match assets/omw.wit"
+              exit 1
+            }
+          }
           if ((open --raw ./docs/nixos/options.md
             | str trim)
             != (open --raw (nix build --no-link --print-out-paths ".#options")
