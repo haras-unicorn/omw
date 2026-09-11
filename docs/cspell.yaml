@@ -5,6 +5,16 @@ language: en
 ignoreWords:
   - omw
   - rhai
+  - javy
+  - quickjs
+  - rquickjs
+  - boa
+  - boajs
+  - wasip2
+  - sdk
+  - tarball
+  - mutfn
+  - intojsfunc
   - openai
   - mcp
   - wasm

@@ -2,8 +2,8 @@
 
 A _runtime_ is how an agent's "brain" is loaded and driven for one iteration.
 Where providers and tooling are I/O, a runtime is the _program_ the agent runs:
-it is handed the agent's brain (a wasm component or a rhai script) and asked to
-execute it against the [`AgentContext`](#the-agent-context).
+it is handed the agent's brain (a wasm component, a rhai script, or a js script)
+and asked to execute it against the [`AgentContext`](#the-agent-context).
 
 Named runtimes live in the global `[runtime.<name>]` config map. Each agent
 wiring pins itself to one by name.
@@ -13,20 +13,21 @@ wiring pins itself to one by name.
 A runtime exposes, through the WIT `runtime` interface (exported by the guest
 component and called by the host):
 
-- `kind()` — which brain implementation this is (`wasm` or `rhai`).
+- `kind()` — which brain implementation this is (`wasm`, `rhai`, or `js`).
 - `run(script)` — run one iteration. Returns the terminal message if the brain
   chose to exit, otherwise nothing.
 
 The host's `Runtime::run(&AgentContext)` drives this synchronously off the tokio
-worker (on a `spawn_blocking` thread because the wasm engine and the rhai
-interpreter component built on it are synchronous). The script argument is the
+worker (on a `spawn_blocking` thread because the wasm engine and the rhai / js
+interpreter components built on it are synchronous). The script argument is the
 agent's brain. For a wasm brain the program is baked into the component and the
-script is unused, while for Rhai it is the Rhai source text.
+script is unused, while for Rhai it is the Rhai source text and for JS it is the
+JavaScript source text.
 
 ## How a run happens
 
-`build(kind)` dispatches to `wasm` or `rhai`. Each runtime loads its engine, and
-pushes a blocking task that:
+`build(kind)` dispatches to `wasm`, `rhai`, or `js`. Each runtime loads its
+engine, and pushes a blocking task that:
 
 1. builds a `Store` whose data is the host `Host` (the agent context, a resource
    table, and a WASI context),

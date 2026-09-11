@@ -21,12 +21,14 @@ let
           type = lib.types.enum [
             "default"
             "rhai"
+            "js"
           ];
           default = "default";
           description = ''
             Which package flavor to run: `default` (the crates.io-equivalent
-            build, without the rhai runtime) or `rhai` (adds the bundled rhai
-            interpreter via the `omw-rhai` package). Overridable with `package`.
+            build, without the rhai runtime), `rhai` (adds the bundled rhai
+            interpreter via the `omw-rhai` package) or `js` (adds the bundled
+            js interpreter via the `omw-js` package). Overridable with `package`.
           '';
         };
 
@@ -35,6 +37,8 @@ let
           default =
             if cfg.variant == "rhai" then
               self.packages.${pkgs.stdenv.hostPlatform.system}.omw-rhai
+            else if cfg.variant == "js" then
+              self.packages.${pkgs.stdenv.hostPlatform.system}.omw-js
             else
               self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           description = "The omw package to run.";

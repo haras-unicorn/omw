@@ -6,10 +6,10 @@ OMW = OpenAI + MCP + WASM.
 
 `omw` is an agent runtime. You declare agents in a TOML configuration, each
 wiring a _provider_ (an OpenAI-family chat service), _tooling_ (MCP tool
-servers), and a _brain_ — either a compiled WASM component or a [rhai] script.
-`omw` then drives each agent through an actor model: every agent owns a single
-inbox, and chat streams, tool results, timers, and messages from other agents
-all arrive there as tagged events the brain consumes.
+servers), and a _brain_ — either a compiled WASM component, a [rhai] script, or
+a JavaScript script. `omw` then drives each agent through an actor model: every
+agent owns a single inbox, and chat streams, tool results, timers, and messages
+from other agents all arrive there as tagged events the brain consumes.
 
 [rhai]: https://rhai.rs
 
@@ -31,12 +31,14 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
   _resources_; resource subscriptions deliver change events.
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
-  as an opt-in flavor. The default `omw` package/binary (crates.io-equivalent,
-  no rhai feature) ships without the rhai runtime, whereas the `omw-rhai`
-  package / `omw-rhai-<arch>.tar.gz` binary (`--features rhai`) includes it.
-  Both see the same `omw` host interface. To write a pure Rust brain, depend on
-  the `omw-wasm-rust` guest SDK crate instead of running `wit-bindgen` yourself;
-  see [Rust brains].
+  as an opt-in flavor, as does the `js` runtime. The default `omw`
+  package/binary (crates.io-equivalent, no script features) ships without either
+  script runtime, whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz`
+  binary (`--features rhai`) includes the rhai interpreter and the `omw-js`
+  package / `omw-js-<arch>.tar.gz` binary (`--features js`) includes the js
+  interpreter. All three see the same `omw` host interface (rhai in snake_case,
+  js in camelCase). To write a pure Rust brain, depend on the `omw-wasm-rust`
+  guest SDK crate instead of running `wit-bindgen` yourself; see [Rust brains].
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 - **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`
@@ -68,7 +70,9 @@ nix build github:haras-unicorn/omw
 Prebuilt binaries for `x86_64-linux` and `aarch64-linux` are attached to each
 [GitHub release] as tarballs containing the `omw` binary. The default
 `omw-<arch>.tar.gz` ships no rhai runtime; grab the `omw-rhai-<arch>.tar.gz`
-tarball (or the rhai Nix package) when your brains are rhai scripts:
+tarball (or the rhai Nix package) when your brains are rhai scripts, or the
+`omw-js-<arch>.tar.gz` tarball (or the js Nix package) when your brains are
+JavaScript scripts:
 
 ```sh
 curl -L -o omw.tar.gz \
@@ -84,6 +88,15 @@ curl -L -o omw-rhai.tar.gz \
   https://github.com/haras-unicorn/omw/releases/latest/download/omw-rhai-x86_64-linux.tar.gz
 tar -xzf omw-rhai.tar.gz
 ./omw-rhai-x86_64-linux
+```
+
+The js flavor is the same shape, with the `-js` name:
+
+```sh
+curl -L -o omw-js.tar.gz \
+  https://github.com/haras-unicorn/omw/releases/latest/download/omw-js-x86_64-linux.tar.gz
+tar -xzf omw-js.tar.gz
+./omw-js-x86_64-linux
 ```
 
 [GitHub release]: https://github.com/haras-unicorn/omw/releases

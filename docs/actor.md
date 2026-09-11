@@ -85,8 +85,9 @@ Keeping a single inbox per agent means the brain's scheduling does not live in
 the host. The agent decides, iteration by iteration, which events to handle and
 in what order — the host just guarantees that everything relevant eventually
 shows up, tagged, in order on one queue. That is what lets the brain (whether a
-hand-written wasm component or a [rhai script](./runtime/rhai.md)) be written as
-a plain sequential program over a stream of facts.
+hand-written wasm component, a [rhai script](./runtime/rhai.md), or a
+[js script](./runtime/js.md)) be written as a plain sequential program over a
+stream of facts.
 
 [events]: ./host.md#events
 [streams]: ./provider/interface.md

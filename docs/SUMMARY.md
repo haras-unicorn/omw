@@ -11,6 +11,7 @@
 - [Runtime](./runtime/interface.md)
   - [The wasm runtime](./runtime/wasm.md)
   - [The rhai runtime](./runtime/rhai.md)
+  - [The js runtime](./runtime/js.md)
 - [Hot reload](./hot-reload.md)
 - [Tunables](./tunables.md)
 - [NixOS module](./nixos/module.md)

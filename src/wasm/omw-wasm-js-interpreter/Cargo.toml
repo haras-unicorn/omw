@@ -1,0 +1,18 @@
+[package]
+name = "omw-wasm-js-interpreter"
+version = "0.1.0"
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+boa_engine = { version = "0.22.0" }
+serde_json = "1.0.151"
+wit-bindgen.workspace = true
