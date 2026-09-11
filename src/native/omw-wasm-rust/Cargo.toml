@@ -1,17 +1,12 @@
 [package]
-name = "omw-rhai-wasm-interpreter"
+name = "omw-wasm-rust"
 version = "0.1.0"
-description.workspace = true
+description = "Rust guest SDK for omw wasm brains"
 repository.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
 edition.workspace = true
-publish = false
-
-[lib]
-crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rhai_rt = { package = "rhai", version = "1.26.0" }
 wit-bindgen.workspace = true

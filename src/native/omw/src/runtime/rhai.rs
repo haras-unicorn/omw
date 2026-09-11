@@ -17,7 +17,7 @@ use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{RunOutcome, Runtime};
 
 const RHAI_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
-  include_bytes!(env!("OMW_RHAI_WASM_INTERPRETER_COMPONENT_NATIVE"));
+  include_bytes!(env!("OMW_WASM_RHAI_INTERPRETER_COMPONENT_NATIVE"));
 
 /// Impl-specific configuration for the Rhai runtime.
 #[derive(Debug, Clone, Default, Deserialize)]

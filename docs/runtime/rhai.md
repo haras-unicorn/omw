@@ -46,7 +46,7 @@ perms = "read_only"
 
 ## The interpreter and the WIT bindings
 
-The bundled guest (`omw-rhai-wasm-interpreter`) exports the `runtime` interface
+The bundled guest (`omw-wasm-rhai-interpreter`) exports the `runtime` interface
 (`kind` returns `rhai`, `run(script)` evaluates the script) and imports the
 `omw` world. On startup it registers an `omw` static module with three
 sub-modules that expose the WIT interfaces to the script:

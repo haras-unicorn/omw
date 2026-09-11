@@ -1,5 +1,5 @@
 [package]
-name = "omw-wasm-mock"
+name = "omw-wasm-rhai-interpreter"
 version = "0.1.0"
 description.workspace = true
 repository.workspace = true
@@ -13,4 +13,5 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-omw-wasm-rust = { path = "../../native/omw-wasm-rust" }
+rhai_rt = { package = "rhai", version = "1.26.0" }
+wit-bindgen.workspace = true

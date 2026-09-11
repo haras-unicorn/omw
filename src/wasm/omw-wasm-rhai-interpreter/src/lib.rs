@@ -26,7 +26,7 @@
 
 wit_bindgen::generate!({
     world: "omw",
-    path: "../../native/omw/wit",
+    path: "wit",
 });
 
 use rhai_rt::{

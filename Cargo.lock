@@ -2586,7 +2586,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "omw-rhai-wasm-interpreter"
+name = "omw-wasm-mock"
+version = "0.1.0"
+dependencies = [
+ "omw-wasm-rust",
+]
+
+[[package]]
+name = "omw-wasm-rhai-interpreter"
 version = "0.1.0"
 dependencies = [
  "rhai",
@@ -2594,7 +2601,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omw-wasm-mock"
+name = "omw-wasm-rust"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen 0.61.1",

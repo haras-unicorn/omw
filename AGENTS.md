@@ -7,7 +7,7 @@ for one iteration or loops it.
 
 ## Layout
 
-A Cargo workspace with three crates plus a single WIT contract.
+A Cargo workspace with four crates plus a single WIT contract.
 
 - `src/native/omw` — the `omw` host binary. A thin `main.rs` entrypoint plus a
   library (`lib.rs`) that contains the runtime logic and a build script
@@ -90,10 +90,16 @@ A Cargo workspace with three crates plus a single WIT contract.
 
     - `ctx.rs` is `AgentContext`.
 
-- `src/wasm/omw-rhai-wasm-interpreter` — the Rhai guest component
+- `src/wasm/omw-wasm-rhai-interpreter` — the Rhai guest component
   (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
   `provider`/`tooling`/`host` functions route to the host.
+
+- `src/native/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
+  (published to crates.io): re-exports the generated `omw` world bindings plus
+  small builders, typed `Provider`/`Tooling` handles, `host` helpers and
+  lifetime guards. Vendors the WIT contract under `wit/` (kept in sync with
+  `src/native/omw/wit/`).
 
 - `src/wasm/omw-wasm-mock` — the test-only wasm mock brain, cross-compiled by
   the `mock` feature for the engine/wasm runtime tests (not shipped to
@@ -151,8 +157,8 @@ A Cargo workspace with three crates plus a single WIT contract.
   `tooling.*`/`host.try-recv` imports use `rt.block_on`. `kanal` is used only
   for the per-agent `MessageBus` inboxes.
 
-- Keep the `omw` WIT world(s) in sync with `bindings.rs` (host) and
-  `install_omw` (Rhai guest).
+- Keep the `omw` WIT world(s) in sync with `bindings.rs` (host), `install_omw`
+  (Rhai guest), and `src/native/omw-wasm-rust/wit/` (Rust SDK).
 
 ## Development
 
