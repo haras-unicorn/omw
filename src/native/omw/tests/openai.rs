@@ -4,6 +4,7 @@
 //! These pin our parsing/encoding over real HTTP: content deltas, tool-call
 //! reassembly across fragmented chunks, error surfacing, and the outgoing
 //! request (bearer token, model, streaming).
+#![cfg(feature = "openai")]
 
 use std::time::Duration;
 

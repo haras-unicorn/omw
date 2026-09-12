@@ -30,21 +30,26 @@ A Cargo workspace with four crates plus a single WIT contract.
     supervisor in `agent.rs` keeps the shared bus alive across reloads.
 
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
-    implemented for OpenAI in `openai.rs`. The `build` factory dispatches on the
-    configured `kind`.
+    implemented for OpenAI in `openai.rs` (behind the `openai` feature). The
+    `build` factory dispatches on the configured `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
-    implemented as an MCP client in `mcp.rs` with a `transport`-tagged config
-    enum (`stdio` / `http`). The `build` factory dispatches on the configured
-    `kind`.
+    implemented as an MCP client in `mcp.rs` (behind the `mcp` feature) with a
+    `transport`-tagged config enum (`stdio` / `http`). The `build` factory
+    dispatches on the configured `kind`.
 
-  - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`) with
-    `engine.rs` (the generic WASM component loader + a generic `run` that calls
-    the exported `runtime.run`, plus the per-runtime `WasiConfig`/`Preopen`
-    sandbox flattened into each wasm-based runtime's config), `wasm.rs` (loads
-    the agent's `.wasm` or `.wat` brain), `rhai.rs` (the bundled Rhai evaluator
-    that loads `.rhai` brains enabled by the `rhai` feature) and `js.rs` (the
-    bundled JS evaluator that loads `.js` brains enabled by the `js` feature).
+  - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
+    `bindings.rs` (the single `bindgen!` for the `omw` world, mapped onto host
+    types), `host.rs` (the generated WIT `Host` trait implementations, bridging
+    the synchronous engine to the async provider/tooling/bus), `engine.rs` (the
+    generic WASM component loader + a generic `run` that calls the exported
+    `runtime.run`, plus the per-runtime `WasiConfig`/`Preopen` sandbox flattened
+    into each wasm-based runtime's config), `wasm.rs` (loads the agent's `.wasm`
+    or `.wat` brain), `rhai.rs` (the bundled Rhai evaluator that loads `.rhai`
+    brains enabled by the `rhai` feature) and `js.rs` (the bundled JS evaluator
+    that loads `.js` brains enabled by the `js` feature). The `wasm` feature
+    gates `bindings`/`engine`/`host`/`wasm`; `rhai`, `js` and `mock` each imply
+    it. The default features are `wasm`, `openai` and `mcp`.
 
   - `endpoint/` — the optional OpenAI-compatible HTTP server (`[endpoint]`
     config, axum; zero extra features, started only when configured: exposing
@@ -58,13 +63,11 @@ A Cargo workspace with four crates plus a single WIT contract.
 
   - `build.rs` — for the `rhai`/`js` and `mock` features, cross-compiles the
     bundled guests for `wasm32-wasip2`, wraps them into components with
-    `wasm-tools`, and embeds them via `include_bytes!`. A featureless build runs
-    no wasm tooling (so crates.io `cargo publish` of `omw` verifies standalone).
+    `wasm-tools`, and embeds them via `include_bytes!`. A `wasm`-less build runs
+    no wasm tooling (so crates.io `cargo publish` of `omw` with
+    `--no-default-features` verifies standalone).
 
-  - `host/` — the host side of the WASM contract.
-    - `imports.rs` implements the generated WIT `Host` traits, bridging the
-      synchronous wasm engine to the async provider/tooling/bus.
-
+  - `host/` — the host side of the actor model.
     - `bus.rs` is the per-agent inbox + subscription registry that fans messages
       out tagged with a subscription UUID (and unsubscribes by handle).
 
@@ -160,12 +163,12 @@ A Cargo workspace with four crates plus a single WIT contract.
   `AgentContext` (`ctx.rt`). `provider.chat-stream` spawns a chat-stream pump on
   `rt` that delivers `chat-delta`/`chat-end` events into the inbox via
   `bus.deliver` (using `futures_util` + `tokio::select!`), and the
-  `tooling.*`/`host.try-recv` imports use `rt.block_on`. `kanal` is used only
+  `tooling.*`/`host.try-recv` use `ctx.block_on_reload`. `kanal` is used only
   for the per-agent `MessageBus` inboxes.
 
-- Keep the `omw` WIT world(s) in sync with `bindings.rs` (host), `install_omw`
-  (Rhai guest), the `omw` global (JS guest), and `src/native/omw-wasm-rust/wit/`
-  (Rust SDK).
+- Keep the `omw` WIT world(s) in sync with `runtime/bindings.rs` (host),
+  `install_omw` (Rhai guest), the `omw` global (JS guest), and
+  `src/native/omw-wasm-rust/wit/` (Rust SDK).
 
 ## Development
 

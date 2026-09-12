@@ -10,7 +10,6 @@
 #![deny(clippy::allow_attributes_without_reason)]
 
 pub mod agent;
-pub mod bindings;
 pub mod config;
 pub mod endpoint;
 pub mod host;

@@ -96,8 +96,8 @@ impl Runtime for JsWasmRuntime {
     let wasi = self.config.wasi.clone();
 
     // The wasm engine here is synchronous; push it off the tokio worker so
-    // the host imports (which use `Runtime::block_on`) run on a thread that
-    // is not itself inside a tokio runtime.
+    // the host imports (which use `AgentContext::block_on_reload`) run on a
+    // thread that is not itself inside a tokio runtime.
     let outcome =
       tokio::task::spawn_blocking(move || wasm.run(ctx, script, &wasi))
         .await

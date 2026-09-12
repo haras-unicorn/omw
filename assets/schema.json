@@ -52,8 +52,8 @@
       "$ref": "#/$defs/Tunables",
       "default": {
         "cancel_pumps_on_reload": true,
-        "epoch_budget_ms": 100,
         "inbox_bound": 1024,
+        "interrupt_budget_ms": 100,
         "loop_backoff_cap_secs": 30,
         "loop_backoff_start_ms": 100,
         "recv_slice_ms": 200,
@@ -116,18 +116,18 @@
           "type": "boolean",
           "default": true
         },
-        "epoch_budget_ms": {
-          "description": "Uninterrupted wasm execution allowed after grace expires, in ms.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 100,
-          "minimum": 0
-        },
         "inbox_bound": {
           "description": "How many events a single agent inbox buffers before sends fail.",
           "type": "integer",
           "format": "uint",
           "default": 1024,
+          "minimum": 0
+        },
+        "interrupt_budget_ms": {
+          "description": "Uninterrupted runtime execution allowed after grace expires, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
           "minimum": 0
         },
         "loop_backoff_cap_secs": {

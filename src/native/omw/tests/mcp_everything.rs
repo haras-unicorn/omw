@@ -9,6 +9,7 @@
 //! independent implementation of the wire protocol.
 //!
 //! Opt-in via `OMW_TEST_MCP_EVERYTHING`.
+#![cfg(feature = "mcp")]
 
 use serde_json::json;
 

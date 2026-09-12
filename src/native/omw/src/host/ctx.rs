@@ -17,11 +17,15 @@ use crate::host::streams::StreamRegistry;
 use crate::provider::ProviderEntry;
 use crate::tooling::ToolingEntry;
 
+/// Preemptive interrupt for a running brain, stashed by the runtime so the
+/// supervisor can stop an unyielding run once the grace expires.
+pub type InterruptHandle = Arc<dyn Fn() + Send + Sync>;
+
 /// Everything a runtime needs to execute one agent for one iteration.
 ///
 /// It is cheap to clone (all fields are reference-counted or plain data) so
-/// runtimes can move it across threads (e.g. into `spawn_blocking` for sync
-/// wasm execution).
+/// runtimes can move it across threads (e.g. into `spawn_blocking` for
+/// synchronous execution).
 #[derive(Clone)]
 pub struct AgentContext {
   pub name: String,
@@ -47,8 +51,8 @@ pub struct AgentContext {
   /// server is configured. `None` when the agent cannot use the `endpoint-*`
   /// host imports (they error out).
   pub endpoint: Option<Arc<EndpointRegistry>>,
-  /// The tokio runtime used to bridge synchronous wasm host calls to the
-  /// async provider/tooling implementations.
+  /// The tokio runtime used to bridge synchronous runtime host calls to
+  /// the async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
   tunables: Tunables,
   /// Cooperative reload flag, set by the file watcher. The blocking
@@ -58,10 +62,10 @@ pub struct AgentContext {
   /// Cooperative shutdown flag, set on SIGTERM/SIGINT. Behaves like reload
   /// but is terminal: the supervisor does not restart the run.
   shutdown: Arc<AtomicBool>,
-  /// The engine of the currently running `Store`, stashed by
-  /// `WasmEngine::run` so the supervisor can trap unyielding wasm loops with
-  /// `increment_epoch` once the grace expires.
-  engine: Arc<Mutex<Option<wasmtime::Engine>>>,
+  /// Preemptive interrupt for the currently running brain, stashed by the
+  /// runtime so the supervisor can stop an unyielding run once the grace
+  /// expires. A no-op when no run is active.
+  interrupt: Arc<Mutex<Option<InterruptHandle>>>,
 }
 
 impl AgentContext {
@@ -125,16 +129,16 @@ impl AgentContext {
       resources,
       tool_calls,
       endpoint,
-      tunables,
-      reload: Arc::new(AtomicBool::new(false)),
-      shutdown: Arc::new(AtomicBool::new(false)),
-      engine: Arc::new(Mutex::new(None)),
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()
           .build()
           .context("failed to build agent runtime")?,
       )),
+      tunables,
+      reload: Arc::new(AtomicBool::new(false)),
+      shutdown: Arc::new(AtomicBool::new(false)),
+      interrupt: Arc::new(Mutex::new(None)),
     })
   }
 
@@ -170,21 +174,20 @@ impl AgentContext {
     self.shutdown.store(false, Ordering::Relaxed);
   }
 
-  /// Stash the engine of the currently running `Store` for epoch trapping.
-  pub fn set_engine(&self, engine: wasmtime::Engine) {
-    if let Ok(mut slot) = self.engine.lock() {
-      *slot = Some(engine);
+  /// Stash the preemptive interrupt of the currently running brain.
+  pub fn set_interrupt_handle(&self, handle: InterruptHandle) {
+    if let Ok(mut slot) = self.interrupt.lock() {
+      *slot = Some(handle);
     }
   }
 
-  /// Trap the running wasm `Store` by incrementing the stashed engine epoch.
-  /// Only fires after a reload/shutdown armed the deadline and the grace
-  /// expired; a no-op when no run is active.
-  pub fn increment_epoch(&self) {
-    if let Ok(slot) = self.engine.lock()
-      && let Some(engine) = slot.as_ref()
+  /// Fire the stashed interrupt of the running brain. Only fires after a
+  /// reload/shutdown and the grace expired; a no-op when no run is active.
+  pub fn interrupt(&self) {
+    if let Ok(slot) = self.interrupt.lock()
+      && let Some(handle) = slot.as_ref()
     {
-      engine.increment_epoch();
+      handle();
     }
   }
 
@@ -195,10 +198,10 @@ impl AgentContext {
     }
   }
 
-  /// Run `future` on the bridge runtime from the synchronous wasm thread,
-  /// aborting early with `"agent reloaded"` / `"agent shutting down"` when
-  /// requested. Upstream work may still run to completion; its result is
-  /// dropped.
+  /// Run `future` on the bridge runtime from the synchronous runtime
+  /// thread, aborting early with `"agent reloaded"` / `"agent shutting
+  /// down"` when requested. Upstream work may still run to completion; its
+  /// result is dropped.
   pub fn block_on_reload<T: Send + 'static>(
     &self,
     future: impl std::future::Future<Output = T> + Send + 'static,

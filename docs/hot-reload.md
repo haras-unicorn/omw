@@ -66,8 +66,8 @@ Three tiers, mirroring SIGTERM/SIGKILL:
    through a helper, and a `reload`/`shutdown` event covers `try-recv` pollers.
 2. Grace timeout (see `reload_grace_secs` in [tunables](./tunables.md)): the
    supervisor stops waiting and reports the abort. Bounds restart latency.
-3. Preemptive (epoch trap, `epoch_budget_ms` after grace — see
-   [tunables](./tunables.md)): one epoch increment traps wasm loops that never
+3. Preemptive (interrupt, `interrupt_budget_ms` after grace — see
+   [tunables](./tunables.md)): one increment traps unyielding loops that never
    yield to the host.
 
 Shutdown reuses the same three tiers, but is terminal: `run` collects it as an
@@ -86,7 +86,7 @@ Every host call parks somewhere different, so each needs its own interrupt:
 | blocking `provider.chat`                                                | abort slices (`reload_poll_ms`)      | abort handle, `Err("agent reloaded")`                                                                              | normal completed request, result dropped  |
 | blocking `call-tool-blocking`, `list-*`, `read-resource`, `subscribe-*` | same helper                          | same as above                                                                                                      | server runs to completion, result dropped |
 | blocking `sleep-for/until/cron`                                         | same helper                          | same as above = true cancel                                                                                        | nothing                                   |
-| pure wasm `while true {}`                                               | executing wasm, never yields to host | epoch trap after grace + `epoch_budget_ms`                                                                         | nothing                                   |
+| pure wasm `while true {}`                                               | executing wasm, never yields to host | interrupt after grace + `interrupt_budget_ms`                                                                      | nothing                                   |
 
 All values are [tunables](./tunables.md) with the defaults listed there.
 
@@ -148,7 +148,7 @@ if sub == () {
   outlive the run; otherwise rebuild any cached handles from scratch on each
   run.
 - Never `while true {}` without a host yield; an unyielding loop can only die by
-  epoch trap.
+  interrupt.
 - Pollers should use `try-recv` + small `wait-for`, so the `reload` / `error`
   events are observed promptly.
 - A broken script never starts, so the first thing a fresh brain can assume is
@@ -165,9 +165,9 @@ if sub == () {
 - "Old stream still delivers": a pump from the previous run outlived the reload.
   Reload cancels all open pumps; if you held the UUID, re-check `is-open` after
   `reload` instead of assuming it is alive.
-- "CPU spins after save": a `while true {}` without a host yield. Only the epoch
-  trap can kill it, after the grace. Add a `recv`, `wait-for`, or `sleep-for` to
-  the loop.
+- "CPU spins after save": a `while true {}` without a host yield. Only the
+  interrupt can kill it, after the grace. Add a `recv`, `wait-for`, or
+  `sleep-for` to the loop.
 - "Edit did nothing": the script was invalid. Check host logs for the warning
   and, if subscribed, the lifecycle `error` payload. The live run kept going;
   fix the script and save again.
