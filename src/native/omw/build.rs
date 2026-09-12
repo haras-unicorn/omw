@@ -1,11 +1,12 @@
-//! Build script: for the `rhai` and `mock` features, cross-compiles the bundled
+//! Build script: for the `runtime-rhai` and `mock` features, cross-compiles the bundled
 //! guests for `wasm32-wasip2`, wraps the resulting core module into a WASM
 //! component with `wasm-tools`, and embeds it into the `omw` binary.
 //!
 //! The guests are intentionally *not* a `[dependencies]` of `omw`: their `export!`
 //! ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the host
 //! target. Instead we build it as part of `omw`'s own build, only when the
-//! `rhai` (the embedded rhai interpreter), `js` (the embedded js interpreter)
+//! `runtime-rhai` (the embedded rhai interpreter), `runtime-js` (the embedded js
+//! interpreter)
 //! or `mock` (a test-only wasm mock
 //! brain) feature is enabled. A featureless build runs no wasm tooling at all,
 //! so `cargo publish` (the default crate) verifies without `wasm-tools` or a
@@ -20,10 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-  if env::var_os("CARGO_FEATURE_RHAI").is_some() {
+  if env::var_os("CARGO_FEATURE_RUNTIME_RHAI").is_some() {
     compile_guest("omw-wasm-rhai-interpreter");
   }
-  if env::var_os("CARGO_FEATURE_JS").is_some() {
+  if env::var_os("CARGO_FEATURE_RUNTIME_JS").is_some() {
     compile_guest("omw-wasm-js-interpreter");
   }
   if env::var_os("CARGO_FEATURE_MOCK").is_some() {

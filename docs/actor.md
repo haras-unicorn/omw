@@ -74,8 +74,8 @@ tokio runtime, blocking calls on the `spawn_blocking` thread the engine runs on
 
 ## Endpoint requests
 
-Endpoint requests are different: the [endpoint server](./endpoint.md) routes an
-inbound chat completion straight into the owning agent's inbox as an
+Endpoint requests are different: the [endpoint server](./endpoint/interface.md)
+routes an inbound chat completion straight into the owning agent's inbox as an
 `endpoint-message` event, and the agent streams deltas back through the session
 registry. Each session ends exactly once with an `endpoint-session-end` event.
 

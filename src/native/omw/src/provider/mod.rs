@@ -17,7 +17,7 @@ use crate::tooling::Tool;
 
 #[cfg(test)]
 pub mod mock;
-#[cfg(feature = "openai")]
+#[cfg(feature = "provider-openai")]
 pub mod openai;
 
 /// A single chat participant role.
@@ -164,7 +164,7 @@ pub fn build(
   params: &Value,
 ) -> anyhow::Result<ProviderEntry> {
   match kind {
-    #[cfg(feature = "openai")]
+    #[cfg(feature = "provider-openai")]
     "openai" => openai::build(name, params),
     #[cfg(test)]
     "mock" => mock::build(name, params),
@@ -196,7 +196,7 @@ mod tests {
 
   #[test]
   fn factory_builds_known_kinds() -> anyhow::Result<()> {
-    #[cfg(feature = "openai")]
+    #[cfg(feature = "provider-openai")]
     {
       let entry = build("p", "openai", &json!({}))?;
       assert_eq!(entry.name, "p");

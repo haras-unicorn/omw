@@ -32,21 +32,22 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
   as an opt-in flavor, as does the `js` runtime. The default `omw`
-  package/binary ships with the `wasm`, `openai`, and `mcp` back ends but
-  without either script runtime, whereas the `omw-rhai` package /
-  `omw-rhai-<arch>.tar.gz` binary (`--features rhai`) includes the rhai
-  interpreter and the `omw-js` package / `omw-js-<arch>.tar.gz` binary
-  (`--features js`) includes the js interpreter. All three see the same `omw`
-  host interface (rhai in snake_case, js in camelCase). To write a pure Rust
-  brain, depend on the `omw-wasm-rust` guest SDK crate instead of running
-  `wit-bindgen` yourself; see [Rust brains].
+  package/binary ships with the `runtime-wasm`, `provider-openai`,
+  `tooling-mcp`, and `endpoint-openai` back ends but without either script
+  runtime, whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
+  (`--features runtime-rhai`) includes the rhai interpreter and the `omw-js`
+  package / `omw-js-<arch>.tar.gz` binary (`--features runtime-js`) includes the
+  js interpreter. All three see the same `omw` host interface (rhai in
+  snake_case, js in camelCase). To write a pure Rust brain, depend on the
+  `omw-wasm-rust` guest SDK crate instead of running `wit-bindgen` yourself; see
+  [Rust brains].
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 - **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`
-  with a `listen` address and agents can subscribe themselves under model names:
-  inbound chat requests arrive in the agent's inbox as events, and the agent
-  streams its reply back (SSE or buffered JSON). Any OpenAI-compatible client
-  can then drive an agent.
+  with `kind = "openai"` plus a `listen` address and agents can subscribe
+  themselves under model names: inbound chat requests arrive in the agent's
+  inbox as events, and the agent streams its reply back (SSE or buffered JSON).
+  Any OpenAI-compatible client can then drive an agent.
 - **Hot reload** is `--watch` on `run` / `loop`. When a brain script changes,
   the agent's run restarts on the new script while inboxes, subscriptions, and
   sessions survive. The new script is validated before the live run ends, so a
@@ -136,12 +137,13 @@ omw run    # run every agent once
 omw loop   # keep every agent running, restarting on failure
 ```
 
-Serve agents over HTTP with the optional [endpoint]: add a `listen` address,
-have a brain subscribe itself under a model name, then any OpenAI-compatible
-client can call it:
+Serve agents over HTTP with the optional [endpoint]: set `kind` plus a `listen`
+address, have a brain subscribe itself under a model name, then any
+OpenAI-compatible client can call it:
 
 ```toml
 [endpoint]
+kind = "openai"
 listen = "127.0.0.1:8080"
 ```
 
@@ -226,7 +228,7 @@ from an overlay, add the following to your nix configuration:
 
 [haras cachix cache]: https://app.cachix.org/cache/haras
 [docs]: https://haras-unicorn.github.io/omw/
-[endpoint]: https://haras-unicorn.github.io/omw/endpoint.html
+[endpoint]: https://haras-unicorn.github.io/omw/endpoint/interface.html
 [hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
 [Rust brains]: https://haras-unicorn.github.io/omw/runtime/wasm.html#rust-brains
 [The NixOS module]: https://haras-unicorn.github.io/omw/nixos.html

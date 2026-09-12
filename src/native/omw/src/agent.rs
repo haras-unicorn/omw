@@ -15,17 +15,14 @@
 //! script cache needs invalidating.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use futures_util::future::join_all;
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use crate::config::{AgentConfig, Config};
-use crate::endpoint::{ServerState, router};
 use crate::host::bus::{MessageBus, new_uuid};
 use crate::host::ctx::AgentContext;
 use crate::host::endpoint::EndpointRegistry;
@@ -510,33 +507,29 @@ impl Shared {
     let providers = build_providers(cfg)?;
     let tooling = build_tooling(cfg).await?;
     let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
-    let (endpoint_registry, endpoint_task) = if let Some(endpoint) =
-      &cfg.endpoint
-    {
-      let registry = Arc::new(EndpointRegistry::with_tunables(
-        Arc::clone(&bus),
-        cfg.tunables,
-      ));
-      let addr = endpoint.listen.parse::<SocketAddr>().with_context(|| {
-        format!(
-          "endpoint listen address {:?} is not a valid socket address",
-          endpoint.listen
-        )
-      })?;
-      let listener = TcpListener::bind(addr).await.with_context(|| {
-        format!("failed to bind endpoint listener on {}", endpoint.listen)
-      })?;
-      let app =
-        router(ServerState::new(Arc::clone(&bus), Arc::clone(&registry)));
-      let task = tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app).await {
-          tracing::error!(error = %error, "endpoint server failed");
-        }
-      });
-      (Some(registry), Some(task))
-    } else {
-      (None, None)
-    };
+    let (endpoint_registry, endpoint_task) =
+      if let Some(endpoint) = &cfg.endpoint {
+        let entry = crate::endpoint::build(&endpoint.kind, &endpoint.params)
+          .with_context(|| {
+            format!("failed to build endpoint {:?}", endpoint.kind)
+          })?;
+        let registry = Arc::new(EndpointRegistry::with_tunables(
+          Arc::clone(&bus),
+          cfg.tunables,
+        ));
+        let serve_bus = Arc::clone(&bus);
+        let serve_registry = Arc::clone(&registry);
+        let task = tokio::spawn(async move {
+          if let Err(error) =
+            entry.endpoint.serve(serve_bus, serve_registry).await
+          {
+            tracing::error!(error = %error, "endpoint server failed");
+          }
+        });
+        (Some(registry), Some(task))
+      } else {
+        (None, None)
+      };
     Ok(Self {
       providers,
       tooling,

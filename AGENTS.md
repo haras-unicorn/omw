@@ -19,7 +19,8 @@ A Cargo workspace with four crates plus a single WIT contract.
   - `config.rs` — the TOML config (default `omw.toml`, overridable with the
     `--config` flag or layered from `OMW__`-prefixed environment variables):
     global provider/tooling/runtime maps (each an impl-agnostic `kind` + opaque
-    params) plus per-agent wiring.
+    params), an optional singular `[endpoint]` entry of the same shape, plus
+    per-agent wiring.
 
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
@@ -30,13 +31,13 @@ A Cargo workspace with four crates plus a single WIT contract.
     supervisor in `agent.rs` keeps the shared bus alive across reloads.
 
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
-    implemented for OpenAI in `openai.rs` (behind the `openai` feature). The
-    `build` factory dispatches on the configured `kind`.
+    implemented for OpenAI in `openai.rs` (behind the `provider-openai`
+    feature). The `build` factory dispatches on the configured `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
-    implemented as an MCP client in `mcp.rs` (behind the `mcp` feature) with a
-    `transport`-tagged config enum (`stdio` / `http`). The `build` factory
-    dispatches on the configured `kind`.
+    implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature)
+    with a `transport`-tagged config enum (`stdio` / `http`). The `build`
+    factory dispatches on the configured `kind`.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
     `bindings.rs` (the single `bindgen!` for the `omw` world, mapped onto host
@@ -46,26 +47,31 @@ A Cargo workspace with four crates plus a single WIT contract.
     `runtime.run`, plus the per-runtime `WasiConfig`/`Preopen` sandbox flattened
     into each wasm-based runtime's config), `wasm.rs` (loads the agent's `.wasm`
     or `.wat` brain), `rhai.rs` (the bundled Rhai evaluator that loads `.rhai`
-    brains enabled by the `rhai` feature) and `js.rs` (the bundled JS evaluator
-    that loads `.js` brains enabled by the `js` feature). The `wasm` feature
-    gates `bindings`/`engine`/`host`/`wasm`; `rhai`, `js` and `mock` each imply
-    it. The default features are `wasm`, `openai` and `mcp`.
+    brains enabled by the `runtime-rhai` feature) and `js.rs` (the bundled JS
+    evaluator that loads `.js` brains enabled by the `runtime-js` feature). The
+    `runtime-wasm` feature gates `bindings`/`engine`/`host`/`wasm`;
+    `runtime-rhai`, `runtime-js` and `mock` each imply it. The default features
+    are `runtime-wasm`, `provider-openai`, `tooling-mcp` and `endpoint-openai`.
 
-  - `endpoint/` — the optional OpenAI-compatible HTTP server (`[endpoint]`
-    config, axum; zero extra features, started only when configured: exposing
-    `GET /v1/models` and `POST /v1/chat/completions`, routing each request as an
-    `endpoint-message` inbox event under the model name the calling agent
-    subscribed to, and streaming the agent's `stream-endpoint` deltas back as
-    SSE or a buffered JSON completion.
+  - `endpoint/` — the `Endpoint` abstraction (`serve(bus, registry)`), with
+    `openai.rs` (the optional OpenAI-compatible HTTP server behind the
+    `endpoint-openai` feature: `[endpoint]` config with `kind` + `listen`,
+    started only when configured: exposing `GET /v1/models` and
+    `POST /v1/chat/completions`, routing each request as an `endpoint-message`
+    inbox event under the model name the calling agent subscribed to, and
+    streaming the agent's `stream-endpoint` deltas back as SSE or a buffered
+    JSON completion. The `build` factory dispatches on the configured `kind`;
+    transport-agnostic state lives in `host/bus.rs` (`endpoint_subscribe` /
+    `endpoint_route`) and `host/endpoint.rs` (`EndpointRegistry`).
 
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
 
-  - `build.rs` — for the `rhai`/`js` and `mock` features, cross-compiles the
-    bundled guests for `wasm32-wasip2`, wraps them into components with
-    `wasm-tools`, and embeds them via `include_bytes!`. A `wasm`-less build runs
-    no wasm tooling (so crates.io `cargo publish` of `omw` with
-    `--no-default-features` verifies standalone).
+  - `build.rs` — for the `runtime-rhai`/`runtime-js` and `mock` features,
+    cross-compiles the bundled guests for `wasm32-wasip2`, wraps them into
+    components with `wasm-tools`, and embeds them via `include_bytes!`. A
+    `runtime-wasm`-less build runs no wasm tooling (so crates.io `cargo publish`
+    of `omw` with `--no-default-features` verifies standalone).
 
   - `host/` — the host side of the actor model.
     - `bus.rs` is the per-agent inbox + subscription registry that fans messages
@@ -191,6 +197,7 @@ touches WASM compilation, MCP servers or OpenAI API servers. Even in those cases
 you should try to use `dev test fast` as much as possible for fast iteration
 until you need to do a final pass on all tests.
 
-Because `build.rs` cross-compiles the bundled guests (for the `rhai`/`mock`/`js`
-features) for `wasm32-wasip2`, building with those features needs that target
-and `wasm-tools` on PATH (both provided by the dev shell).
+Because `build.rs` cross-compiles the bundled guests (for the
+`runtime-rhai`/`mock`/`runtime-js` features) for `wasm32-wasip2`, building with
+those features needs that target and `wasm-tools` on PATH (both provided by the
+dev shell).

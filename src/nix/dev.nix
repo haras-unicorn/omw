@@ -135,7 +135,7 @@ let
         depArgs
         // {
           cargoArtifacts = craneLib.buildDepsOnly depArgs;
-          cargoExtraArgs = "-p omw --features rhai";
+          cargoExtraArgs = "-p omw --features runtime-rhai";
           pname = "omw-rhai";
           meta.mainProgram = "omw";
         }
@@ -163,7 +163,7 @@ let
         depArgs
         // {
           cargoArtifacts = craneLib.buildDepsOnly depArgs;
-          cargoExtraArgs = "-p omw --features js";
+          cargoExtraArgs = "-p omw --features runtime-js";
           pname = "omw-js";
           meta.mainProgram = "omw";
         }

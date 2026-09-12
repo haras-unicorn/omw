@@ -78,8 +78,8 @@ going).
 
 ## The endpoint
 
-The optional [endpoint server](./endpoint.md) lets each agent address itself as
-an OpenAI-compatible model.
+The optional [endpoint server](./endpoint/interface.md) lets each agent address
+itself as an OpenAI-compatible model.
 
 The guest side is three calls:
 

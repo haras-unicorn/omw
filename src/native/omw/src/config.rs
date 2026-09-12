@@ -1,11 +1,11 @@
 //! TOML configuration: global provider/tooling/runtime implementations plus
 //! per-agent wiring.
 //!
-//! Config is deliberately impl-agnostic: each provider/tooling/runtime entry
-//! is a `kind` string plus an opaque params blob. The kind is validated and
-//! the params are deserialized into an impl-specific struct only when the impl
-//! is constructed (see the `build` factories in `provider`, `tooling` and
-//! `runtime`).
+//! Config is deliberately impl-agnostic: each provider/tooling/runtime/endpoint
+//! entry is a `kind` string plus an opaque params blob. The kind is validated
+//! and the params are deserialized into an impl-specific struct only when the
+//! impl is constructed (see the `build` factories in `provider`, `tooling`,
+//! `runtime` and `endpoint`).
 
 use std::{
   collections::HashMap,
@@ -45,16 +45,6 @@ impl std::fmt::Debug for ImplConfig {
         .finish(),
     }
   }
-}
-
-/// Optional HTTP endpoint configuration: starts an OpenAI-compatible chat
-/// server through which each subscribed agent is addressable as a model.
-#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
-pub struct EndpointConfig {
-  /// Socket address to listen on, e.g. `"127.0.0.1:8080"` or
-  /// `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
-  /// startup.
-  pub listen: String,
 }
 
 /// Runtime tunables: channel sizes, timeouts, and backoffs. All optional;
@@ -210,10 +200,11 @@ pub struct Config {
   #[serde(default)]
   pub runtime: HashMap<String, ImplConfig>,
 
-  /// Optional HTTP endpoint; when set, a server is started and the agents
-  /// can subscribe to it as models.
+  /// Optional endpoint implementation: a `kind` string plus opaque params,
+  /// like providers/tooling/runtime. When set, a server is started and the
+  /// agents can subscribe to it as models.
   #[serde(default)]
-  pub endpoint: Option<EndpointConfig>,
+  pub endpoint: Option<ImplConfig>,
   #[serde(default)]
   pub agents: Vec<AgentConfig>,
   /// Global runtime tunables; all optional with built-in defaults.
@@ -455,6 +446,41 @@ mod tests {
     assert_eq!(cfg.agents[0].name, "alice");
     assert_eq!(cfg.agents[0].runtime, "rhai");
     assert_eq!(cfg.agents[0].script, "brain.rhai");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn endpoint_deserializes_with_kind_and_opaque_params() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.toml");
+    std::fs::write(
+      &path,
+      r#"
+        [endpoint]
+        kind = "openai"
+        listen = "127.0.0.1:8080"
+      "#,
+    )?;
+    let cfg = cli(path).load_config()?;
+    let endpoint = cfg
+      .endpoint
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("missing endpoint"))?;
+    assert_eq!(endpoint.kind, "openai");
+    assert_eq!(endpoint.params["listen"], "127.0.0.1:8080");
+    assert!(endpoint.params.get("kind").is_none());
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn endpoint_defaults_to_none() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.toml");
+    std::fs::write(&path, "")?;
+    let cfg = cli(path).load_config()?;
+    assert!(cfg.endpoint.is_none());
     Ok(())
   }
 

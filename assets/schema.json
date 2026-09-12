@@ -12,10 +12,10 @@
       }
     },
     "endpoint": {
-      "description": "Optional HTTP endpoint; when set, a server is started and the agents\ncan subscribe to it as models.",
+      "description": "Optional endpoint implementation: a `kind` string plus opaque params,\nlike providers/tooling/runtime. When set, a server is started and the\nagents can subscribe to it as models.",
       "anyOf": [
         {
-          "$ref": "#/$defs/EndpointConfig"
+          "$ref": "#/$defs/ImplConfig"
         },
         {
           "type": "null"
@@ -83,17 +83,6 @@
         }
       },
       "required": ["name", "runtime", "script"]
-    },
-    "EndpointConfig": {
-      "description": "Optional HTTP endpoint configuration: starts an OpenAI-compatible chat\nserver through which each subscribed agent is addressable as a model.",
-      "type": "object",
-      "properties": {
-        "listen": {
-          "description": "Socket address to listen on, e.g. `\"127.0.0.1:8080\"` or\n`\"0.0.0.0:8080\"`. Hostnames (e.g. `\"localhost:8080\"`) are rejected at\nstartup.",
-          "type": "string"
-        }
-      },
-      "required": ["listen"]
     },
     "ImplConfig": {
       "description": "A single configured implementation: which kind plus opaque params.",
