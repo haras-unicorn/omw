@@ -8,8 +8,8 @@ provider / tooling / bus as every other runtime).
 
 The interpreter ships in the `omw-js` package/binary (`nix run .#omw-js` or the
 `omw-js-<arch>.tar.gz` release tarball). The default `omw` binary doesn't
-include it. With the `--features js` build flag it is compiled into the host at
-build time instead.
+include it. With the `--features runtime-js` build flag it is compiled into the
+host at build time instead.
 
 [Boa]: https://boajs.dev
 

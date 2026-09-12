@@ -1,7 +1,11 @@
 //! End-to-end `run_agents` integration test: a real `omw.toml` config driving
 //! the whole agent runtime once, with a wiremock-backed OpenAI provider and a
 //! real rmcp streamable-HTTP MCP server.
-#![cfg(all(feature = "rhai", feature = "openai", feature = "mcp"))]
+#![cfg(all(
+  feature = "runtime-rhai",
+  feature = "provider-openai",
+  feature = "tooling-mcp"
+))]
 
 use std::sync::Arc;
 

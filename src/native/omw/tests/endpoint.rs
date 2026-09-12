@@ -2,6 +2,7 @@
 //! `async-openai` SDK (models list, non-streaming completion, SSE stream,
 //! tool round-trip, unknown-model error, inbox shape) against a mock agent
 //! that answers from the inbox.
+#![cfg(feature = "endpoint-openai")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,7 +16,7 @@ use async_openai::types::chat::{
 use futures_util::StreamExt;
 use tokio::net::TcpListener;
 
-use omw::endpoint::{ServerState, router};
+use omw::endpoint::openai::{ServerState, router};
 use omw::host::bus::MessageBus;
 use omw::host::endpoint::EndpointRegistry;
 use omw::host::events::Event;

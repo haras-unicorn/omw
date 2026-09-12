@@ -8,8 +8,8 @@ tooling / bus as every other runtime).
 
 The interpreter ships in the `omw-rhai` package/binary (`nix run .#omw-rhai` or
 the `omw-rhai-<arch>.tar.gz` release tarball). The default `omw` binary doesn't
-include it. With the `--features rhai` build flag it is compiled into the host
-at build time instead.
+include it. With the `--features runtime-rhai` build flag it is compiled into
+the host at build time instead.
 
 [rhai]: https://rhai.rs
 

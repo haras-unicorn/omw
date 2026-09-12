@@ -8,7 +8,7 @@
 //!
 //! Opt-in via `OMW_TEST_OPENAI_LLAMACPP`. Some tests are also ignored by default
 //! because of flakiness of LLM models.
-#![cfg(feature = "openai")]
+#![cfg(feature = "provider-openai")]
 
 use std::time::Duration;
 
