@@ -10,10 +10,10 @@ use serde::Deserialize;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
-use crate::bindings::Omw;
-use crate::bindings::omw::omw;
+use super::bindings::Omw;
+use super::bindings::omw::omw;
+use super::host::Host;
 use crate::host::ctx::AgentContext;
-use crate::host::imports::Host;
 use crate::secret::Secret;
 
 /// Filesystem permissions for one [`Preopen`].
@@ -263,9 +263,9 @@ impl WasmEngine {
     let span = tracing::info_span!("engine.check", agent = %ctx.name);
     let _entered = span.enter();
     tracing::debug!(script, "instantiating the component for validation");
-    // Deliberately not `ctx.set_engine`: validation runs while the old run
-    // keeps executing, and stashing would clobber the live run's epoch
-    // handle that `abort_grace` traps through.
+    // Deliberately not `ctx.set_interrupt_handle`: validation runs while
+    // the old run keeps executing, and stashing would clobber the live
+    // run's interrupt handle that `abort_grace` fires through.
     let (mut store, linker) = self.instantiate(ctx.clone(), wasi)?;
 
     let instance = Omw::instantiate(&mut store, &self.component, &linker)
@@ -298,7 +298,10 @@ impl WasmEngine {
     let span = tracing::info_span!("engine.run", agent = %ctx.name);
     let _entered = span.enter();
     tracing::debug!(script, "instantiating the component");
-    ctx.set_engine(self.engine.clone());
+    let engine = self.engine.clone();
+    ctx.set_interrupt_handle(std::sync::Arc::new(move || {
+      engine.increment_epoch();
+    }));
     let (mut store, linker) = self.instantiate(ctx.clone(), wasi)?;
 
     let instance = Omw::instantiate(&mut store, &self.component, &linker)

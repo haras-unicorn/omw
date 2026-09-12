@@ -8,19 +8,19 @@
 //!     shared tokio runtime that delivers `chat-delta` / `chat-end` events into the
 //!     agent's inbox.
 //!   * `tooling.*` and `host.*` results are obtained with
-//!     [`Runtime::block_on`], which is only legal on threads that are not
-//!     themselves inside a tokio runtime (i.e. our `spawn_blocking` wasm
-//!     thread).
+//!     [`AgentContext::block_on_reload`], which is only legal on threads
+//!     that are not themselves inside a tokio runtime (i.e. our
+//!     `spawn_blocking` thread).
 
 use std::sync::Arc;
 
 use wasmtime::component::Resource;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-use crate::bindings::omw::omw::host as host_bindings;
-use crate::bindings::omw::omw::provider as provider_bindings;
-use crate::bindings::omw::omw::tooling as tooling_bindings;
-use crate::bindings::omw::omw::types as types_bindings;
+use super::bindings::omw::omw::host as host_bindings;
+use super::bindings::omw::omw::provider as provider_bindings;
+use super::bindings::omw::omw::tooling as tooling_bindings;
+use super::bindings::omw::omw::types as types_bindings;
 use crate::host::ctx::AgentContext;
 use crate::host::events::Event;
 use crate::provider::{ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall};
@@ -878,9 +878,9 @@ mod tests {
   use std::path::PathBuf;
 
   use super::*;
-  use crate::bindings::omw::omw::host::Host as _;
   use crate::host::bus::MessageBus;
   use crate::host::streams::StreamRegistry;
+  use crate::runtime::bindings::omw::omw::host::Host as _;
 
   fn test_host() -> anyhow::Result<Host> {
     let bus = Arc::new(MessageBus::new());

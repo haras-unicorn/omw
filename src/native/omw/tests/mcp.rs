@@ -2,6 +2,7 @@
 //! server, connected over an in-memory `tokio::io::duplex` pair. This drives
 //! the full rmcp `initialize` -> `tools/list` -> `tools/call` lifecycle (rmcp
 //! owns the wire protocol) and exercises our `Tool` mapping and text joining.
+#![cfg(feature = "mcp")]
 
 use std::sync::Arc;
 

@@ -11,6 +11,7 @@ use anyhow::Context as _;
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 
+#[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(test)]
 pub mod mock;
@@ -109,6 +110,7 @@ pub async fn build(
   params: &Value,
 ) -> anyhow::Result<ToolingEntry> {
   match kind {
+    #[cfg(feature = "mcp")]
     "mcp" => mcp::build(name, params).await,
     #[cfg(test)]
     "mock" => mock::build(name, params),

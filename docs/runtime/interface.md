@@ -17,11 +17,11 @@ component and called by the host):
 - `run(script)` — run one iteration. Returns the terminal message if the brain
   chose to exit, otherwise nothing.
 
-The host's `Runtime::run(&AgentContext)` drives this synchronously off the tokio
-worker (on a `spawn_blocking` thread because the wasm engine and the rhai / js
-interpreter components built on it are synchronous). The script argument is the
-agent's brain. For a wasm brain the program is baked into the component and the
-script is unused, while for Rhai it is the Rhai source text and for JS it is the
+The host's `Runtime::run(&AgentContext)` drives this off the tokio worker on a
+`spawn_blocking` thread (the wasm engine and the rhai / js interpreter
+components built on it are synchronous). The script argument is the agent's
+brain. For a wasm brain the program is baked into the component and the script
+is unused, while for Rhai it is the Rhai source text and for JS it is the
 JavaScript source text.
 
 ## How a run happens
@@ -29,8 +29,8 @@ JavaScript source text.
 `build(kind)` dispatches to `wasm`, `rhai`, or `js`. Each runtime loads its
 engine, and pushes a blocking task that:
 
-1. builds a `Store` whose data is the host `Host` (the agent context, a resource
-   table, and a WASI context),
+1. builds a `Store` whose data is the runtime `Host` (the agent context, a
+   resource table, and a WASI context),
 2. wires the imports — the WASI wasip2 imports plus the `provider`, `tooling`,
    and `host` interfaces — into a `Linker`,
 3. instantiates the component,

@@ -1,10 +1,16 @@
 //! Runtime abstractions: how an agent brain is loaded and driven.
 
+#[cfg(feature = "wasm")]
+mod bindings;
+#[cfg(feature = "wasm")]
 pub mod engine;
+#[cfg(feature = "wasm")]
+mod host;
 #[cfg(feature = "js")]
 pub mod js;
 #[cfg(feature = "rhai")]
 pub mod rhai;
+#[cfg(feature = "wasm")]
 pub mod wasm;
 
 use crate::host::ctx::AgentContext;
@@ -52,6 +58,7 @@ pub fn build(
   params: &Value,
 ) -> anyhow::Result<RuntimeEntry> {
   let runtime = match kind {
+    #[cfg(feature = "wasm")]
     "wasm" => wasm::build(name, params),
     #[cfg(feature = "rhai")]
     "rhai" => rhai::build(name, params),
@@ -75,6 +82,7 @@ mod tests {
 
   #[test]
   fn factory_builds_known_kinds() -> anyhow::Result<()> {
+    #[cfg(feature = "wasm")]
     assert!(build("wasm", "wasm", &Value::Object(Map::new())).is_ok());
     #[cfg(feature = "rhai")]
     assert!(build("rhai", "rhai", &Value::Object(Map::new())).is_ok());

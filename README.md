@@ -32,13 +32,14 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
   as an opt-in flavor, as does the `js` runtime. The default `omw`
-  package/binary (crates.io-equivalent, no script features) ships without either
-  script runtime, whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz`
-  binary (`--features rhai`) includes the rhai interpreter and the `omw-js`
-  package / `omw-js-<arch>.tar.gz` binary (`--features js`) includes the js
-  interpreter. All three see the same `omw` host interface (rhai in snake_case,
-  js in camelCase). To write a pure Rust brain, depend on the `omw-wasm-rust`
-  guest SDK crate instead of running `wit-bindgen` yourself; see [Rust brains].
+  package/binary ships with the `wasm`, `openai`, and `mcp` back ends but
+  without either script runtime, whereas the `omw-rhai` package /
+  `omw-rhai-<arch>.tar.gz` binary (`--features rhai`) includes the rhai
+  interpreter and the `omw-js` package / `omw-js-<arch>.tar.gz` binary
+  (`--features js`) includes the js interpreter. All three see the same `omw`
+  host interface (rhai in snake_case, js in camelCase). To write a pure Rust
+  brain, depend on the `omw-wasm-rust` guest SDK crate instead of running
+  `wit-bindgen` yourself; see [Rust brains].
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 - **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`

@@ -76,9 +76,9 @@ pub struct Tunables {
   /// How long the blocking-call helper waits between reload checks, in ms.
   #[serde(default = "default_reload_poll_ms")]
   pub reload_poll_ms: u64,
-  /// Uninterrupted wasm execution allowed after grace expires, in ms.
-  #[serde(default = "default_epoch_budget_ms")]
-  pub epoch_budget_ms: u64,
+  /// Uninterrupted runtime execution allowed after grace expires, in ms.
+  #[serde(default = "default_interrupt_budget_ms")]
+  pub interrupt_budget_ms: u64,
   /// How long the supervisor waits for a cooperative exit, in seconds.
   #[serde(default = "default_reload_grace_secs")]
   pub reload_grace_secs: u64,
@@ -117,7 +117,7 @@ fn default_reload_poll_ms() -> u64 {
   200
 }
 
-fn default_epoch_budget_ms() -> u64 {
+fn default_interrupt_budget_ms() -> u64 {
   100
 }
 
@@ -152,7 +152,7 @@ impl Default for Tunables {
       recv_slice_ms: default_recv_slice_ms(),
       recv_timeout_secs: default_recv_timeout_secs(),
       reload_poll_ms: default_reload_poll_ms(),
-      epoch_budget_ms: default_epoch_budget_ms(),
+      interrupt_budget_ms: default_interrupt_budget_ms(),
       reload_grace_secs: default_reload_grace_secs(),
       loop_backoff_start_ms: default_loop_backoff_start_ms(),
       loop_backoff_cap_secs: default_loop_backoff_cap_secs(),
@@ -176,8 +176,8 @@ impl Tunables {
     std::time::Duration::from_millis(self.reload_poll_ms)
   }
 
-  pub fn epoch_budget(&self) -> std::time::Duration {
-    std::time::Duration::from_millis(self.epoch_budget_ms)
+  pub fn interrupt_budget(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.interrupt_budget_ms)
   }
 
   pub fn reload_grace(&self) -> std::time::Duration {

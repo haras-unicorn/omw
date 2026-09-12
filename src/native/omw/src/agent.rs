@@ -350,9 +350,10 @@ fn classify_finished(
   }
 }
 
-/// Give a requested abort the reload grace to exit cooperatively, then trap
-/// unyielding wasm loops via the epoch and allow the epoch budget to unwind.
-/// A settled run classifies via flags; an unsettled one reports the abort.
+/// Give a requested abort the reload grace to exit cooperatively, then fire
+/// the runtime's preemptive interrupt and allow the interrupt budget to
+/// unwind. A settled run classifies via flags; an unsettled one reports the
+/// abort.
 async fn abort_grace<F>(
   finished: &mut std::pin::Pin<Box<F>>,
   ctx: &AgentContext,
@@ -366,12 +367,13 @@ where
     Ok(outcome) => classify_finished(outcome, ctx),
     Err(_) => {
       // Grace expired: cooperative tiers (recv abort, `block_on_reload`)
-      // did not exit. Trap unyielding wasm loops via the epoch; threads
+      // did not exit. Fire the runtime's preemptive interrupt; threads
       // parked in blocking calls were already aborted by the helper, so
-      // this only kills pure-compute spinners. Then give the trap a brief
-      // budget to unwind.
-      ctx.increment_epoch();
-      match tokio::time::timeout(tunables.epoch_budget(), &mut *finished).await
+      // this only kills pure-compute spinners. Then give the interrupt a
+      // brief budget to unwind.
+      ctx.interrupt();
+      match tokio::time::timeout(tunables.interrupt_budget(), &mut *finished)
+        .await
       {
         Ok(outcome) => classify_finished(outcome, ctx),
         Err(_) => RunEnd::Aborted(abort),
