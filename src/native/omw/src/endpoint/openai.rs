@@ -71,12 +71,16 @@ impl Endpoint for OpenAIEndpoint {
     &self,
     bus: Arc<MessageBus>,
     registry: Arc<EndpointRegistry>,
+    shutdown: crate::shutdown::Shutdown,
   ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(self.addr).await.with_context(|| {
       format!("failed to bind endpoint listener on {}", self.addr)
     })?;
     let app = router(ServerState::new(bus, registry));
     axum::serve(listener, app)
+      .with_graceful_shutdown(async move {
+        shutdown.wait().await;
+      })
       .await
       .context("endpoint server failed")?;
     Ok(())

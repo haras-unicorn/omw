@@ -45,6 +45,7 @@ pub trait Endpoint: Send + Sync {
     &self,
     bus: Arc<MessageBus>,
     registry: Arc<EndpointRegistry>,
+    shutdown: crate::shutdown::Shutdown,
   ) -> anyhow::Result<()>;
 }
 

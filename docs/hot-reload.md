@@ -70,8 +70,14 @@ Three tiers, mirroring SIGTERM/SIGKILL:
    [tunables](./tunables.md)): one increment traps unyielding loops that never
    yield to the host.
 
-Shutdown reuses the same three tiers, but is terminal: `run` collects it as an
-error, `loop` breaks instead of restarting.
+Shutdown reuses the same three tiers, but is terminal: `run` and `loop` both
+exit `Ok` (0) once every in-flight iteration aborted, logging the shutdown; only
+a genuine failure without a shutdown request errors. The signal subscription is
+process-wide (one SIGTERM/SIGINT latch awaited by every iteration, the endpoint
+server, and the `loop` backoff), so a signal arriving between iterations still
+aborts the next one. The endpoint drains gracefully: in-flight requests get an
+error session-end and the server stops accepting, and the watcher pump is
+aborted with the agent tasks.
 
 Every host call parks somewhere different, so each needs its own interrupt:
 
