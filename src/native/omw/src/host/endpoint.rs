@@ -268,6 +268,25 @@ impl EndpointRegistry {
     }
   }
 
+  /// Abruptly end every open session (e.g. process shutdown). Each fires
+  /// a single `endpoint-session-end` with an error, unblocking the HTTP
+  /// handlers so the server can drain.
+  pub fn abort_all(&self) {
+    let ids: Vec<(String, String)> = self
+      .sessions
+      .iter()
+      .map(|entry| (entry.value().agent.clone(), entry.key().clone()))
+      .collect();
+    for (agent, id) in ids {
+      self.abort(&id);
+      tracing::debug!(
+        agent = %agent,
+        session = %id,
+        "endpoint session terminated by shutdown"
+      );
+    }
+  }
+
   /// Deliver the terminal `endpoint-session-end` event for a session into the
   /// owning agent's inbox, tagged with the subscription UUID. `error` is
   /// absent on a normal completion and present when the session was

@@ -30,6 +30,7 @@ use crate::host::events::Event;
 use crate::host::streams::{CancelRegistry, StreamRegistry};
 use crate::provider::build_registry as build_providers;
 use crate::runtime::RunOutcome;
+use crate::shutdown::{Shutdown, shutdown_signal};
 use crate::tooling::build_registry as build_tooling;
 use crate::watch::ScriptWatcher;
 
@@ -37,36 +38,47 @@ use crate::watch::ScriptWatcher;
 ///
 /// With `watch`, a reload of an agent's script ends its current run early and
 /// starts it again immediately, so `run` keeps agents up until they complete
-/// without a pending reload. A shutdown abort is terminal: collected as an
-/// error. A reload that outlives `run`'s patience restarts the agent in place
-/// (same as `loop` treating reload as `continue`).
+/// without a pending reload. A shutdown (SIGTERM/SIGINT) is terminal but
+/// graceful: every in-flight iteration aborts through the same tiers as a
+/// reload, then `run` returns `Ok` (exit 0). Only a genuine failure without a
+/// shutdown request collects as an error. A reload that outlives `run`'s
+/// patience restarts the agent in place (same as `loop` treating reload as
+/// `continue`).
 pub async fn run_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
-  let shared = Arc::new(Shared::build(cfg).await?);
-  let watch_tx = start_watcher(cfg, watch)?;
-  collect_agent_results(
-    join_all(cfg.agents.iter().map(|agent| {
-      let config = cfg.clone();
-      let agent = agent.clone();
-      let shared = Arc::clone(&shared);
-      let watch_tx = watch_tx.clone();
-      tokio::spawn(async move {
-        match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
-          Ok(AgentStop::Completed(outcome)) => Ok(outcome),
-          Ok(AgentStop::Shutdown) => {
-            Err(anyhow::anyhow!("agent shutting down"))
-          }
-          Err(error) => Err(error),
-        }
-      })
-    }))
-    .await
-    .into_iter()
-    .map(|task| match task {
-      Ok(result) => result,
-      Err(join_error) => Err(anyhow::Error::from(join_error)),
+  let shutdown = Shutdown::new();
+  let shared = Arc::new(Shared::build(cfg, shutdown.clone()).await?);
+  let signal = spawn_signal(&shutdown);
+  let (watch_tx, watcher) = start_watcher(cfg, watch)?;
+  let results = join_all(cfg.agents.iter().map(|agent| {
+    let config = cfg.clone();
+    let agent = agent.clone();
+    let shared = Arc::clone(&shared);
+    let watch_tx = watch_tx.clone();
+    tokio::spawn(async move {
+      match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
+        Ok(AgentStop::Completed(outcome)) => Ok(outcome),
+        // Shutdown already maps to `Ok` below; keep the message for logs.
+        Ok(AgentStop::Shutdown) => Err(anyhow::anyhow!("agent shutting down")),
+        Err(error) => Err(error),
+      }
     })
-    .collect(),
-  )
+  }))
+  .await
+  .into_iter()
+  .map(|task| match task {
+    Ok(result) => result,
+    Err(join_error) => Err(anyhow::Error::from(join_error)),
+  })
+  .collect::<Vec<_>>();
+  signal.abort();
+  if let Some(watcher) = watcher {
+    watcher.abort();
+  }
+  if shutdown.is_requested() {
+    tracing::info!("shutdown requested, exiting gracefully");
+    return Ok(());
+  }
+  collect_agent_results(results)
 }
 
 /// Run every configured agent in a loop forever, restarting immediately on
@@ -77,8 +89,10 @@ pub async fn run_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
 /// With `watch`, a script change restarts the agent immediately (without
 /// backoff) instead of waiting for the current iteration to finish.
 pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
-  let shared = Arc::new(Shared::build(cfg).await?);
-  let watch_tx = start_watcher(cfg, watch)?;
+  let shutdown = Shutdown::new();
+  let shared = Arc::new(Shared::build(cfg, shutdown.clone()).await?);
+  let signal = spawn_signal(&shutdown);
+  let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   join_all(cfg.agents.iter().map(|agent| {
     let config = cfg.clone();
     let agent = agent.clone();
@@ -89,6 +103,10 @@ pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
       let backoff_cap = config.tunables.loop_backoff_cap();
       let mut delay = backoff_start;
       loop {
+        if shared.shutdown.is_requested() {
+          tracing::info!(agent = %agent.name, "agent shutting down");
+          break;
+        }
         match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
           Ok(AgentStop::Completed(completed)) => {
             tracing::info!(agent = %agent.name, ?completed, "agent iteration completed");
@@ -99,13 +117,24 @@ pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
             break;
           }
           Err(error) => {
+            if shared.shutdown.is_requested() {
+              tracing::info!(agent = %agent.name, "agent shutting down");
+              break;
+            }
             tracing::error!(agent = %agent.name, error = %error, "agent iteration failed");
             tracing::debug!(
               agent = %agent.name,
               delay_ms = delay.as_millis(),
               "backing off before retrying the agent"
             );
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+              biased;
+              () = shared.shutdown.wait() => {
+                tracing::info!(agent = %agent.name, "agent shutting down");
+                break;
+              }
+              () = tokio::time::sleep(delay) => {}
+            }
             delay = delay.saturating_mul(2).min(backoff_cap);
           }
         }
@@ -113,6 +142,10 @@ pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
     })
   }))
   .await;
+  signal.abort();
+  if let Some(watcher) = watcher {
+    watcher.abort();
+  }
   Ok(())
 }
 
@@ -178,19 +211,34 @@ async fn run_agent(
   // Without `--watch` this fails fast, same as today. With `--watch` the
   // watcher is already registered below, so an edit fixing the script
   // validates and starts the agent normally instead of failing the task.
+  // A shutdown parked at the gate exits terminally instead of waiting for
+  // a fixing edit that will never come.
   let (reload_tx, mut reload_rx) = mpsc::unbounded_channel::<()>();
   if let Some(watch_tx) = &watch_tx {
     watch_tx.register(&agent.name, reload_tx);
   }
   if let Err(error) = runtime.runtime.validate(&ctx).await {
+    if shared.shutdown.is_requested() {
+      tracing::info!(agent = %agent.name, "agent shutting down");
+      return Ok(AgentStop::Shutdown);
+    }
     if watch_tx.is_none() {
       tracing::error!(agent = %agent.name, error = %error, "agent brain failed startup validation");
       return Err(error);
     }
     tracing::warn!(agent = %agent.name, error = %error, "agent brain invalid at startup, waiting for a fixing edit");
     loop {
-      if reload_rx.recv().await.is_none() {
-        return Err(error);
+      tokio::select! {
+        biased;
+        () = shared.shutdown.wait() => {
+          tracing::info!(agent = %agent.name, "agent shutting down");
+          return Ok(AgentStop::Shutdown);
+        }
+        reload = reload_rx.recv() => {
+          if reload.is_none() {
+            return Err(error);
+          }
+        }
       }
       drain_reload(&mut reload_rx);
       match runtime.runtime.validate(&ctx).await {
@@ -212,14 +260,18 @@ async fn run_agent(
     // A previous iteration may have aborted on a reload request; clear it so
     // the new iteration starts clean instead of instantly re-aborting. Drop
     // the queued reload/shutdown system event as well so the next `recv`
-    // does not spuriously exit.
+    // does not spuriously exit. A shutdown that landed between iterations
+    // exits terminally instead of starting another run.
+    if shared.shutdown.is_requested() {
+      tracing::info!(agent = %agent.name, "agent shutting down");
+      return Ok(AgentStop::Shutdown);
+    }
     ctx.clear_reload();
     if let Err(error) = shared.bus.drain_system(&agent.name) {
       tracing::warn!(agent = %agent.name, error = %error, "failed to drain system events");
     }
     tracing::info!(agent = %agent.name, runtime = %agent.runtime, "agent iteration starting");
-    match run_with_reload(&runtime.runtime, &ctx, &shared.bus, &mut reload_rx)
-      .await
+    match run_with_reload(&runtime.runtime, &ctx, shared, &mut reload_rx).await
     {
       RunEnd::Done(RunOutcome::Completed) => {
         tracing::info!(agent = %agent.name, "agent run completed");
@@ -231,6 +283,13 @@ async fn run_agent(
       }
       RunEnd::Aborted(Abort::Shutdown) => {
         tracing::info!(agent = %agent.name, "agent shutting down");
+        // A shutdown abort owns the brain's pumps outright: no next
+        // iteration will run, so cancel them now instead of leaving
+        // ownerless pumps on the bridge runtime until drop.
+        ctx.streams.cancel_all();
+        ctx.timers.cancel_all();
+        ctx.resources.cancel_all();
+        ctx.tool_calls.cancel_all();
         return Ok(AgentStop::Shutdown);
       }
       RunEnd::Aborted(Abort::Reload) => {
@@ -264,8 +323,10 @@ async fn run_agent(
 /// shutdown. `run` and `loop` both funnel through here so `Completed`,
 /// reloads, and shutdowns behave the same in either mode.
 ///
-/// Structured as a loop over `select! { finished, shutdown, reload_rx }`: on
-/// a reload signal, `runtime.validate(ctx)` runs *while the old run keeps
+/// Structured as a loop over `select! { finished, shutdown, reload_rx }`:
+/// the process-wide latch resolves immediately when already set, so
+/// iterations starting after the signal still abort. On a reload signal,
+/// `runtime.validate(ctx)` runs *while the old run keeps
 /// executing*. Valid → the abort path (deliver `reload` + flag + grace +
 /// epoch). Invalid → an `error` event tagged with the lifecycle UUID (if
 /// subscribed; log-only otherwise), a host-side `warn!`, and back to waiting
@@ -274,19 +335,25 @@ async fn run_agent(
 async fn run_with_reload(
   runtime: &Arc<dyn crate::runtime::Runtime>,
   ctx: &AgentContext,
-  bus: &Arc<MessageBus>,
+  shared: &Shared,
   reload_rx: &mut mpsc::UnboundedReceiver<()>,
 ) -> RunEnd {
   // With no watcher there is no sender, so `recv` never resolves and the
   // run completes undisturbed. Shutdown always listens.
+  let bus = &shared.bus;
   let mut finished = Box::pin(runtime.run(ctx));
-  let shutdown = shutdown_signal();
-  tokio::pin!(shutdown);
   loop {
+    if shared.shutdown.is_requested() {
+      let id = bus.lifecycle_of(&ctx.name).unwrap_or_else(new_uuid);
+      ctx.request_shutdown();
+      bus.deliver(&ctx.name, &id, Event::Shutdown);
+      tracing::info!(agent = %ctx.name, "agent shutdown requested");
+      return abort_grace(&mut finished, ctx, Abort::Shutdown).await;
+    }
     tokio::select! {
       biased;
       outcome = &mut finished => return classify_finished(outcome, ctx),
-      () = &mut shutdown => {
+      () = shared.shutdown.wait() => {
         let id = bus.lifecycle_of(&ctx.name).unwrap_or_else(new_uuid);
         ctx.request_shutdown();
         bus.deliver(&ctx.name, &id, Event::Shutdown);
@@ -379,28 +446,16 @@ where
   }
 }
 
-/// Resolve on SIGTERM/SIGINT so the supervisor can shut agents down
-/// terminally. Pending forever when no signal arrives.
-async fn shutdown_signal() {
-  #[cfg(unix)]
-  {
-    let term =
-      tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-    let int =
-      tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
-    let (Ok(mut term), Ok(mut int)) = (term, int) else {
-      std::future::pending::<()>().await;
-      return;
-    };
-    tokio::select! {
-      _ = term.recv() => {},
-      _ = int.recv() => {},
-    }
-  }
-  #[cfg(not(unix))]
-  {
-    let _ = tokio::signal::ctrl_c().await;
-  }
+/// Spawn the single OS signal subscription for this process: on the first
+/// SIGTERM/SIGINT request the shared latch, which every agent iteration,
+/// the endpoint server, and the `loop` backoff await.
+fn spawn_signal(shutdown: &Shutdown) -> tokio::task::JoinHandle<()> {
+  let shutdown = shutdown.clone();
+  tokio::spawn(async move {
+    shutdown_signal().await;
+    tracing::info!("shutdown signal received");
+    shutdown.request();
+  })
 }
 
 /// Drop any reload signals that arrived while the run was unwinding, so one
@@ -436,13 +491,14 @@ impl ReloadTx {
 }
 
 /// Start the script watcher when `watch` is set, returning the registry its
-/// pump notifies. Without `watch` there is no pump and no overhead.
+/// pump notifies plus the pump handle so the supervisor can abort it on
+/// shutdown. Without `watch` there is no pump and no overhead.
 fn start_watcher(
   cfg: &Config,
   watch: bool,
-) -> anyhow::Result<Option<ReloadTx>> {
+) -> anyhow::Result<(Option<ReloadTx>, Option<tokio::task::JoinHandle<()>>)> {
   if !watch {
-    return Ok(None);
+    return Ok((None, None));
   }
   let reload = ReloadTx {
     senders: Arc::new(dashmap::DashMap::new()),
@@ -451,15 +507,15 @@ fn start_watcher(
   let mut watcher = ScriptWatcher::with_tunables(&cfg.agents, cfg.tunables)?;
   if watcher.is_empty() {
     tracing::warn!("--watch is set but no agent script can be watched");
-    return Ok(None);
+    return Ok((None, None));
   }
-  tokio::spawn(async move {
+  let handle = tokio::spawn(async move {
     while let Some(agents) = watcher.next_reload().await {
       pump_reload.notify(&agents);
     }
     tracing::warn!("script watcher ended; hot reload is disabled from here on");
   });
-  Ok(Some(reload))
+  Ok((Some(reload), Some(handle)))
 }
 
 /// Aggregate the results of every agent task into one, erroring if any of
@@ -491,10 +547,11 @@ struct Shared {
   bus: Arc<MessageBus>,
   endpoint_registry: Option<Arc<EndpointRegistry>>,
   endpoint_task: Option<tokio::task::JoinHandle<()>>,
+  shutdown: Shutdown,
 }
 
 impl Shared {
-  async fn build(cfg: &Config) -> anyhow::Result<Self> {
+  async fn build(cfg: &Config, shutdown: Shutdown) -> anyhow::Result<Self> {
     let providers = build_providers(cfg)?;
     let tooling = build_tooling(cfg).await?;
     let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
@@ -510,9 +567,12 @@ impl Shared {
         ));
         let serve_bus = Arc::clone(&bus);
         let serve_registry = Arc::clone(&registry);
+        let serve_shutdown = shutdown.clone();
         let task = tokio::spawn(async move {
-          if let Err(error) =
-            entry.endpoint.serve(serve_bus, serve_registry).await
+          if let Err(error) = entry
+            .endpoint
+            .serve(serve_bus, serve_registry, serve_shutdown)
+            .await
           {
             tracing::error!(error = %error, "endpoint server failed");
           }
@@ -527,12 +587,22 @@ impl Shared {
       bus,
       endpoint_registry,
       endpoint_task,
+      shutdown,
     })
   }
 }
 
 impl Drop for Shared {
+  // Best-effort only: `drop` cannot await the axum graceful drain, so it
+  // unblocks the HTTP handlers with error ends and aborts the serve task.
+  // The normal path already resolved `shutdown.wait()` inside `serve` before
+  // this runs.
   fn drop(&mut self) {
+    if let Some(registry) = self.endpoint_registry.take() {
+      // Unblock the HTTP handlers first so the axum graceful shutdown the
+      // serve task awaits can drain; the task itself is joined below.
+      registry.abort_all();
+    }
     if let Some(task) = self.endpoint_task.take() {
       task.abort();
       tracing::info!("endpoint server stopped");
