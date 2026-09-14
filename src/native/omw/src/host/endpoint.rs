@@ -6,9 +6,9 @@
 //! client disconnects (receiver drop) or the subscription is cancelled; each
 //! fires a single `endpoint-session-end` event into the owning agent's inbox.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use tokio::sync::mpsc;
 
 use crate::host::bus::MessageBus;
@@ -80,12 +80,12 @@ struct Session {
 
 /// The shared endpoint session registry: created once per process and shared
 /// between the HTTP server task and every agent context. All access is
-/// synchronous (`Mutex` + `try_send`), so the wasm host calls need no async
+/// synchronous (`DashMap` + `try_send`), so the wasm host calls need no async
 /// bridge.
 #[derive(Debug)]
 pub struct EndpointRegistry {
   bus: Arc<MessageBus>,
-  sessions: Mutex<HashMap<String, Session>>,
+  sessions: DashMap<String, Session>,
   session_buffer: usize,
 }
 
@@ -100,7 +100,7 @@ impl EndpointRegistry {
   ) -> Self {
     Self {
       bus,
-      sessions: Mutex::new(HashMap::new()),
+      sessions: DashMap::new(),
       session_buffer: tunables.session_buffer,
     }
   }
@@ -113,8 +113,7 @@ impl EndpointRegistry {
   pub fn open(self: Arc<Self>, agent: &str, subscription: &str) -> OpenSession {
     let session = crate::host::bus::new_uuid();
     let (tx, rx) = mpsc::channel(self.session_buffer);
-    let mut guards = self.locked();
-    guards.insert(
+    self.sessions.insert(
       session.clone(),
       Session {
         agent: agent.to_string(),
@@ -122,7 +121,6 @@ impl EndpointRegistry {
         tx,
       },
     );
-    drop(guards);
     OpenSession {
       session: session.clone(),
       agent: agent.to_string(),
@@ -150,8 +148,7 @@ impl EndpointRegistry {
   ) -> Result<(), String> {
     let terminal = delta.finish_reason.is_some();
     let tx = {
-      let mut guards = self.locked();
-      let Some(entry) = guards.get_mut(session) else {
+      let Some(entry) = self.sessions.get(session) else {
         return Err("unknown endpoint session".to_string());
       };
       if entry.agent != agent {
@@ -175,9 +172,7 @@ impl EndpointRegistry {
           );
         }
       }
-      let mut guards = self.locked();
-      let _ = guards.remove(session);
-      drop(guards);
+      let _ = self.sessions.remove(session);
       match tx.try_send(Outbound::Close) {
         Ok(()) => {}
         Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -214,19 +209,16 @@ impl EndpointRegistry {
   /// miss), so the agent never saw an `endpoint-message` and must not get
   /// an end for an unknown session.
   pub fn remove_silent(&self, session: &str) {
-    let mut guards = self.locked();
-    guards.remove(session);
+    self.sessions.remove(session);
   }
 
   /// Abruptly end a session (e.g. the endpoint client disconnected, dropping
   /// the receiver half). Fires a single `endpoint-session-end` with an error;
   /// idempotent once the entry is removed, so it never double-fires.
   pub fn abort(&self, session: &str) {
-    let mut guards = self.locked();
-    let Some(entry) = guards.remove(session) else {
+    let Some((_, entry)) = self.sessions.remove(session) else {
       return;
     };
-    drop(guards);
     drop(entry.tx);
     tracing::debug!(
       agent = %entry.agent,
@@ -245,20 +237,19 @@ impl EndpointRegistry {
   /// unsubscribed from the endpoint). Each fires a single
   /// `endpoint-session-end` with an error.
   pub fn cancel_subscription(&self, subscription: &str) {
-    let mut guards = self.locked();
-    let ids: Vec<String> = guards
+    let ids: Vec<String> = self
+      .sessions
       .iter()
-      .filter(|(_, s)| s.subscription == *subscription)
-      .map(|(id, _)| id.clone())
+      .filter(|entry| entry.value().subscription == *subscription)
+      .map(|entry| entry.key().clone())
       .collect();
     let mut aborted: Vec<(String, String)> = Vec::new();
     for id in ids {
-      let Some(entry) = guards.remove(&id) else {
+      let Some((_, entry)) = self.sessions.remove(&id) else {
         continue;
       };
       aborted.push((entry.agent, id));
     }
-    drop(guards);
     for (agent, id) in aborted {
       tracing::debug!(
         agent = %agent,
@@ -296,13 +287,6 @@ impl EndpointRegistry {
         error,
       }),
     );
-  }
-
-  fn locked(&self) -> MutexGuard<'_, HashMap<String, Session>> {
-    self
-      .sessions
-      .lock()
-      .unwrap_or_else(|poison| poison.into_inner())
   }
 }
 
