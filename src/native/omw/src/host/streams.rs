@@ -11,9 +11,9 @@
   reason = "blank lines between doc comments and items are normalized by dev format"
 )]
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use futures_util::StreamExt as _;
 use tokio::sync::oneshot;
 
@@ -26,7 +26,7 @@ use crate::tooling::Tool;
 /// signal for its pump; an entry's presence means the stream is still open.
 #[derive(Default)]
 pub struct StreamRegistry {
-  open: Mutex<HashMap<String, oneshot::Sender<()>>>,
+  open: DashMap<String, oneshot::Sender<()>>,
 }
 
 /// The generic cancel-signal registry behind every cancellable host source (chat
@@ -39,43 +39,32 @@ impl StreamRegistry {
     Self::default()
   }
 
-  /// Lock the open-stream map, recovering the guard on poison.
-  fn locked_open(
-    &self,
-  ) -> MutexGuard<'_, HashMap<String, oneshot::Sender<()>>> {
-    self
-      .open
-      .lock()
-      .unwrap_or_else(|poison| poison.into_inner())
-  }
-
   /// Register a stream and return the cancel receiver its pump waits on.
   pub fn open(&self, uuid: String) -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
-    let mut m = self.locked_open();
-    m.insert(uuid, tx);
+    self.open.insert(uuid, tx);
     rx
   }
 
   /// Whether a chat stream is still open.
   pub fn is_open(&self, uuid: &str) -> bool {
-    self.locked_open().contains_key(uuid)
+    self.open.contains_key(uuid)
   }
 
   /// Cancel an open stream by UUID: drops its cancel signal, waking the pump.
   pub fn cancel(&self, uuid: &str) {
-    let _ = self.locked_open().remove(uuid);
+    let _ = self.open.remove(uuid);
   }
 
   /// Cancel every open stream/timer/subscription at once, waking all pumps.
   /// Used on hot reload so a restarted agent leaves no stale pumps behind.
   pub fn cancel_all(&self) {
-    self.locked_open().clear();
+    self.open.clear();
   }
 
   /// Deregister a stream; the pump calls this once it finishes.
   pub fn remove(&self, uuid: &str) {
-    let _ = self.locked_open().remove(uuid);
+    let _ = self.open.remove(uuid);
   }
 
   /// Test-only poll helper: block up to `timeout` until `uuid` appears

@@ -413,26 +413,17 @@ fn drain_reload(reload_rx: &mut mpsc::UnboundedReceiver<()>) {
 /// Held per agent task and cloned where the supervisor needs it.
 #[derive(Clone)]
 struct ReloadTx {
-  senders:
-    Arc<std::sync::Mutex<HashMap<String, Vec<mpsc::UnboundedSender<()>>>>>,
+  senders: Arc<dashmap::DashMap<String, Vec<mpsc::UnboundedSender<()>>>>,
 }
 
 impl ReloadTx {
   fn register(&self, agent: &str, tx: mpsc::UnboundedSender<()>) {
-    let mut senders = self
-      .senders
-      .lock()
-      .unwrap_or_else(|poison| poison.into_inner());
-    senders.entry(agent.to_string()).or_default().push(tx);
+    self.senders.entry(agent.to_string()).or_default().push(tx);
   }
 
   fn notify(&self, agents: &[String]) {
-    let mut senders = self
-      .senders
-      .lock()
-      .unwrap_or_else(|poison| poison.into_inner());
     for agent in agents {
-      if let Some(txs) = senders.get_mut(agent) {
+      if let Some(mut txs) = self.senders.get_mut(agent) {
         // Drop receivers from finished iterations so one save restarts the
         // agent once and the registry does not grow over time.
         txs.retain(|tx| !tx.is_closed());
@@ -454,7 +445,7 @@ fn start_watcher(
     return Ok(None);
   }
   let reload = ReloadTx {
-    senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
+    senders: Arc::new(dashmap::DashMap::new()),
   };
   let pump_reload = reload.clone();
   let mut watcher = ScriptWatcher::with_tunables(&cfg.agents, cfg.tunables)?;
