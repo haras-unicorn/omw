@@ -40,6 +40,7 @@ pub struct ScriptWatcher {
 impl ScriptWatcher {
   /// Start watching the scripts of `agents`. Scripts whose parent directory
   /// does not exist are skipped with a warning.
+  #[cfg(test)]
   pub fn new(agents: &[AgentConfig]) -> anyhow::Result<Self> {
     Self::with_tunables(agents, Tunables::default())
   }

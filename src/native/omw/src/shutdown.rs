@@ -52,7 +52,7 @@ impl Default for Shutdown {
 
 /// Resolve on SIGTERM/SIGINT so the supervisor can shut agents down
 /// terminally. Pending forever when no signal arrives.
-pub async fn shutdown_signal() {
+pub(crate) async fn shutdown_signal() {
   #[cfg(unix)]
   {
     let term =

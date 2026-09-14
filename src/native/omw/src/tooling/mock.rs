@@ -18,8 +18,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 
 use super::{
-  ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
-  ToolingEntry,
+  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
 };
 
 /// A notification sender registered on a mock subscription.
@@ -28,7 +27,7 @@ type NotificationSender =
 
 /// Impl-specific configuration for the mock tooling.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Config {
+struct Config {
   #[serde(default)]
   pub tools: Vec<Tool>,
 
@@ -158,14 +157,15 @@ pub struct MockTooling {
   resource_list_subs: Arc<Mutex<Vec<NotificationSender>>>,
 }
 
-/// Build a `mock` tooling from its opaque config params.
-pub fn build(name: &str, params: &Value) -> anyhow::Result<ToolingEntry> {
-  let config = Config::deserialize(params)
-    .with_context(|| format!("invalid mock tooling config for {name:?}"))?;
-  Ok(ToolingEntry {
-    name: name.to_string(),
-    kind: MockTooling::kind(),
-    tooling: Arc::new(MockTooling {
+impl Factory for MockTooling {
+  fn build(
+    name: &str,
+    params: &Value,
+    _tunables: crate::config::Tunables,
+  ) -> anyhow::Result<Arc<Self>> {
+    let config = Config::deserialize(params)
+      .with_context(|| format!("invalid mock tooling config for {name:?}"))?;
+    Ok(Arc::new(MockTooling {
       tools: config.tools,
       result: config.result,
       resources: config.resources,
@@ -173,8 +173,8 @@ pub fn build(name: &str, params: &Value) -> anyhow::Result<ToolingEntry> {
       calls: Arc::new(Mutex::new(Vec::new())),
       resource_subs: Arc::new(Mutex::new(HashMap::new())),
       resource_list_subs: Arc::new(Mutex::new(Vec::new())),
-    }),
-  })
+    }))
+  }
 }
 
 impl MockTooling {

@@ -424,7 +424,7 @@ impl MessageBus {
 }
 
 /// A fresh v4 UUID string, used for every subscription/handle.
-pub fn new_uuid() -> String {
+pub(crate) fn new_uuid() -> String {
   uuid::Uuid::new_v4().to_string()
 }
 

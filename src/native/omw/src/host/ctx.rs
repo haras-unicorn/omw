@@ -19,7 +19,7 @@ use crate::tooling::ToolingEntry;
 
 /// Preemptive interrupt for a running brain, stashed by the runtime so the
 /// supervisor can stop an unyielding run once the grace expires.
-pub type InterruptHandle = Arc<dyn Fn() + Send + Sync>;
+pub(crate) type InterruptHandle = Arc<dyn Fn() + Send + Sync>;
 
 /// Everything a runtime needs to execute one agent for one iteration.
 ///
@@ -28,29 +28,29 @@ pub type InterruptHandle = Arc<dyn Fn() + Send + Sync>;
 /// synchronous execution).
 #[derive(Clone)]
 pub struct AgentContext {
-  pub name: String,
+  name: String,
   /// The agent's brain file.
-  pub script: PathBuf,
+  script: PathBuf,
   /// Every configured provider, keyed by name.
-  pub providers: HashMap<String, ProviderEntry>,
+  providers: HashMap<String, ProviderEntry>,
   /// Every configured tooling, keyed by name.
-  pub tooling: HashMap<String, ToolingEntry>,
-  pub bus: Arc<MessageBus>,
+  tooling: HashMap<String, ToolingEntry>,
+  bus: Arc<MessageBus>,
   /// Per-agent memory that survives hot reloads (same context is reused
   /// across reload iterations). Scoped to this agent only.
-  pub memory: Arc<Memory>,
+  memory: Arc<Memory>,
   /// Registry of this agent's open chat streams, keyed by UUID.
-  pub streams: Arc<StreamRegistry>,
+  streams: Arc<StreamRegistry>,
   /// Registry of this agent's pending timers, keyed by UUID.
-  pub timers: Arc<CancelRegistry>,
+  timers: Arc<CancelRegistry>,
   /// Registry of this agent's open resource subscriptions, keyed by UUID.
-  pub resources: Arc<CancelRegistry>,
+  resources: Arc<CancelRegistry>,
   /// Registry of this agent's in-flight tool calls, keyed by UUID.
-  pub tool_calls: Arc<CancelRegistry>,
+  tool_calls: Arc<CancelRegistry>,
   /// The shared endpoint session registry, present when the endpoint HTTP
   /// server is configured. `None` when the agent cannot use the `endpoint-*`
   /// host imports (they error out).
-  pub endpoint: Option<Arc<EndpointRegistry>>,
+  endpoint: Option<Arc<EndpointRegistry>>,
   /// The tokio runtime used to bridge synchronous runtime host calls to
   /// the async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
@@ -69,11 +69,64 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+  /// The agent's name.
+  pub fn name(&self) -> &str {
+    &self.name
+  }
+
+  pub(crate) fn script(&self) -> &PathBuf {
+    &self.script
+  }
+
+  pub(crate) fn providers(&self) -> &HashMap<String, ProviderEntry> {
+    &self.providers
+  }
+
+  pub(crate) fn tooling(&self) -> &HashMap<String, ToolingEntry> {
+    &self.tooling
+  }
+
+  pub(crate) fn bus(&self) -> &Arc<MessageBus> {
+    &self.bus
+  }
+
+  pub(crate) fn memory(&self) -> &Arc<Memory> {
+    &self.memory
+  }
+
+  pub(crate) fn streams(&self) -> &Arc<StreamRegistry> {
+    &self.streams
+  }
+
+  pub(crate) fn timers(&self) -> &Arc<CancelRegistry> {
+    &self.timers
+  }
+
+  pub(crate) fn resources(&self) -> &Arc<CancelRegistry> {
+    &self.resources
+  }
+
+  pub(crate) fn tool_calls(&self) -> &Arc<CancelRegistry> {
+    &self.tool_calls
+  }
+
+  pub(crate) fn endpoint(&self) -> Option<&Arc<EndpointRegistry>> {
+    self.endpoint.as_ref()
+  }
+
+  /// Swap the brain script path, keeping memory and all other state.
+  /// Test-only: production reloads re-read the same path.
+  #[cfg(test)]
+  pub(crate) fn set_script(&mut self, script: PathBuf) {
+    self.script = script;
+  }
+
+  #[cfg(test)]
   #[allow(
     clippy::too_many_arguments,
     reason = "aggregating the per-agent registries into a struct is left to a ctx refactor"
   )]
-  pub fn new(
+  pub(crate) fn new(
     name: String,
     script: PathBuf,
     providers: HashMap<String, ProviderEntry>,
@@ -104,7 +157,7 @@ impl AgentContext {
     clippy::too_many_arguments,
     reason = "aggregating the per-agent registries into a struct is left to a ctx refactor"
   )]
-  pub fn with_tunables(
+  pub(crate) fn with_tunables(
     name: String,
     script: PathBuf,
     providers: HashMap<String, ProviderEntry>,
@@ -142,40 +195,40 @@ impl AgentContext {
     })
   }
 
-  pub fn tunables(&self) -> Tunables {
+  pub(crate) fn tunables(&self) -> Tunables {
     self.tunables
   }
 
   /// Whether a reload has been requested (and not yet cleared).
-  pub fn reload_requested(&self) -> bool {
+  pub(crate) fn reload_requested(&self) -> bool {
     self.reload.load(Ordering::Relaxed)
   }
 
   /// Whether a shutdown has been requested (and not yet cleared).
-  pub fn shutdown_requested(&self) -> bool {
+  pub(crate) fn shutdown_requested(&self) -> bool {
     self.shutdown.load(Ordering::Relaxed)
   }
 
   /// Signal this agent's run to reload: the blocking `host.recv` aborts
   /// with a reload error, waking the brain out of its wait.
-  pub fn request_reload(&self) {
+  pub(crate) fn request_reload(&self) {
     self.reload.store(true, Ordering::Relaxed);
   }
 
   /// Signal this agent's run to shut down terminally.
-  pub fn request_shutdown(&self) {
+  pub(crate) fn request_shutdown(&self) {
     self.shutdown.store(true, Ordering::Relaxed);
   }
 
   /// Clear previously requested reload/shutdown flags, so the next iteration
   /// starts clean.
-  pub fn clear_reload(&self) {
+  pub(crate) fn clear_reload(&self) {
     self.reload.store(false, Ordering::Relaxed);
     self.shutdown.store(false, Ordering::Relaxed);
   }
 
   /// Stash the preemptive interrupt of the currently running brain.
-  pub fn set_interrupt_handle(&self, handle: InterruptHandle) {
+  pub(crate) fn set_interrupt_handle(&self, handle: InterruptHandle) {
     if let Ok(mut slot) = self.interrupt.lock() {
       *slot = Some(handle);
     }
@@ -183,7 +236,7 @@ impl AgentContext {
 
   /// Fire the stashed interrupt of the running brain. Only fires after a
   /// reload/shutdown and the grace expired; a no-op when no run is active.
-  pub fn interrupt(&self) {
+  pub(crate) fn interrupt(&self) {
     if let Ok(slot) = self.interrupt.lock()
       && let Some(handle) = slot.as_ref()
     {
@@ -191,7 +244,7 @@ impl AgentContext {
     }
   }
 
-  pub fn rt(&self) -> Arc<tokio::runtime::Runtime> {
+  pub(crate) fn rt(&self) -> Arc<tokio::runtime::Runtime> {
     #[allow(clippy::unwrap_used, reason = "Always constructed as Some")]
     {
       Arc::clone(self.rt.as_ref().unwrap())
@@ -202,7 +255,7 @@ impl AgentContext {
   /// thread, aborting early with `"agent reloaded"` / `"agent shutting
   /// down"` when requested. Upstream work may still run to completion; its
   /// result is dropped.
-  pub fn block_on_reload<T: Send + 'static>(
+  pub(crate) fn block_on_reload<T: Send + 'static>(
     &self,
     future: impl std::future::Future<Output = T> + Send + 'static,
   ) -> Result<T, String> {

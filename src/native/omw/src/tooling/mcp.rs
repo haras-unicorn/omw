@@ -9,9 +9,18 @@
 //! The transport owns the wire protocol and lifecycle (`initialize`); this
 //! module only maps rmcp's typed results onto our [`Tool`] and text-joined
 //! results.
+//!
+//! The connection is established lazily on first tool or resource use, so
+//! construction only parses config and never touches the network. The first use
+//! dials with exponential backoff (doubling from
+//! `tooling_connect_backoff_start_ms` up to `tooling_connect_backoff_cap_secs`,
+//! see [`Tunables`](crate::config::Tunables)); the wait is cancelled when the
+//! caller goes away (reload/shutdown aborts the blocking helper, pump cancel
+//! drops the event-driven call).
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::stream::BoxStream;
@@ -27,16 +36,16 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-  ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
-  ToolingEntry,
+  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
 };
+use crate::config::Tunables;
 use crate::secret::Secret;
 
 /// Impl-specific configuration for a single MCP server, selected by
 /// transport.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
-pub enum Config {
+enum Config {
   Stdio {
     command: String,
     #[serde(default)]
@@ -51,15 +60,26 @@ pub enum Config {
   },
 }
 
-/// An MCP tooling bridge over one server, owned by an rmcp [`RoleClient`].
-pub struct MCPTooling {
+/// A live connection: the peer to call plus the running service that keeps
+/// the transport alive. Dropped when the last holder goes away.
+struct Connected {
   peer: rmcp::service::Peer<RoleClient>,
-  /// Kept alive (and hence the connection open) for the life of the bridge.
   #[expect(
     dead_code,
     reason = "the running service is what keeps the transport and peer alive"
   )]
   running: Arc<rmcp::service::RunningService<RoleClient, ()>>,
+}
+
+/// An MCP tooling bridge over one server.
+///
+/// The bridge holds its config and dials lazily: the first tool or resource
+/// use connects (with backoff) and caches the peer; later uses reuse it.
+pub struct MCPTooling {
+  config: Config,
+  backoff_start: Duration,
+  backoff_cap: Duration,
+  connected: tokio::sync::Mutex<Option<Connected>>,
 }
 
 impl std::fmt::Debug for MCPTooling {
@@ -70,42 +90,84 @@ impl std::fmt::Debug for MCPTooling {
 
 impl MCPTooling {
   /// Wrap an established rmcp client (already `initialize`d over some
-  /// transport) as a [`MCPTooling`]. Used by [`build`] and by integration
-  /// tests that connect over an in-memory transport.
+  /// transport) as a [`MCPTooling`]. Used by integration tests that connect
+  /// over an in-memory transport.
   pub fn new(running: rmcp::service::RunningService<RoleClient, ()>) -> Self {
     let peer = running.peer().clone();
     Self {
-      peer,
-      running: Arc::new(running),
+      config: Config::Stdio {
+        command: String::new(),
+        args: Vec::new(),
+        env: HashMap::new(),
+      },
+      backoff_start: Duration::from_millis(0),
+      backoff_cap: Duration::from_millis(0),
+      connected: tokio::sync::Mutex::new(Some(Connected {
+        peer,
+        running: Arc::new(running),
+      })),
+    }
+  }
+
+  /// Return the live peer, dialing first when needed and caching the result.
+  /// The dial retries with backoff; a use that lands mid-backoff waits its
+  /// turn on the mutex instead of dialing twice. Dropping the future (pump
+  /// cancel, reload or shutdown abort) cancels the sleep or the dial.
+  /// Dialing never clears: a call that already borrowed the cached peer keeps
+  /// it (and keeps its server's transport alive) until it finishes, even if
+  /// another use replaces the cache in the meantime; a use holding a stale
+  /// peer fails plainly and the *next* use dials fresh.
+  async fn peer(&self) -> anyhow::Result<rmcp::service::Peer<RoleClient>> {
+    if let Some(connected) = self.connected.lock().await.as_ref() {
+      return Ok(connected.peer.clone());
+    }
+    let mut delay = self.backoff_start;
+    loop {
+      match dial_once(&self.config).await {
+        Ok(connected) => {
+          let peer = connected.peer.clone();
+          *self.connected.lock().await = Some(connected);
+          return Ok(peer);
+        }
+        Err(error) => {
+          tracing::warn!(
+            error = %error,
+            "failed to connect to MCP server, retrying"
+          );
+          if delay >= self.backoff_cap {
+            return Err(error);
+          }
+          tokio::time::sleep(delay).await;
+          delay = delay.saturating_mul(2).min(self.backoff_cap);
+        }
+      }
     }
   }
 }
 
-/// Build an `mcp` tooling from its opaque config params.
-pub async fn build(name: &str, params: &Value) -> anyhow::Result<ToolingEntry> {
-  let config = Config::deserialize(params)
-    .with_context(|| format!("invalid mcp tooling config for {name:?}"))?;
-
-  tracing::debug!(name, config = ?config, "built mcp tooling");
-
-  let running: rmcp::service::RunningService<RoleClient, ()> = connect(&config)
-    .await
-    .with_context(|| format!("failed to connect to MCP server {name:?}"))?;
-
-  Ok(ToolingEntry {
-    name: name.to_string(),
-    kind: MCPTooling::kind(),
-    tooling: Arc::new(MCPTooling::new(running)),
-  })
+impl Factory for MCPTooling {
+  fn build(
+    name: &str,
+    params: &Value,
+    tunables: Tunables,
+  ) -> anyhow::Result<Arc<Self>> {
+    let config = Config::deserialize(params)
+      .with_context(|| format!("invalid mcp tooling config for {name:?}"))?;
+    tracing::debug!(name, config = ?config, "built mcp tooling");
+    Ok(Arc::new(MCPTooling {
+      config,
+      backoff_start: tunables.tooling_connect_backoff_start(),
+      backoff_cap: tunables.tooling_connect_backoff_cap(),
+      connected: tokio::sync::Mutex::new(None),
+    }))
+  }
 }
 
 /// Establish an rmcp client over the configured transport and run the
-/// `initialize` lifecycle handshake. The unit type is our [`ClientHandler`];
+/// `initialize` lifecycle handshake. The unit type is our client handler;
 /// this client role never handles server-initiated requests.
-async fn connect(
-  config: &Config,
-) -> anyhow::Result<rmcp::service::RunningService<RoleClient, ()>> {
-  match config {
+async fn dial_once(config: &Config) -> anyhow::Result<Connected> {
+  let running = match config {
     Config::Stdio { command, args, env } => {
       let mut cmd = tokio::process::Command::new(command);
       cmd.args(args);
@@ -128,7 +190,12 @@ async fn connect(
         .await
         .map_err(anyhow::Error::msg)
     }
-  }
+  }?;
+  let peer = running.peer().clone();
+  Ok(Connected {
+    peer,
+    running: Arc::new(running),
+  })
 }
 
 #[async_trait::async_trait]
@@ -139,8 +206,8 @@ impl Tooling for MCPTooling {
 
   async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
     tracing::debug!("mcp tools/list");
-    let result = self
-      .peer
+    let peer = self.peer().await?;
+    let result = peer
       .list_tools(None)
       .await
       .context("MCP tools/list failed")?;
@@ -165,8 +232,8 @@ impl Tooling for MCPTooling {
       }
       None => CallToolRequestParams::new(name.to_string()),
     };
-    let result = self
-      .peer
+    let peer = self.peer().await?;
+    let result = peer
       .call_tool(params)
       .await
       .context("MCP tools/call failed")?;
@@ -186,8 +253,8 @@ impl Tooling for MCPTooling {
 
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
     tracing::debug!("mcp resources/list");
-    let result = self
-      .peer
+    let peer = self.peer().await?;
+    let result = peer
       .list_all_resources()
       .await
       .context("MCP resources/list failed")?;
@@ -206,8 +273,8 @@ impl Tooling for MCPTooling {
 
   async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
     tracing::debug!(uri, "mcp resources/read");
-    let result = self
-      .peer
+    let peer = self.peer().await?;
+    let result = peer
       .read_resource(ReadResourceRequestParams::new(uri.to_string()))
       .await
       .context("MCP resources/read failed")?;
@@ -253,8 +320,8 @@ impl Tooling for MCPTooling {
     tracing::debug!("mcp resources/subscribe-list");
     let mut filter = SubscriptionFilter::new();
     filter.resources_list_changed = Some(true);
-    let subscription = self
-      .peer
+    let peer = self.peer().await?;
+    let subscription = peer
       .listen(filter)
       .await
       .context("MCP subscriptions/listen failed")?;
@@ -269,8 +336,8 @@ impl Tooling for MCPTooling {
     tracing::debug!(uri, "mcp resources/subscribe");
     let mut filter = SubscriptionFilter::new();
     filter.resource_subscriptions = Some(vec![uri.to_string()]);
-    let subscription = self
-      .peer
+    let peer = self.peer().await?;
+    let subscription = peer
       .listen(filter)
       .await
       .context("MCP subscriptions/listen failed")?;
@@ -359,5 +426,78 @@ mod tests {
   #[test]
   fn http_without_url_is_rejected() {
     assert!(Config::deserialize(json!({ "transport": "http" })).is_err());
+  }
+
+  #[test]
+  fn build_parses_without_connecting() -> anyhow::Result<()> {
+    let entry = super::super::Registry::default().build(
+      "m",
+      "mcp",
+      &json!({
+        "transport": "stdio",
+        "command": "definitely-not-a-real-binary",
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    assert_eq!(entry.name(), "m");
+    assert_eq!(entry.kind(), "mcp");
+    Ok(())
+  }
+
+  #[test]
+  fn build_rejects_invalid_config() {
+    assert!(
+      super::super::Registry::default()
+        .build(
+          "m",
+          "mcp",
+          &json!({ "transport": "stdio" }),
+          crate::config::Tunables::default(),
+        )
+        .is_err()
+    );
+  }
+
+  #[tokio::test]
+  async fn first_use_fails_when_server_missing() {
+    let entry = super::super::Registry::default()
+      .build(
+        "m",
+        "mcp",
+        &json!({
+          "transport": "stdio",
+          "command": "definitely-not-a-real-binary",
+        }),
+        crate::config::Tunables {
+          tooling_connect_backoff_start_ms: 1,
+          tooling_connect_backoff_cap_secs: 0,
+          ..crate::config::Tunables::default()
+        },
+      )
+      .expect("build must not connect");
+    assert!(entry.inner().list_tools().await.is_err());
+  }
+
+  #[tokio::test]
+  async fn failures_are_not_cached() {
+    let entry = super::super::Registry::default()
+      .build(
+        "m",
+        "mcp",
+        &json!({
+          "transport": "stdio",
+          "command": "definitely-not-a-real-binary",
+        }),
+        crate::config::Tunables {
+          tooling_connect_backoff_start_ms: 1,
+          tooling_connect_backoff_cap_secs: 0,
+          ..crate::config::Tunables::default()
+        },
+      )
+      .expect("build must not connect");
+    // Each use redials instead of caching the failure: both fail, neither
+    // panics nor poisons the bridge.
+    assert!(entry.inner().list_tools().await.is_err());
+    assert!(entry.inner().list_tools().await.is_err());
   }
 }

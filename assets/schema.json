@@ -61,6 +61,8 @@
         "reload_grace_secs": 5,
         "reload_poll_ms": 200,
         "session_buffer": 8192,
+        "tooling_connect_backoff_cap_secs": 30,
+        "tooling_connect_backoff_start_ms": 100,
         "watch_debounce_ms": 200
       }
     }
@@ -166,6 +168,20 @@
           "type": "integer",
           "format": "uint",
           "default": 8192,
+          "minimum": 0
+        },
+        "tooling_connect_backoff_cap_secs": {
+          "description": "Backoff cap for tooling reconnects on failure, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
+        "tooling_connect_backoff_start_ms": {
+          "description": "Backoff start for tooling reconnects on failure, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
           "minimum": 0
         },
         "watch_debounce_ms": {

@@ -46,14 +46,14 @@ impl WasiView for Host {
 
 impl provider_bindings::Host for Host {
   fn get(&mut self, name: String) -> Result<Resource<ProviderEntry>, String> {
-    let entry = match self.ctx.providers.get(&name).cloned() {
+    let entry = match self.ctx.providers().get(&name).cloned() {
       Some(entry) => entry,
       None => {
-        tracing::warn!(agent = %self.ctx.name, provider = %name, "provider get miss");
+        tracing::warn!(agent = %self.ctx.name(), provider = %name, "provider get miss");
         return Err(format!("no such provider {name:?}"));
       }
     };
-    tracing::debug!(agent = %self.ctx.name, provider = %name, "provider get hit");
+    tracing::debug!(agent = %self.ctx.name(), provider = %name, "provider get hit");
     self.table.push(entry).map_err(|e| e.to_string())
   }
 }
@@ -63,7 +63,7 @@ impl provider_bindings::HostProvider for Host {
     self
       .table
       .get(&self_)
-      .map(|e| e.name.clone())
+      .map(|e| e.name().to_string())
       .unwrap_or_default()
   }
 
@@ -71,7 +71,7 @@ impl provider_bindings::HostProvider for Host {
     self
       .table
       .get(&self_)
-      .map(|e| e.kind.to_string())
+      .map(|e| e.kind().to_string())
       .unwrap_or_default()
   }
 
@@ -79,9 +79,9 @@ impl provider_bindings::HostProvider for Host {
     let Some(entry) = self.table.get(&self_).ok() else {
       return Vec::new();
     };
-    let entry_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
-    let provider = Arc::clone(&entry.provider);
+    let entry_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
+    let provider = Arc::clone(entry.inner());
     let list = async move { provider.list_models().await };
     match self.ctx.block_on_reload(list) {
       Ok(models) => models,
@@ -100,11 +100,11 @@ impl provider_bindings::HostProvider for Host {
     tools: Vec<tooling_bindings::Tool>,
   ) -> Result<types_bindings::ChatResult, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let entry_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let entry_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
     let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
-    let provider = Arc::clone(&entry.provider);
+    let provider = Arc::clone(entry.inner());
     tracing::debug!(
       agent = %agent,
       provider = %entry_name,
@@ -125,15 +125,15 @@ impl provider_bindings::HostProvider for Host {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
     let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
-    let provider = Arc::clone(&entry.provider);
+    let provider = Arc::clone(entry.inner());
     let rt = Arc::clone(&self.ctx.rt());
-    let bus = Arc::clone(&self.ctx.bus);
-    let streams = Arc::clone(&self.ctx.streams);
-    let name = self.ctx.name.clone();
+    let bus = Arc::clone(self.ctx.bus());
+    let streams = Arc::clone(self.ctx.streams());
+    let name = self.ctx.name().to_owned();
     let uuid = crate::host::bus::new_uuid();
     tracing::debug!(
-      agent = %self.ctx.name,
-      provider = %entry.name,
+      agent = %self.ctx.name(),
+      provider = %entry.name(),
       uuid = %uuid,
       "opening a chat stream"
     );
@@ -152,11 +152,11 @@ impl provider_bindings::HostProvider for Host {
   }
 
   fn is_open(&mut self, _self_: Resource<ProviderEntry>, uuid: String) -> bool {
-    self.ctx.streams.is_open(&uuid)
+    self.ctx.streams().is_open(&uuid)
   }
 
   fn cancel(&mut self, _self_: Resource<ProviderEntry>, uuid: String) {
-    self.ctx.streams.cancel(&uuid);
+    self.ctx.streams().cancel(&uuid);
   }
 
   fn drop(&mut self, self_: Resource<ProviderEntry>) -> wasmtime::Result<()> {
@@ -167,14 +167,14 @@ impl provider_bindings::HostProvider for Host {
 
 impl tooling_bindings::Host for Host {
   fn get(&mut self, name: String) -> Result<Resource<ToolingEntry>, String> {
-    let entry = match self.ctx.tooling.get(&name).cloned() {
+    let entry = match self.ctx.tooling().get(&name).cloned() {
       Some(entry) => entry,
       None => {
-        tracing::warn!(agent = %self.ctx.name, tooling = %name, "tooling get miss");
+        tracing::warn!(agent = %self.ctx.name(), tooling = %name, "tooling get miss");
         return Err(format!("no such tooling {name:?}"));
       }
     };
-    tracing::debug!(agent = %self.ctx.name, tooling = %name, "tooling get hit");
+    tracing::debug!(agent = %self.ctx.name(), tooling = %name, "tooling get hit");
     self.table.push(entry).map_err(|e| e.to_string())
   }
 }
@@ -184,7 +184,7 @@ impl tooling_bindings::HostTooling for Host {
     self
       .table
       .get(&self_)
-      .map(|e| e.name.clone())
+      .map(|e| e.name().to_string())
       .unwrap_or_default()
   }
 
@@ -192,7 +192,7 @@ impl tooling_bindings::HostTooling for Host {
     self
       .table
       .get(&self_)
-      .map(|e| e.kind.to_string())
+      .map(|e| e.kind().to_string())
       .unwrap_or_default()
   }
 
@@ -201,9 +201,9 @@ impl tooling_bindings::HostTooling for Host {
     self_: Resource<ToolingEntry>,
   ) -> Result<Vec<tooling_bindings::Tool>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
-    let tooling_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let tooling = Arc::clone(entry.inner());
+    let tooling_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     tracing::debug!(agent = %agent, tooling = %tooling_name, "listing tools");
     let list = async move { tooling.list_tools().await };
     let tools = self.ctx.block_on_reload(list)?.map_err(|e| e.to_string())?;
@@ -218,9 +218,9 @@ impl tooling_bindings::HostTooling for Host {
     arguments: String,
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
-    let tooling_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let tooling = Arc::clone(entry.inner());
+    let tooling_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     let args =
       serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
     tracing::trace!(
@@ -234,8 +234,8 @@ impl tooling_bindings::HostTooling for Host {
     crate::host::tool_calls::spawn_pump(
       tooling,
       self.ctx.rt(),
-      Arc::clone(&self.ctx.bus),
-      Arc::clone(&self.ctx.tool_calls),
+      Arc::clone(self.ctx.bus()),
+      Arc::clone(self.ctx.tool_calls()),
       agent,
       uuid.clone(),
       name,
@@ -245,12 +245,12 @@ impl tooling_bindings::HostTooling for Host {
   }
 
   fn is_open(&mut self, _self_: Resource<ToolingEntry>, uuid: String) -> bool {
-    self.ctx.tool_calls.is_open(&uuid)
+    self.ctx.tool_calls().is_open(&uuid)
   }
 
   fn cancel(&mut self, _self_: Resource<ToolingEntry>, uuid: String) {
-    self.ctx.tool_calls.cancel(&uuid);
-    tracing::debug!(agent = %self.ctx.name, uuid = %uuid, "cancelling a tool call");
+    self.ctx.tool_calls().cancel(&uuid);
+    tracing::debug!(agent = %self.ctx.name(), uuid = %uuid, "cancelling a tool call");
   }
 
   fn call_tool_blocking(
@@ -260,9 +260,9 @@ impl tooling_bindings::HostTooling for Host {
     arguments: String,
   ) -> Result<tooling_bindings::ToolResult, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
-    let tooling_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let tooling = Arc::clone(entry.inner());
+    let tooling_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     let args =
       serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
     tracing::trace!(
@@ -293,7 +293,7 @@ impl tooling_bindings::HostTooling for Host {
     self_: Resource<ToolingEntry>,
   ) -> Result<Vec<tooling_bindings::ResourceInfo>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
+    let tooling = Arc::clone(entry.inner());
     let list = async move { tooling.list_resources().await };
     self
       .ctx
@@ -308,7 +308,7 @@ impl tooling_bindings::HostTooling for Host {
     uri: String,
   ) -> Result<tooling_bindings::ResourceContent, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
+    let tooling = Arc::clone(entry.inner());
     let read = async move { tooling.read_resource(&uri).await };
     self
       .ctx
@@ -322,9 +322,9 @@ impl tooling_bindings::HostTooling for Host {
     self_: Resource<ToolingEntry>,
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
-    let tooling_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let tooling = Arc::clone(entry.inner());
+    let tooling_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     let tooling_for_sub = Arc::clone(&tooling);
     let subscribe =
       async move { tooling_for_sub.subscribe_resource_list().await };
@@ -340,9 +340,9 @@ impl tooling_bindings::HostTooling for Host {
       "subscribing to the resource list"
     );
     crate::host::resources::spawn_pump(
-      Arc::clone(&self.ctx.resources),
+      Arc::clone(self.ctx.resources()),
       self.ctx.rt(),
-      Arc::clone(&self.ctx.bus),
+      Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
       tooling,
@@ -357,9 +357,9 @@ impl tooling_bindings::HostTooling for Host {
     uri: String,
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
-    let tooling = Arc::clone(&entry.tooling);
-    let tooling_name = entry.name.clone();
-    let agent = self.ctx.name.clone();
+    let tooling = Arc::clone(entry.inner());
+    let tooling_name = entry.name().to_string();
+    let agent = self.ctx.name().to_owned();
     let tooling_for_sub = Arc::clone(&tooling);
     let uri_for_sub = uri.clone();
     let subscribe =
@@ -377,9 +377,9 @@ impl tooling_bindings::HostTooling for Host {
       "subscribing to a resource"
     );
     crate::host::resources::spawn_pump(
-      Arc::clone(&self.ctx.resources),
+      Arc::clone(self.ctx.resources()),
       self.ctx.rt(),
-      Arc::clone(&self.ctx.bus),
+      Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
       tooling,
@@ -394,9 +394,9 @@ impl tooling_bindings::HostTooling for Host {
     uuid: String,
   ) {
     let _ = self_;
-    self.ctx.resources.cancel(&uuid);
+    self.ctx.resources().cancel(&uuid);
     tracing::debug!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       uuid = %uuid,
       "cancelling a resource-list subscription"
     );
@@ -408,9 +408,9 @@ impl tooling_bindings::HostTooling for Host {
     uuid: String,
   ) {
     let _ = self_;
-    self.ctx.resources.cancel(&uuid);
+    self.ctx.resources().cancel(&uuid);
     tracing::debug!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       uuid = %uuid,
       "cancelling a resource subscription"
     );
@@ -424,7 +424,7 @@ impl tooling_bindings::HostTooling for Host {
 
 impl host_bindings::Host for Host {
   fn log(&mut self, level: String, message: String) {
-    let agent = self.ctx.name.clone();
+    let agent = self.ctx.name().to_owned();
     match level.as_str() {
       "trace" => tracing::trace!(agent = %agent, message),
       "debug" => tracing::debug!(agent = %agent, message),
@@ -445,10 +445,10 @@ impl host_bindings::Host for Host {
   fn wait_until(&mut self, ts: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
     crate::host::time::wait_until(
-      &self.ctx.bus,
+      self.ctx.bus(),
       &self.ctx.rt(),
-      &self.ctx.timers,
-      &self.ctx.name,
+      self.ctx.timers(),
+      self.ctx.name(),
       &uuid,
       ts,
     )?;
@@ -458,10 +458,10 @@ impl host_bindings::Host for Host {
   fn wait_for(&mut self, ms: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
     crate::host::time::wait_for(
-      &self.ctx.bus,
+      self.ctx.bus(),
       &self.ctx.rt(),
-      &self.ctx.timers,
-      &self.ctx.name,
+      self.ctx.timers(),
+      self.ctx.name(),
       &uuid,
       ms,
     );
@@ -471,10 +471,10 @@ impl host_bindings::Host for Host {
   fn wait_cron(&mut self, spec: String) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
     crate::host::time::wait_cron(
-      &self.ctx.bus,
+      self.ctx.bus(),
       &self.ctx.rt(),
-      &self.ctx.timers,
-      &self.ctx.name,
+      self.ctx.timers(),
+      self.ctx.name(),
       &uuid,
       &spec,
     )?;
@@ -482,33 +482,34 @@ impl host_bindings::Host for Host {
   }
 
   fn send_agent(&mut self, agent: String, payload: String) {
-    tracing::debug!(caller = %self.ctx.name, dest = %agent, "host send-agent");
-    self.ctx.bus.send(&self.ctx.name, &agent, payload);
+    let caller = self.ctx.name().to_owned();
+    tracing::debug!(caller = %caller, dest = %agent, "host send-agent");
+    self.ctx.bus().send(&caller, &agent, payload);
   }
 
   fn subscribe_agent(&mut self, agent: String) -> Result<String, String> {
-    let uuid = self.ctx.bus.subscribe(&self.ctx.name, &agent);
-    tracing::info!(agent = %self.ctx.name, source = %agent, uuid = %uuid, "host subscribe-agent");
+    let uuid = self.ctx.bus().subscribe(self.ctx.name(), &agent);
+    tracing::info!(agent = %self.ctx.name(), source = %agent, uuid = %uuid, "host subscribe-agent");
     Ok(uuid)
   }
 
   fn subscribe_lifecycle(&mut self) -> Result<String, String> {
-    let result = self.ctx.bus.lifecycle_subscribe(&self.ctx.name);
+    let result = self.ctx.bus().lifecycle_subscribe(self.ctx.name());
     match &result {
       Ok(uuid) => {
-        tracing::info!(agent = %self.ctx.name, uuid = %uuid, "host subscribe-lifecycle")
+        tracing::info!(agent = %self.ctx.name(), uuid = %uuid, "host subscribe-lifecycle")
       }
       Err(error) => {
-        tracing::warn!(agent = %self.ctx.name, error = %error, "host subscribe-lifecycle rejected")
+        tracing::warn!(agent = %self.ctx.name(), error = %error, "host subscribe-lifecycle rejected")
       }
     }
     result
   }
 
   fn unsubscribe_lifecycle(&mut self, uuid: String) {
-    let removed = self.ctx.bus.lifecycle_unsubscribe(&self.ctx.name, &uuid);
+    let removed = self.ctx.bus().lifecycle_unsubscribe(self.ctx.name(), &uuid);
     tracing::debug!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       uuid = %uuid,
       removed,
       "host unsubscribe-lifecycle"
@@ -516,9 +517,9 @@ impl host_bindings::Host for Host {
   }
 
   fn unsubscribe_agent(&mut self, uuid: String) {
-    let removed = self.ctx.bus.unsubscribe(&self.ctx.name, &uuid);
+    let removed = self.ctx.bus().unsubscribe(self.ctx.name(), &uuid);
     tracing::debug!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       uuid = %uuid,
       removed,
       "host unsubscribe-agent"
@@ -526,22 +527,22 @@ impl host_bindings::Host for Host {
   }
 
   fn subscribe_endpoint(&mut self, model: String) -> Result<String, String> {
-    if self.ctx.endpoint.is_none() {
+    if self.ctx.endpoint().is_none() {
       tracing::warn!(
-        agent = %self.ctx.name,
+        agent = %self.ctx.name(),
         "host subscribe-endpoint rejected: the endpoint is not configured"
       );
       return Err("the endpoint is not configured".to_string());
     }
-    let result = self.ctx.bus.endpoint_subscribe(&self.ctx.name, model);
+    let result = self.ctx.bus().endpoint_subscribe(self.ctx.name(), model);
     match &result {
       Ok(uuid) => tracing::info!(
-        agent = %self.ctx.name,
+        agent = %self.ctx.name(),
         uuid = %uuid,
         "host subscribe-endpoint"
       ),
       Err(error) => tracing::warn!(
-        agent = %self.ctx.name,
+        agent = %self.ctx.name(),
         error = %error,
         "host subscribe-endpoint rejected"
       ),
@@ -550,15 +551,15 @@ impl host_bindings::Host for Host {
   }
 
   fn unsubscribe_endpoint(&mut self, uuid: String) {
-    let model = self.ctx.bus.endpoint_unsubscribe(&self.ctx.name, &uuid);
+    let model = self.ctx.bus().endpoint_unsubscribe(self.ctx.name(), &uuid);
     tracing::info!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       uuid = %uuid,
       model = ?model.as_deref(),
       "host unsubscribe-endpoint"
     );
     if model.is_some()
-      && let Some(registry) = &self.ctx.endpoint
+      && let Some(registry) = self.ctx.endpoint()
     {
       registry.cancel_subscription(&uuid);
     }
@@ -569,68 +570,68 @@ impl host_bindings::Host for Host {
     session: String,
     delta: types_bindings::ChatDelta,
   ) -> Result<(), String> {
-    let Some(registry) = &self.ctx.endpoint else {
+    let Some(registry) = self.ctx.endpoint() else {
       return Err("the endpoint is not configured".to_string());
     };
     tracing::debug!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       session = %session,
       "host stream-endpoint"
     );
-    registry.push(&self.ctx.name, &session, in_delta(delta))
+    registry.push(self.ctx.name(), &session, in_delta(delta))
   }
 
   fn cancel_timer(&mut self, uuid: String) {
-    self.ctx.timers.cancel(&uuid);
-    tracing::debug!(agent = %self.ctx.name,uuid = %uuid,"host cancel-timer");
+    self.ctx.timers().cancel(&uuid);
+    tracing::debug!(agent = %self.ctx.name(),uuid = %uuid,"host cancel-timer");
   }
 
   fn sleep_for(&mut self, ms: u64) {
-    tracing::debug!(agent = %self.ctx.name,ms,"host sleep-for");
+    tracing::debug!(agent = %self.ctx.name(),ms,"host sleep-for");
     if let Err(error) = self
       .ctx
       .block_on_reload(crate::host::time::sleep_future(ms))
     {
-      tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-for aborted");
+      tracing::debug!(agent = %self.ctx.name(), error = %error, "sleep-for aborted");
     }
   }
 
   fn sleep_until(&mut self, ts: u64) -> Result<(), String> {
     let delay = crate::host::time::delay_until(ts).map_err(|error| {
-      tracing::warn!(agent = %self.ctx.name,error,ts,"host sleep-until rejected");
+      tracing::warn!(agent = %self.ctx.name(),error,ts,"host sleep-until rejected");
       error
     })?;
     self
       .ctx
       .block_on_reload(crate::host::time::sleep_future_ms(delay))
       .map_err(|error| {
-        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-until aborted");
+        tracing::debug!(agent = %self.ctx.name(), error = %error, "sleep-until aborted");
         error
       })
   }
 
   fn sleep_cron(&mut self, spec: String) -> Result<(), String> {
     let delay = crate::host::time::delay_cron(&spec).map_err(|error| {
-      tracing::warn!(agent = %self.ctx.name,error,spec = %spec,"host sleep-cron rejected");
+      tracing::warn!(agent = %self.ctx.name(),error,spec = %spec,"host sleep-cron rejected");
       error
     })?;
     self
       .ctx
       .block_on_reload(crate::host::time::sleep_future_ms(delay))
       .map_err(|error| {
-        tracing::debug!(agent = %self.ctx.name, error = %error, "sleep-cron aborted");
+        tracing::debug!(agent = %self.ctx.name(), error = %error, "sleep-cron aborted");
         error
       })
   }
 
   fn recv(&mut self) -> Result<host_bindings::EventEnvelope, String> {
-    tracing::debug!(agent = %self.ctx.name, "host recv waiting for an event");
+    tracing::debug!(agent = %self.ctx.name(), "host recv waiting for an event");
     let flag = self.ctx.clone();
-    let name = self.ctx.name.clone();
+    let name = self.ctx.name().to_owned();
     let check = self.ctx.clone();
     let envelope = self
       .ctx
-      .bus
+      .bus()
       .recv_while(&name, self.ctx.tunables().recv_timeout(), move || {
         flag.reload_requested() || flag.shutdown_requested()
       })
@@ -652,12 +653,13 @@ impl host_bindings::Host for Host {
   fn try_recv(
     &mut self,
   ) -> Result<Option<host_bindings::EventEnvelope>, String> {
-    tracing::trace!(agent = %self.ctx.name, "host try_recv poll");
+    tracing::trace!(agent = %self.ctx.name(), "host try_recv poll");
+    let name = self.ctx.name().to_owned();
     Ok(
       self
         .ctx
-        .bus
-        .try_recv(&self.ctx.name)
+        .bus()
+        .try_recv(&name)
         .map_err(|e| e.to_string())?
         .map(|envelope| EventEnvelope {
           id: envelope.id,
@@ -673,7 +675,7 @@ impl host_bindings::Host for Host {
   fn base64_encode(&mut self, bytes: Vec<u8>) -> String {
     use base64::Engine as _;
     tracing::trace!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       bytes = bytes.len(),
       "host base64-encode"
     );
@@ -686,7 +688,7 @@ impl host_bindings::Host for Host {
       .decode(data)
       .map_err(|e| e.to_string())?;
     tracing::trace!(
-      agent = %self.ctx.name,
+      agent = %self.ctx.name(),
       bytes = result.len(),
       "host base64-decode"
     );
@@ -694,18 +696,18 @@ impl host_bindings::Host for Host {
   }
 
   fn memory_get(&mut self, key: String) -> Option<String> {
-    tracing::trace!(agent = %self.ctx.name, key = %key, "host memory-get");
-    self.ctx.memory.get(&key)
+    tracing::trace!(agent = %self.ctx.name(), key = %key, "host memory-get");
+    self.ctx.memory().get(&key)
   }
 
   fn memory_set(&mut self, key: String, value: String) {
-    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-set");
-    self.ctx.memory.set(key, value);
+    tracing::debug!(agent = %self.ctx.name(), key = %key, "host memory-set");
+    self.ctx.memory().set(key, value);
   }
 
   fn memory_remove(&mut self, key: String) -> bool {
-    tracing::debug!(agent = %self.ctx.name, key = %key, "host memory-remove");
-    self.ctx.memory.remove(&key)
+    tracing::debug!(agent = %self.ctx.name(), key = %key, "host memory-remove");
+    self.ctx.memory().remove(&key)
   }
 }
 
@@ -960,8 +962,7 @@ mod tests {
     let mut host = test_host_with_endpoint()?;
     let registry = host
       .ctx
-      .endpoint
-      .as_ref()
+      .endpoint()
       .ok_or_else(|| anyhow::anyhow!("expected an endpoint registry"))?
       .clone();
     let mut open = registry.open("test-agent", "sub-1");
@@ -986,8 +987,7 @@ mod tests {
     let mut host = test_host_with_endpoint()?;
     let registry = host
       .ctx
-      .endpoint
-      .as_ref()
+      .endpoint()
       .ok_or_else(|| anyhow::anyhow!("expected an endpoint registry"))?
       .clone();
     let mut open = registry.open("test-agent", "sub-1");

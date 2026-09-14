@@ -95,7 +95,7 @@ async fn llamacpp_streams_real_inference() -> anyhow::Result<()> {
 
   let (_container, base) = start_llamacpp().await?;
 
-  let entry = omw::provider::build(
+  let entry = omw::provider::Registry::default().build(
     "local",
     "openai",
     &json!({
@@ -117,7 +117,7 @@ async fn llamacpp_streams_real_inference() -> anyhow::Result<()> {
     tool_call: None,
   };
   let mut stream = entry
-    .provider
+    .inner()
     .chat_stream("omw-test", vec![system_msg, user_msg], Vec::new())
     .await?;
 

@@ -6,35 +6,38 @@ use std::sync::Mutex;
 
 use crate::host::ctx::AgentContext;
 use crate::runtime::engine::{WasiConfig, WasmEngine};
-use crate::runtime::{RunOutcome, Runtime};
+use crate::runtime::{Factory, RunOutcome, Runtime};
 use anyhow::Context as _;
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct Config {
+struct Config {
   #[serde(default, flatten)]
-  pub wasi: WasiConfig,
+  wasi: WasiConfig,
 }
 
 /// Loads the agent's wasm brain from `ctx.script` and runs it.
 #[derive(Clone, Default)]
-pub struct WasmRuntime {
-  pub name: String,
-  pub config: Config,
+pub(crate) struct WasmRuntime {
+  #[allow(dead_code, reason = "to keep it consistent")]
+  name: String,
+  config: Config,
   /// Last successfully validated engine, kept as a TOCTOU backstop: a save
   /// landing between validate and load still falls back to this instead of
   /// failing the run.
   last_good: Arc<Mutex<Option<WasmEngine>>>,
 }
 
-pub fn build(name: &str, params: &Value) -> anyhow::Result<Arc<dyn Runtime>> {
-  Ok(Arc::new(WasmRuntime {
-    name: name.to_owned(),
-    config: Config::deserialize(params.into_deserializer())?,
-    last_good: Arc::new(Mutex::new(None)),
-  }))
+impl Factory for WasmRuntime {
+  fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>> {
+    Ok(Arc::new(WasmRuntime {
+      name: name.to_owned(),
+      config: Config::deserialize(params.into_deserializer())?,
+      last_good: Arc::new(Mutex::new(None)),
+    }))
+  }
 }
 
 #[async_trait::async_trait]
@@ -44,16 +47,16 @@ impl Runtime for WasmRuntime {
   }
 
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
-    tracing::debug!(agent = %ctx.name, script = %ctx.script.display(), "loading the wasm brain");
-    let engine = match WasmEngine::from_path(&ctx.script)
-      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))
+    tracing::debug!(agent = %ctx.name(), script = %ctx.script().display(), "loading the wasm brain");
+    let engine = match WasmEngine::from_path(ctx.script())
+      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script()))
     {
       Ok(engine) => engine,
       Err(error) => {
         if let Ok(slot) = self.last_good.lock()
           && let Some(cached) = slot.clone()
         {
-          tracing::warn!(agent = %ctx.name, error = %error, "wasm brain changed underfoot, running the last-good component");
+          tracing::warn!(agent = %ctx.name(), error = %error, "wasm brain changed underfoot, running the last-good component");
           cached
         } else {
           return Err(error);
@@ -77,8 +80,9 @@ impl Runtime for WasmRuntime {
   }
 
   async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()> {
-    let engine = WasmEngine::from_path(&ctx.script)
-      .with_context(|| format!("failed to load wasm brain {:?}", ctx.script))?;
+    let engine = WasmEngine::from_path(ctx.script()).with_context(|| {
+      format!("failed to load wasm brain {:?}", ctx.script())
+    })?;
     let ctx_clone = ctx.clone();
     let wasi = self.config.wasi.clone();
     tokio::task::spawn_blocking(move || {
@@ -86,7 +90,7 @@ impl Runtime for WasmRuntime {
     })
     .await
     .context("wasm check task failed")??;
-    if let Ok(fresh) = WasmEngine::from_path(&ctx.script)
+    if let Ok(fresh) = WasmEngine::from_path(ctx.script())
       && let Ok(mut slot) = self.last_good.lock()
     {
       *slot = Some(fresh);

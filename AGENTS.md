@@ -176,6 +176,25 @@ A Cargo workspace with four crates plus a single WIT contract.
   `install_omw` (Rhai guest), the `omw` global (JS guest), and
   `src/native/omw-wasm-rust/wit/` (Rust SDK).
 
+## Library surface
+
+The `omw` library exposes a small embedding contract; everything else is host
+plumbing (`pub(crate)`) or per-module private. The binary-only modules (`cli`,
+`log`) are owned by `main.rs` and are not part of the library at all.
+
+| Module               | `pub` (embedding contract)                                                                                                                       | `pub(crate)` / private                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`              | `Registries`, `run_agents`, `loop_agents`                                                                                                        | supervisor internals (`Shared`, `run_agent`) private                                                                              |
+| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                | default fns private                                                                                                               |
+| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`   | `openai` private mod, `mock` `pub(crate)` (test only)                                                                             |
+| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!` | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                          |
+| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                             | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                |
+| `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                        | `openai` still `pub mod` (impl detail)                                                                                            |
+| `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`)                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)` |
+| `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                           | `shutdown_signal` `pub(crate)`                                                                                                    |
+| `prelude`            | re-exports the embedding subset plus the `register_*` macros (also `#[macro_export]` at the crate root)                                          | —                                                                                                                                 |
+| binary-only          | —                                                                                                                                                | `cli` (`Cli`, `Command`, `RunArgs`, `generate_schema`), `log::init` owned by `main.rs`; `watch` is a private lib mod              |
+
 ## Development
 
 Assume you are in the default development shell. Commands go through the `dev`

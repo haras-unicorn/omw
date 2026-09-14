@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::TcpListener;
 
-use super::{Endpoint, EndpointEntry};
+use super::{Endpoint, Factory};
 use crate::host::bus::MessageBus;
 use crate::host::endpoint::{EndpointRegistry, OpenSession, Outbound};
 use crate::provider::{ChatDelta, ChatMessage, Role, ToolCall};
@@ -32,28 +32,26 @@ use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-compatible endpoint.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Config {
+struct Config {
   /// Socket address to listen on, e.g. `"127.0.0.1:8080"` or
   /// `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
   /// startup.
   pub listen: String,
 }
 
-/// Build an `openai` endpoint from its opaque config params.
-pub fn build(params: &Value) -> anyhow::Result<EndpointEntry> {
-  let config =
-    Config::deserialize(params).context("invalid openai endpoint config")?;
-  let addr = config.listen.parse::<SocketAddr>().with_context(|| {
-    format!(
-      "endpoint listen address {:?} is not a valid socket address",
-      config.listen
-    )
-  })?;
-  tracing::debug!(config = ?config, "built openai endpoint");
-  Ok(EndpointEntry {
-    kind: OpenAIEndpoint::kind(),
-    endpoint: Arc::new(OpenAIEndpoint { addr }),
-  })
+impl Factory for OpenAIEndpoint {
+  fn build(params: &Value) -> anyhow::Result<Arc<Self>> {
+    let config =
+      Config::deserialize(params).context("invalid openai endpoint config")?;
+    let addr = config.listen.parse::<SocketAddr>().with_context(|| {
+      format!(
+        "endpoint listen address {:?} is not a valid socket address",
+        config.listen
+      )
+    })?;
+    tracing::debug!(config = ?config, "built openai endpoint");
+    Ok(Arc::new(OpenAIEndpoint { addr }))
+  }
 }
 
 /// An OpenAI-compatible HTTP endpoint backed by axum.
@@ -876,8 +874,13 @@ mod tests {
 
   #[tokio::test]
   async fn build_rejects_invalid_listen_address() {
-    assert!(build(&serde_json::json!({ "listen": "localhost:8080" })).is_err());
-    assert!(build(&serde_json::json!({})).is_err());
+    let registry = super::super::Registry::default();
+    assert!(
+      registry
+        .build("openai", &serde_json::json!({ "listen": "localhost:8080" }))
+        .is_err()
+    );
+    assert!(registry.build("openai", &serde_json::json!({})).is_err());
   }
 
   #[tokio::test]

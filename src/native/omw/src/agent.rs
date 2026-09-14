@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context as _;
 use futures_util::future::join_all;
 use tokio::sync::mpsc;
 
@@ -28,11 +27,43 @@ use crate::host::ctx::AgentContext;
 use crate::host::endpoint::EndpointRegistry;
 use crate::host::events::Event;
 use crate::host::streams::{CancelRegistry, StreamRegistry};
-use crate::provider::build_registry as build_providers;
 use crate::runtime::RunOutcome;
 use crate::shutdown::{Shutdown, shutdown_signal};
-use crate::tooling::build_registry as build_tooling;
 use crate::watch::ScriptWatcher;
+
+/// The back-end registries the supervisor builds entries from. Owned by
+/// the caller and passed into [`run_agents`] / [`loop_agents`], so custom
+/// back ends are registered before the supervisor runs.
+pub struct Registries {
+  pub providers: crate::provider::Registry,
+  pub tooling: crate::tooling::Registry,
+  pub runtimes: crate::runtime::Registry,
+  pub endpoints: crate::endpoint::Registry,
+}
+
+impl Registries {
+  /// An empty set of registries with no built-ins.
+  pub fn new() -> Self {
+    Self {
+      providers: crate::provider::Registry::new(),
+      tooling: crate::tooling::Registry::new(),
+      runtimes: crate::runtime::Registry::new(),
+      endpoints: crate::endpoint::Registry::new(),
+    }
+  }
+}
+
+impl Default for Registries {
+  /// The feature-gated built-ins, one per family.
+  fn default() -> Self {
+    Self {
+      providers: crate::provider::Registry::default(),
+      tooling: crate::tooling::Registry::default(),
+      runtimes: crate::runtime::Registry::default(),
+      endpoints: crate::endpoint::Registry::default(),
+    }
+  }
+}
 
 /// Run every configured agent once, then aggregate their results.
 ///
@@ -44,9 +75,14 @@ use crate::watch::ScriptWatcher;
 /// shutdown request collects as an error. A reload that outlives `run`'s
 /// patience restarts the agent in place (same as `loop` treating reload as
 /// `continue`).
-pub async fn run_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
+pub async fn run_agents(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+) -> anyhow::Result<()> {
   let shutdown = Shutdown::new();
-  let shared = Arc::new(Shared::build(cfg, shutdown.clone()).await?);
+  let shared =
+    Arc::new(Shared::build(cfg, registries, shutdown.clone()).await?);
   let signal = spawn_signal(&shutdown);
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   let results = join_all(cfg.agents.iter().map(|agent| {
@@ -88,9 +124,14 @@ pub async fn run_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
 ///
 /// With `watch`, a script change restarts the agent immediately (without
 /// backoff) instead of waiting for the current iteration to finish.
-pub async fn loop_agents(cfg: &Config, watch: bool) -> anyhow::Result<()> {
+pub async fn loop_agents(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+) -> anyhow::Result<()> {
   let shutdown = Shutdown::new();
-  let shared = Arc::new(Shared::build(cfg, shutdown.clone()).await?);
+  let shared =
+    Arc::new(Shared::build(cfg, registries, shutdown.clone()).await?);
   let signal = spawn_signal(&shutdown);
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   join_all(cfg.agents.iter().map(|agent| {
@@ -186,14 +227,9 @@ async fn run_agent(
   shared: &Shared,
   watch_tx: Option<ReloadTx>,
 ) -> anyhow::Result<AgentStop> {
-  let impl_cfg = config.runtime.get(&agent.runtime).with_context(|| {
-    format!(
-      "agent {:?} references unknown runtime {:?}",
-      agent.name, agent.runtime
-    )
+  let runtime = shared.runtimes.get(&agent.name).ok_or_else(|| {
+    anyhow::anyhow!("agent {:?} has no built runtime", agent.name)
   })?;
-  let runtime =
-    crate::runtime::build(&agent.runtime, &impl_cfg.kind, &impl_cfg.params)?;
   let ctx = AgentContext::with_tunables(
     agent.name.clone(),
     PathBuf::from(&agent.script),
@@ -217,7 +253,7 @@ async fn run_agent(
   if let Some(watch_tx) = &watch_tx {
     watch_tx.register(&agent.name, reload_tx);
   }
-  if let Err(error) = runtime.runtime.validate(&ctx).await {
+  if let Err(error) = runtime.inner().validate(&ctx).await {
     if shared.shutdown.is_requested() {
       tracing::info!(agent = %agent.name, "agent shutting down");
       return Ok(AgentStop::Shutdown);
@@ -241,7 +277,7 @@ async fn run_agent(
         }
       }
       drain_reload(&mut reload_rx);
-      match runtime.runtime.validate(&ctx).await {
+      match runtime.inner().validate(&ctx).await {
         Ok(()) => break,
         Err(error) => {
           tracing::warn!(agent = %agent.name, error = %error, "agent reload rejected: invalid script, keeping the agent parked");
@@ -271,8 +307,7 @@ async fn run_agent(
       tracing::warn!(agent = %agent.name, error = %error, "failed to drain system events");
     }
     tracing::info!(agent = %agent.name, runtime = %agent.runtime, "agent iteration starting");
-    match run_with_reload(&runtime.runtime, &ctx, shared, &mut reload_rx).await
-    {
+    match run_with_reload(runtime.inner(), &ctx, shared, &mut reload_rx).await {
       RunEnd::Done(RunOutcome::Completed) => {
         tracing::info!(agent = %agent.name, "agent run completed");
         return Ok(AgentStop::Completed(RunOutcome::Completed));
@@ -286,10 +321,10 @@ async fn run_agent(
         // A shutdown abort owns the brain's pumps outright: no next
         // iteration will run, so cancel them now instead of leaving
         // ownerless pumps on the bridge runtime until drop.
-        ctx.streams.cancel_all();
-        ctx.timers.cancel_all();
-        ctx.resources.cancel_all();
-        ctx.tool_calls.cancel_all();
+        ctx.streams().cancel_all();
+        ctx.timers().cancel_all();
+        ctx.resources().cancel_all();
+        ctx.tool_calls().cancel_all();
         return Ok(AgentStop::Shutdown);
       }
       RunEnd::Aborted(Abort::Reload) => {
@@ -303,10 +338,10 @@ async fn run_agent(
         // is reused, and rhai brains re-read `ctx.script` while wasm brains
         // reload the component, so the next iteration picks up the edit.
         if config.tunables.cancel_pumps_on_reload {
-          ctx.streams.cancel_all();
-          ctx.timers.cancel_all();
-          ctx.resources.cancel_all();
-          ctx.tool_calls.cancel_all();
+          ctx.streams().cancel_all();
+          ctx.timers().cancel_all();
+          ctx.resources().cancel_all();
+          ctx.tool_calls().cancel_all();
         }
         drain_reload(&mut reload_rx);
         continue;
@@ -344,20 +379,20 @@ async fn run_with_reload(
   let mut finished = Box::pin(runtime.run(ctx));
   loop {
     if shared.shutdown.is_requested() {
-      let id = bus.lifecycle_of(&ctx.name).unwrap_or_else(new_uuid);
+      let id = bus.lifecycle_of(ctx.name()).unwrap_or_else(new_uuid);
       ctx.request_shutdown();
-      bus.deliver(&ctx.name, &id, Event::Shutdown);
-      tracing::info!(agent = %ctx.name, "agent shutdown requested");
+      bus.deliver(ctx.name(), &id, Event::Shutdown);
+      tracing::info!(agent = %ctx.name(), "agent shutdown requested");
       return abort_grace(&mut finished, ctx, Abort::Shutdown).await;
     }
     tokio::select! {
       biased;
       outcome = &mut finished => return classify_finished(outcome, ctx),
       () = shared.shutdown.wait() => {
-        let id = bus.lifecycle_of(&ctx.name).unwrap_or_else(new_uuid);
+        let id = bus.lifecycle_of(ctx.name()).unwrap_or_else(new_uuid);
         ctx.request_shutdown();
-        bus.deliver(&ctx.name, &id, Event::Shutdown);
-        tracing::info!(agent = %ctx.name, "agent shutdown requested");
+        bus.deliver(ctx.name(), &id, Event::Shutdown);
+        tracing::info!(agent = %ctx.name(), "agent shutdown requested");
         return abort_grace(&mut finished, ctx, Abort::Shutdown).await;
       }
       reload = reload_rx.recv() => {
@@ -371,17 +406,17 @@ async fn run_with_reload(
             // into the next iteration. Force-abort as a backstop in case the
             // brain is stuck in a long blocking provider/tool call instead.
             // The `reload` event covers `try-recv` pollers.
-            let id = bus.lifecycle_of(&ctx.name).unwrap_or_else(new_uuid);
+            let id = bus.lifecycle_of(ctx.name()).unwrap_or_else(new_uuid);
             ctx.request_reload();
-            bus.deliver(&ctx.name, &id, Event::Reload);
-            tracing::info!(agent = %ctx.name, "agent reload requested");
+            bus.deliver(ctx.name(), &id, Event::Reload);
+            tracing::info!(agent = %ctx.name(), "agent reload requested");
             return abort_grace(&mut finished, ctx, Abort::Reload).await;
           }
           Err(error) => {
-            tracing::warn!(agent = %ctx.name, error = %error, "agent reload rejected: invalid script, keeping the live run");
-            if let Some(lifecycle) = bus.lifecycle_of(&ctx.name) {
+            tracing::warn!(agent = %ctx.name(), error = %error, "agent reload rejected: invalid script, keeping the live run");
+            if let Some(lifecycle) = bus.lifecycle_of(ctx.name()) {
               bus.deliver(
-                &ctx.name,
+                ctx.name(),
                 &lifecycle,
                 Event::Error(error.to_string()),
               );
@@ -544,6 +579,7 @@ fn collect_agent_results(
 struct Shared {
   providers: HashMap<String, crate::provider::ProviderEntry>,
   tooling: HashMap<String, crate::tooling::ToolingEntry>,
+  runtimes: HashMap<String, crate::runtime::RuntimeEntry>,
   bus: Arc<MessageBus>,
   endpoint_registry: Option<Arc<EndpointRegistry>>,
   endpoint_task: Option<tokio::task::JoinHandle<()>>,
@@ -551,16 +587,26 @@ struct Shared {
 }
 
 impl Shared {
-  async fn build(cfg: &Config, shutdown: Shutdown) -> anyhow::Result<Self> {
-    let providers = build_providers(cfg)?;
-    let tooling = build_tooling(cfg).await?;
+  async fn build(
+    cfg: &Config,
+    registries: &Registries,
+    shutdown: Shutdown,
+  ) -> anyhow::Result<Self> {
+    let providers = registries.providers.build_entries(cfg)?;
+    let tooling = registries.tooling.build_entries(cfg)?;
+    let runtimes = cfg
+      .agents
+      .iter()
+      .map(|agent| {
+        registries
+          .runtimes
+          .build_for_agent(cfg, agent)
+          .map(|entry| (agent.name.clone(), entry))
+      })
+      .collect::<anyhow::Result<HashMap<_, _>>>()?;
     let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
     let (endpoint_registry, endpoint_task) =
-      if let Some(endpoint) = &cfg.endpoint {
-        let entry = crate::endpoint::build(&endpoint.kind, &endpoint.params)
-          .with_context(|| {
-            format!("failed to build endpoint {:?}", endpoint.kind)
-          })?;
+      if let Some(entry) = registries.endpoints.build_entry(cfg)? {
         let registry = Arc::new(EndpointRegistry::with_tunables(
           Arc::clone(&bus),
           cfg.tunables,
@@ -570,7 +616,7 @@ impl Shared {
         let serve_shutdown = shutdown.clone();
         let task = tokio::spawn(async move {
           if let Err(error) = entry
-            .endpoint
+            .inner()
             .serve(serve_bus, serve_registry, serve_shutdown)
             .await
           {
@@ -584,6 +630,7 @@ impl Shared {
     Ok(Self {
       providers,
       tooling,
+      runtimes,
       bus,
       endpoint_registry,
       endpoint_task,

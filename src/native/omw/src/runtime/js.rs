@@ -14,23 +14,23 @@ use serde_json::Value;
 
 use crate::host::ctx::AgentContext;
 use crate::runtime::engine::{WasiConfig, WasmEngine};
-use crate::runtime::{RunOutcome, Runtime};
+use crate::runtime::{Factory, RunOutcome, Runtime};
 
 const JS_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
   include_bytes!(env!("OMW_WASM_JS_INTERPRETER_COMPONENT_NATIVE"));
 
 /// Impl-specific configuration for the js runtime.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct Config {
+struct Config {
   #[serde(default)]
-  pub interpreter: Option<PathBuf>,
+  interpreter: Option<PathBuf>,
   #[serde(default, flatten)]
-  pub wasi: WasiConfig,
+  wasi: WasiConfig,
 }
 
 /// Wraps a [`WasmEngine`] pointed at the js interpreter component.
 #[derive(Clone)]
-pub struct JsWasmRuntime {
+pub(crate) struct JsWasmRuntime {
   #[allow(dead_code, reason = "to keep it consistent")]
   name: String,
   #[allow(dead_code, reason = "to keep it consistent")]
@@ -44,7 +44,7 @@ pub struct JsWasmRuntime {
 
 impl JsWasmRuntime {
   /// Load a js evaluator component.
-  pub fn new(name: String, config: Config) -> anyhow::Result<Self> {
+  fn new(name: String, config: Config) -> anyhow::Result<Self> {
     tracing::info!(name = %name, interpreter = ?config.interpreter, "loading js interpreter");
     let wasm = if let Some(interpreter) = config.interpreter.clone() {
       WasmEngine::from_path(&interpreter)?
@@ -60,9 +60,11 @@ impl JsWasmRuntime {
   }
 }
 
-pub fn build(name: &str, params: &Value) -> anyhow::Result<Arc<dyn Runtime>> {
-  let config = Config::deserialize(params.into_deserializer())?;
-  Ok(Arc::new(JsWasmRuntime::new(name.to_owned(), config)?))
+impl Factory for JsWasmRuntime {
+  fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>> {
+    let config = Config::deserialize(params.into_deserializer())?;
+    Ok(Arc::new(JsWasmRuntime::new(name.to_owned(), config)?))
+  }
 }
 
 #[async_trait::async_trait]
@@ -72,24 +74,24 @@ impl Runtime for JsWasmRuntime {
   }
 
   async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
-    let script = match tokio::fs::read_to_string(&ctx.script).await {
+    let script = match tokio::fs::read_to_string(ctx.script()).await {
       Ok(script) => script,
       Err(error) => {
         if let Ok(slot) = self.last_good.lock()
           && let Some(cached) = slot.clone()
         {
-          tracing::warn!(agent = %ctx.name, script = %ctx.script.display(), error = %error, "js script changed underfoot, running the last-good version");
+          tracing::warn!(agent = %ctx.name(), script = %ctx.script().display(), error = %error, "js script changed underfoot, running the last-good version");
           cached
         } else {
-          tracing::error!(agent = %ctx.name, script = %ctx.script.display(), error = %error, "failed to read the js script");
+          tracing::error!(agent = %ctx.name(), script = %ctx.script().display(), error = %error, "failed to read the js script");
           return Err(anyhow::anyhow!(
             "failed to read js script {:?}: {error}",
-            ctx.script
+            ctx.script()
           ));
         }
       }
     };
-    tracing::debug!(agent = %ctx.name, script = %ctx.script.display(), "read the js script");
+    tracing::debug!(agent = %ctx.name(), script = %ctx.script().display(), "read the js script");
 
     let wasm = self.wasm.clone();
     let ctx = ctx.clone();
@@ -107,9 +109,12 @@ impl Runtime for JsWasmRuntime {
   }
 
   async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()> {
-    let script = tokio::fs::read_to_string(&ctx.script)
-      .await
-      .with_context(|| format!("failed to read js script {:?}", ctx.script))?;
+    let script =
+      tokio::fs::read_to_string(ctx.script())
+        .await
+        .with_context(|| {
+          format!("failed to read js script {:?}", ctx.script())
+        })?;
     let wasm = self.wasm.clone();
     let ctx_clone = ctx.clone();
     let check_script = script.clone();
@@ -182,9 +187,7 @@ mod tests {
 
   use super::*;
   use crate::host::bus::MessageBus;
-  use crate::provider::Provider;
   use crate::provider::mock::MockProvider;
-  use crate::tooling::Tooling;
   use crate::tooling::mock::MockTooling;
 
   /// Run the async `JsWasmRuntime::run` on a test runtime, so the bridge
@@ -292,20 +295,12 @@ mod tests {
     let mut providers = HashMap::new();
     providers.insert(
       "mock-provider".to_string(),
-      crate::provider::ProviderEntry {
-        name: "mock-provider".to_string(),
-        kind: MockProvider::kind(),
-        provider: provider.clone(),
-      },
+      crate::provider::ProviderEntry::new("mock-provider", provider.clone()),
     );
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
-      crate::tooling::ToolingEntry {
-        name: "mock-tooling".to_string(),
-        kind: MockTooling::kind(),
-        tooling: tooling.clone(),
-      },
+      crate::tooling::ToolingEntry::new("mock-tooling", tooling.clone()),
     );
 
     let script = r#"
@@ -355,11 +350,7 @@ mod tests {
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
-      crate::tooling::ToolingEntry {
-        name: "mock-tooling".to_string(),
-        kind: MockTooling::kind(),
-        tooling,
-      },
+      crate::tooling::ToolingEntry::new("mock-tooling", tooling),
     );
 
     let dir = tempdir()?;
@@ -387,7 +378,7 @@ mod tests {
 
   #[test]
   fn provider_chat_streams_deltas_into_inbox() -> anyhow::Result<()> {
-    let provider = crate::provider::build(
+    let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
       &serde_json::json!({ "responses": ["Hello", ", world"] }),
@@ -423,7 +414,7 @@ mod tests {
 
   #[test]
   fn provider_chat_blocks_and_returns_a_chat_result() -> anyhow::Result<()> {
-    let provider = crate::provider::build(
+    let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
       &serde_json::json!({ "responses": ["Hello", ", world"] }),
@@ -534,11 +525,7 @@ mod tests {
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
-      crate::tooling::ToolingEntry {
-        name: "mock-tooling".to_string(),
-        kind: MockTooling::kind(),
-        tooling: tooling.clone(),
-      },
+      crate::tooling::ToolingEntry::new("mock-tooling", tooling.clone()),
     );
 
     let dir = tempdir()?;
@@ -577,11 +564,7 @@ mod tests {
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
-      crate::tooling::ToolingEntry {
-        name: "mock-tooling".to_string(),
-        kind: MockTooling::kind(),
-        tooling,
-      },
+      crate::tooling::ToolingEntry::new("mock-tooling", tooling),
     );
 
     let dir = tempdir()?;
@@ -644,11 +627,7 @@ mod tests {
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
-      crate::tooling::ToolingEntry {
-        name: "mock-tooling".to_string(),
-        kind: MockTooling::kind(),
-        tooling: tooling.clone(),
-      },
+      crate::tooling::ToolingEntry::new("mock-tooling", tooling.clone()),
     );
 
     let dir = tempdir()?;
@@ -888,7 +867,7 @@ mod tests {
     assert_eq!(outcome, RunOutcome::Completed);
 
     let mut reloaded = ctx.clone();
-    reloaded.script = get_path;
+    reloaded.set_script(get_path);
     let outcome = run(&runtime, &reloaded)?;
     assert_eq!(outcome, RunOutcome::Exited("uuid-1".to_string()));
     Ok(())

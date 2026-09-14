@@ -200,14 +200,14 @@ mod tests {
     );
     let bus = Arc::new(MessageBus::new());
     let streams = Arc::new(StreamRegistry::new());
-    let entry = crate::provider::build(
+    let entry = crate::provider::Registry::default().build(
       "mock",
       "mock",
       &serde_json::json!({ "responses": ["Hello", ", world"] }),
     )?;
     let uuid = crate::host::bus::new_uuid();
     spawn_pump(
-      entry.provider,
+      Arc::clone(entry.inner()),
       Arc::clone(&rt),
       Arc::clone(&bus),
       Arc::clone(&streams),

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use omw::tooling::mcp::MCPTooling;
-use omw::tooling::{Tool as OmwTool, Tooling, ToolingEntry};
+use omw::tooling::{Tool as OmwTool, ToolingEntry};
 use rmcp::model::{
   CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
   ListToolsResult, ServerCapabilities, ServerInfo, Tool,
@@ -83,17 +83,16 @@ async fn in_memory_tooling() -> anyhow::Result<ToolingEntry> {
       .await
       .map_err(anyhow::Error::msg)?;
 
-  Ok(ToolingEntry {
-    name: "in-memory".to_string(),
-    kind: omw::tooling::mcp::MCPTooling::kind(),
-    tooling: Arc::new(MCPTooling::new(running)),
-  })
+  Ok(ToolingEntry::new(
+    "in-memory",
+    Arc::new(MCPTooling::new(running)),
+  ))
 }
 
 #[tokio::test]
 async fn list_tools_parses_rmcp_tools() -> anyhow::Result<()> {
   let entry = in_memory_tooling().await?;
-  let tools: Vec<OmwTool> = entry.tooling.list_tools().await?;
+  let tools: Vec<OmwTool> = entry.inner().list_tools().await?;
   assert_eq!(tools.len(), 1);
   assert_eq!(tools[0].name, "echo");
   assert_eq!(tools[0].description.as_deref(), Some("echo back the input"));
@@ -105,7 +104,7 @@ async fn list_tools_parses_rmcp_tools() -> anyhow::Result<()> {
 async fn call_tool_joins_text_content() -> anyhow::Result<()> {
   let entry = in_memory_tooling().await?;
   let result = entry
-    .tooling
+    .inner()
     .call_tool("echo", serde_json::json!({ "input": "hello" }))
     .await?;
   assert_eq!(result, "hello");
@@ -118,7 +117,7 @@ async fn call_tool_without_object_arguments_sends_no_arguments()
   let entry = in_memory_tooling().await?;
   // A non-object argument yields `None` for `arguments`; the server echoes "".
   let result = entry
-    .tooling
+    .inner()
     .call_tool("echo", serde_json::json!(42))
     .await?;
   assert_eq!(result, "");

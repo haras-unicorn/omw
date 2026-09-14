@@ -327,7 +327,7 @@ in
           prettier --write .
           nixfmt ...(fd '.*\.nix$' . | lines)
           cargo fmt --all
-          cargo clippy --fix --allow-dirty
+          cargo clippy --all-features --fix --allow-dirty
         }
 
         def "main lint" [] {

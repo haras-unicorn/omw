@@ -9,7 +9,10 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
+mod cli;
+mod log;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-  omw::run().await
+  cli::run().await
 }

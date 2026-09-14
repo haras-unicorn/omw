@@ -1,14 +1,13 @@
 //! Provider abstractions.
 //!
 //! A provider instance is constructed from an impl-agnostic config entry
-//! (a `kind` string plus opaque params) by the [`build`] factory. The
+//! (a `kind` string plus opaque params) by the [`Registry`]. The
 //! configured name and static kind travel with the instance in
 //! [`ProviderEntry`], which is what the host hands the guest as a `provider`
 //! resource handle.
 
 use std::sync::Arc;
 
-use anyhow::Context as _;
 use futures_util::StreamExt as _;
 use futures_util::stream::BoxStream;
 use serde_json::Value;
@@ -16,9 +15,9 @@ use serde_json::Value;
 use crate::tooling::Tool;
 
 #[cfg(test)]
-pub mod mock;
+pub(crate) mod mock;
 #[cfg(feature = "provider-openai")]
-pub mod openai;
+mod openai;
 
 /// A single chat participant role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,9 +66,39 @@ pub struct ChatResult {
 /// guest as a `provider` resource.
 #[derive(Clone)]
 pub struct ProviderEntry {
-  pub name: String,
-  pub kind: &'static str,
-  pub provider: Arc<dyn Provider>,
+  name: String,
+  kind: &'static str,
+  inner: Arc<dyn Provider>,
+}
+
+impl ProviderEntry {
+  /// Build an entry from a name and an implementation; the kind comes from
+  /// the implementation itself.
+  pub fn new<T: Provider + 'static>(
+    name: impl Into<String>,
+    provider: Arc<T>,
+  ) -> Self {
+    Self {
+      name: name.into(),
+      kind: T::kind(),
+      inner: provider,
+    }
+  }
+
+  /// The config-derived name of this instance.
+  pub fn name(&self) -> &str {
+    &self.name
+  }
+
+  /// The static kind of this instance's implementation.
+  pub fn kind(&self) -> &'static str {
+    self.kind
+  }
+
+  /// The underlying implementation.
+  pub fn inner(&self) -> &Arc<dyn Provider> {
+    &self.inner
+  }
 }
 
 impl std::fmt::Debug for ProviderEntry {
@@ -157,32 +186,154 @@ fn merge_tool_call(tool_calls: &mut Vec<ToolCall>, incoming: ToolCall) {
   }
 }
 
-/// Build a provider instance from an impl-agnostic config entry.
-pub fn build(
-  name: &str,
-  kind: &str,
-  params: &Value,
-) -> anyhow::Result<ProviderEntry> {
-  match kind {
-    #[cfg(feature = "provider-openai")]
-    "openai" => openai::build(name, params),
-    #[cfg(test)]
-    "mock" => mock::build(name, params),
-    other => anyhow::bail!("unsupported provider kind {other:?}"),
+/// Build a provider from opaque params. Implemented per back end; the
+/// registry calls it and wraps the result into the opaque [`ProviderEntry`].
+pub trait Factory: Send + Sync + 'static {
+  fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>>
+  where
+    Self: Sized;
+}
+
+/// A named factory closure returning the bare implementation. The registry
+/// wraps the result into the opaque [`ProviderEntry`] itself.
+type FactoryFn =
+  Arc<dyn Fn(&str, &Value) -> anyhow::Result<Arc<dyn Provider>> + Send + Sync>;
+
+/// Explicit registry of provider back ends, keyed by static `kind`.
+/// [`Registry::default`] carries the feature-gated built-ins; custom back
+/// ends are added with [`Registry::register`] or
+/// [`Registry::register_factory`] before the supervisor builds entries.
+pub struct Registry {
+  factories: std::collections::HashMap<&'static str, FactoryFn>,
+}
+
+impl Registry {
+  /// An empty registry with no built-ins.
+  pub fn new() -> Self {
+    Self {
+      factories: std::collections::HashMap::new(),
+    }
+  }
+
+  fn insert(&mut self, kind: &'static str, factory: FactoryFn) {
+    self.factories.insert(kind, factory);
+  }
+
+  /// Register a back-end type implementing [`Provider`] plus [`Factory`].
+  /// Rejects duplicate `kind` with an error, never overwrites.
+  pub fn register<T>(&mut self) -> anyhow::Result<()>
+  where
+    T: Provider + Factory,
+  {
+    let kind = T::kind();
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate provider kind {kind:?}");
+    }
+    let factory: FactoryFn =
+      Arc::new(|name, params| Ok(T::build(name, params)? as Arc<dyn Provider>));
+    self.insert(kind, factory);
+    Ok(())
+  }
+
+  /// Escape hatch for hand-built instances, test doubles holding handles,
+  /// or config from elsewhere. Rejects duplicate `kind`, never overwrites.
+  pub fn register_factory<F>(
+    &mut self,
+    kind: &'static str,
+    factory: F,
+  ) -> anyhow::Result<()>
+  where
+    F: Fn(&str, &Value) -> anyhow::Result<Arc<dyn Provider>>
+      + Send
+      + Sync
+      + 'static,
+  {
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate provider kind {kind:?}");
+    }
+    self.insert(kind, Arc::new(factory));
+    Ok(())
+  }
+
+  /// The registered kinds, sorted for deterministic errors.
+  pub fn kinds(&self) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> = self.factories.keys().copied().collect();
+    kinds.sort_unstable();
+    kinds
+  }
+
+  /// Build a [`ProviderEntry`] from a config entry via the registered factory.
+  /// Unknown `kind` errors with the list of registered kinds.
+  pub fn build(
+    &self,
+    name: &str,
+    kind: &str,
+    params: &Value,
+  ) -> anyhow::Result<ProviderEntry> {
+    let static_kind: &'static str = self
+      .factories
+      .keys()
+      .copied()
+      .find(|k| *k == kind)
+      .ok_or_else(|| {
+        anyhow::anyhow!(
+          "unsupported provider kind {kind:?} (registered: {})",
+          self.kinds().join(", ")
+        )
+      })?;
+    let Some(factory) = self.factories.get(static_kind) else {
+      anyhow::bail!(
+        "unsupported provider kind {kind:?} (registered: {})",
+        self.kinds().join(", ")
+      );
+    };
+    let inner = factory(name, params)?;
+    Ok(ProviderEntry {
+      name: name.to_owned(),
+      kind: static_kind,
+      inner,
+    })
+  }
+
+  /// Build the configured providers into entries keyed by name.
+  pub fn build_entries(
+    &self,
+    cfg: &crate::config::Config,
+  ) -> anyhow::Result<std::collections::HashMap<String, ProviderEntry>> {
+    use anyhow::Context as _;
+    let mut providers = std::collections::HashMap::new();
+    for (name, impl_cfg) in &cfg.providers {
+      let entry = self
+        .build(name, &impl_cfg.kind, &impl_cfg.params)
+        .with_context(|| format!("failed to build provider {name:?}"))?;
+      providers.insert(name.clone(), entry);
+    }
+    Ok(providers)
   }
 }
 
-/// Build the registry of configured providers into entries keyed by name.
-pub fn build_registry(
-  cfg: &crate::config::Config,
-) -> anyhow::Result<std::collections::HashMap<String, ProviderEntry>> {
-  let mut providers = std::collections::HashMap::new();
-  for (name, impl_cfg) in &cfg.providers {
-    let entry = build(name, &impl_cfg.kind, &impl_cfg.params)
-      .with_context(|| format!("failed to build provider {name:?}"))?;
-    providers.insert(name.clone(), entry);
+impl Default for Registry {
+  fn default() -> Self {
+    let mut registry = Self::new();
+    #[cfg(feature = "provider-openai")]
+    {
+      let _ = registry.register::<openai::OpenAIProvider>();
+    }
+    #[cfg(test)]
+    {
+      let _ = registry.register::<mock::MockProvider>();
+    }
+    registry
   }
-  Ok(providers)
+}
+
+/// Register provider back-end types into a [`Registry`].
+/// Expands to one [`Registry::register`] call per type.
+#[macro_export]
+macro_rules! register_providers {
+  ($registry:expr, $($t:ty),* $(,)?) => {
+    $( $registry.register::<$t>()?; )*
+  };
 }
 
 #[cfg(test)]
@@ -194,42 +345,49 @@ mod tests {
   use super::*;
   use crate::config::{AgentConfig, Config, ImplConfig};
 
-  #[test]
-  fn factory_builds_known_kinds() -> anyhow::Result<()> {
-    #[cfg(feature = "provider-openai")]
-    {
-      let entry = build("p", "openai", &json!({}))?;
-      assert_eq!(entry.name, "p");
-      assert_eq!(entry.kind, "openai");
-    }
-
-    let entry = build("m", "mock", &json!({}))?;
-    assert_eq!(entry.name, "m");
-    assert_eq!(entry.kind, "mock");
-    Ok(())
-  }
-
-  #[test]
-  fn factory_rejects_unknown_kind() {
-    assert!(build("p", "nope", &json!({})).is_err());
-  }
-
-  #[test]
-  fn build_registry_empty() -> anyhow::Result<()> {
-    let cfg = Config {
+  fn empty_config() -> Config {
+    Config {
       providers: HashMap::new(),
       tooling: HashMap::new(),
       runtime: HashMap::new(),
       endpoint: None,
       agents: Vec::new(),
       tunables: crate::config::Tunables::default(),
-    };
-    assert!(build_registry(&cfg)?.is_empty());
+    }
+  }
+
+  #[test]
+  fn registry_builds_known_kinds() -> anyhow::Result<()> {
+    let registry = Registry::default();
+    #[cfg(feature = "provider-openai")]
+    {
+      let entry = registry.build("p", "openai", &json!({}))?;
+      assert_eq!(entry.name(), "p");
+      assert_eq!(entry.kind(), "openai");
+    }
+
+    let entry = registry.build("m", "mock", &json!({}))?;
+    assert_eq!(entry.name(), "m");
+    assert_eq!(entry.kind(), "mock");
     Ok(())
   }
 
   #[test]
-  fn build_registry_populated() -> anyhow::Result<()> {
+  fn registry_rejects_unknown_kind() {
+    let registry = Registry::default();
+    assert!(registry.build("p", "nope", &json!({})).is_err());
+  }
+
+  #[test]
+  fn build_entries_empty() -> anyhow::Result<()> {
+    let cfg = empty_config();
+    let registry = Registry::default();
+    assert!(registry.build_entries(&cfg)?.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  fn build_entries_populated() -> anyhow::Result<()> {
     let cfg = Config {
       providers: HashMap::from([(
         "m".to_string(),
@@ -248,12 +406,13 @@ mod tests {
       }],
       tunables: crate::config::Tunables::default(),
     };
-    let reg = build_registry(&cfg)?;
-    let entry = reg
+    let registry = Registry::default();
+    let entries = registry.build_entries(&cfg)?;
+    let entry = entries
       .get("m")
       .ok_or_else(|| anyhow::anyhow!("missing provider m"))?;
-    assert_eq!(entry.name, "m");
-    assert_eq!(entry.kind, "mock");
+    assert_eq!(entry.name(), "m");
+    assert_eq!(entry.kind(), "mock");
     Ok(())
   }
 }
