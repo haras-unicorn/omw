@@ -5,6 +5,7 @@ language: en
 ignorePaths:
   - flake.nix
   - CHANGELOG.md
+  - "**/CHANGELOG.md"
 ignoreWords:
   - haras
   - nixpkgs
@@ -35,3 +36,7 @@ ignoreWords:
   - mlock
   - zeroize
   - zeroized
+  - chrono
+  - schemars
+  - rustls
+  - serde

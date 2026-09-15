@@ -11,6 +11,7 @@
 
 mod cli;
 mod log;
+mod tls;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

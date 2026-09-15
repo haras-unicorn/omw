@@ -14,7 +14,38 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 The default features are `runtime-wasm`, `provider-openai`, `tooling-mcp`, and
 `endpoint-openai`. The `runtime-rhai` and `runtime-js` script runtimes are
 opt-in features; a `--no-default-features` build yields empty registries.
-(Runnable `examples/` programs land in a separate PR.)
+(Runnable `examples/` programs land in a separate PR.) The CLI-only stack
+(`clap`, `config`, `tracing-subscriber`) lives in the separate `omw-cli` crate,
+so library consumers never pull it in.
+
+## TLS setup
+
+`omw` follows the standard Rust contract: features select where TLS comes from,
+the final binary installs it. The `provider-openai` and `tooling-mcp` features
+imply `rustls`, which links the `ring` crypto backend; `reqwest` is built on
+`rustls-no-provider`, so the embedding binary must install exactly one
+process-global crypto provider once before running agents:
+
+```rust
+if rustls::crypto::CryptoProvider::get_default().is_none() {
+  rustls::crypto::ring::default_provider()
+    .install_default()
+    .expect("another crate installed a crypto provider");
+}
+```
+
+Install your own provider instead (for example `aws-lc-rs`) when you prefer a
+different backend; `omw` never installs or overwrites one itself — the `ring`
+setup lives in the `omw-cli` binary only. A `--no-default-features` build
+without the provider/tooling features is TLS-free.
+
+Certificate trust is orthogonal to the crypto backend: verification uses
+`rustls-platform-verifier`, which on Linux loads the system CA bundle once at
+startup (honoring `SSL_CERT_FILE`). Static binaries therefore still trust
+whatever the host distribution trusts, with no Mozilla bundle baked in. The
+bundled `zstd` (via `wasmtime`) needs no action either: downstream builds can
+set `ZSTD_SYS_USE_PKG_CONFIG=1` or unify `zstd-sys` features when they want the
+system library instead.
 
 ## Embed with defaults
 

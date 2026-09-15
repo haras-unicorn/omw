@@ -1,5 +1,6 @@
-//! Binary-only CLI: arg parsing, config loading, schema generation, and
-//! the `run()` entrypoint. Owned by `main.rs`; not part of the library.
+//! Binary CLI: arg parsing, config loading, schema generation, and
+//! the `run()` entrypoint. Owned by `main.rs` in the `omw-cli` crate; not
+//! part of the `omw` library.
 
 use std::path::{Path, PathBuf};
 
@@ -125,6 +126,8 @@ pub fn generate_schema(path: &Path) -> Result<()> {
 
 pub async fn run() -> anyhow::Result<()> {
   crate::log::init();
+
+  crate::tls::init();
 
   let cli = Cli::load()?;
   tracing::info!(command = ?cli.command, "omw starting");

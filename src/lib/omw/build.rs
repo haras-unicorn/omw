@@ -1,6 +1,7 @@
 //! Build script: for the `runtime-rhai` and `mock` features, cross-compiles the bundled
 //! guests for `wasm32-wasip2`, wraps the resulting core module into a WASM
-//! component with `wasm-tools`, and embeds it into the `omw` binary.
+//! component with `wasm-tools`, and embeds it into the `omw` library (linked
+//! into the `omw` binary built by the `omw-cli` crate).
 //!
 //! The guests are intentionally *not* a `[dependencies]` of `omw`: their `export!`
 //! ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the host
@@ -42,7 +43,7 @@ fn compile_guest(guest: &str) {
     env::var("CARGO_MANIFEST_DIR")
       .unwrap_or_else(|_| panic!("CARGO_MANIFEST_DIR not set")),
   );
-  // Workspace root: <root>/src/native/omw -> <root>
+  // Workspace root: <root>/src/lib/omw -> <root>
   let workspace_root = manifest_dir
     .parent()
     .and_then(|p| p.parent())
@@ -73,7 +74,6 @@ fn compile_guest(guest: &str) {
   let component_native = out_dir.join(format!("{guest}.component.cwasm"));
   let component_wat = out_dir.join(format!("{guest}.component.wat"));
 
-  // Rebuild when the guest source or the WIT contract changes.
   println!(
     "cargo:rerun-if-changed={}",
     guest_dir.join("Cargo.toml").display()
@@ -84,9 +84,18 @@ fn compile_guest(guest: &str) {
     manifest_dir.join("wit").display()
   );
 
-  // 1. Cross-compile the guest for wasm32-wasip2.
   let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
   let mut cmd = Command::new(&cargo);
+  cmd.env_remove("RUSTFLAGS");
+  cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+  for (key, _) in env::vars_os() {
+    let Some(key) = key.to_str() else {
+      continue;
+    };
+    if key.starts_with("CARGO_TARGET_") && key.ends_with("_RUSTFLAGS") {
+      cmd.env_remove(key);
+    }
+  }
   cmd
     .args([
       "build",
@@ -110,8 +119,6 @@ fn compile_guest(guest: &str) {
      (is the 'wasm32-wasip2' target installed?)"
   );
 
-  // 2. Ensure `core_wasm` is a WASM *component*.
-  //
   // The `wasm32-wasip2` target emits a component directly (component model
   // version = 0x0d), but verify the magic so that environments producing a
   // bare core module (component version gap) still work: if it's a core
@@ -139,7 +146,6 @@ fn compile_guest(guest: &str) {
     });
   }
 
-  // 3. Convert component WASM to WAT.
   let status = Command::new("wasm-tools")
     .args(["print"])
     .arg(&component_wasm)
@@ -149,7 +155,7 @@ fn compile_guest(guest: &str) {
     .unwrap_or_else(|e| panic!("failed to run wasm-tools print: {e}"));
   assert!(status.success(), "wasm-tools print failed");
 
-  // 4. Compile the component AOT with the same epoch-interruption config
+  // Compile the component AOT with the same epoch-interruption config
   // as the runtime engine, so the cached native loads under it.
   let mut config = wasmtime::Config::new();
   config.wasm_component_model(true);
@@ -165,7 +171,6 @@ fn compile_guest(guest: &str) {
   std::fs::write(&component_native, native)
     .unwrap_or_else(|_| panic!("failed writing {guest} guest"));
 
-  // 5. Make the component path available to `include_bytes!` at compile time.
   println!("cargo:rustc-env={}={}", wat_env, component_wat.display());
   println!("cargo:rustc-env={}={}", wasm_env, component_wasm.display());
   println!(

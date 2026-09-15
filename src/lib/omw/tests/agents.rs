@@ -1,4 +1,4 @@
-//! End-to-end `run_agents` integration test: a real `omw.toml` config driving
+//! End-to-end `run_agents` integration test: a `Config` built in code driving
 //! the whole agent runtime once, with a wiremock-backed OpenAI provider and a
 //! real rmcp streamable-HTTP MCP server.
 #![cfg(all(
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
+use omw::config::{AgentConfig, Config, ImplConfig, Tunables};
 use rmcp::model::{
   CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
   ListToolsResult, ServerCapabilities, ServerInfo, Tool,
@@ -22,6 +23,7 @@ use rmcp::transport::streamable_http_server::{
   session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData as McpError, ServerHandler};
+use serde_json::json;
 use wiremock::matchers::{bearer_token, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -95,6 +97,29 @@ async fn start_mcp_http()
   Ok((url, handle))
 }
 
+fn impl_config(kind: &str, params: serde_json::Value) -> ImplConfig {
+  ImplConfig {
+    kind: kind.to_string(),
+    params,
+  }
+}
+
+fn agent(name: &str, runtime: &str, script: &str) -> AgentConfig {
+  AgentConfig {
+    name: name.to_string(),
+    runtime: runtime.to_string(),
+    script: script.to_string(),
+  }
+}
+
+fn openai_params(base_url: &str) -> serde_json::Value {
+  json!({
+    "base_url": format!("{base_url}/v1"),
+    "api_key": "sk-test",
+    "model": "gpt-test",
+  })
+}
+
 #[tokio::test]
 async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
   let provider = MockServer::start().await;
@@ -135,37 +160,33 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
     "#,
   )?;
 
-  let config_path = dir.path().join("omw.toml");
-  std::fs::write(
-    &config_path,
-    format!(
-      r#"
-        [providers.openai]
-        kind = "openai"
-        base_url = "{base_url}/v1"
-        api_key = "sk-test"
-        model = "gpt-test"
+  let config = Config {
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    providers: [(
+      "openai".to_string(),
+      impl_config("openai", openai_params(&provider.uri())),
+    )]
+    .into_iter()
+    .collect(),
+    tooling: [(
+      "mcp".to_string(),
+      impl_config(
+        "mcp",
+        json!({
+          "transport": "http",
+          "url": mcp_url,
+        }),
+      ),
+    )]
+    .into_iter()
+    .collect(),
+    runtime: [("rhai".to_string(), impl_config("rhai", json!({})))]
+      .into_iter()
+      .collect(),
+    endpoint: None,
+    tunables: Tunables::default(),
+  };
 
-        [tooling.mcp]
-        kind = "mcp"
-        transport = "http"
-        url = "{mcp_url}"
-
-        [runtime.rhai]
-        kind = "rhai"
-
-        [[agents]]
-        name = "alice"
-        runtime = "rhai"
-        script = "{brain}"
-      "#,
-      base_url = provider.uri(),
-      mcp_url = mcp_url,
-      brain = brain.display(),
-    ),
-  )?;
-
-  let config = load_config(&config_path)?;
   let registries = omw::agent::Registries::default();
   omw::agent::run_agents(&config, false, &registries).await?;
 
@@ -218,31 +239,21 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
     "#,
   )?;
 
-  let config_path = dir.path().join("omw.toml");
-  std::fs::write(
-    &config_path,
-    format!(
-      r#"
-        [providers.openai]
-        kind = "openai"
-        base_url = "{base_url}/v1"
-        api_key = "sk-test"
-        model = "gpt-test"
-
-        [runtime.rhai]
-        kind = "rhai"
-
-        [[agents]]
-        name = "alice"
-        runtime = "rhai"
-        script = "{brain}"
-      "#,
-      base_url = provider.uri(),
-      brain = brain.display(),
-    ),
-  )?;
-
-  let config = load_config(&config_path)?;
+  let config = Config {
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    providers: [(
+      "openai".to_string(),
+      impl_config("openai", openai_params(&provider.uri())),
+    )]
+    .into_iter()
+    .collect(),
+    tooling: Default::default(),
+    runtime: [("rhai".to_string(), impl_config("rhai", json!({})))]
+      .into_iter()
+      .collect(),
+    endpoint: None,
+    tunables: Tunables::default(),
+  };
   let run = tokio::spawn(async move {
     let registries = omw::agent::Registries::default();
     omw::agent::run_agents(&config, true, &registries).await
@@ -322,25 +333,18 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   let brain = dir.path().join("brain.rhai");
   std::fs::write(&brain, "let === ")?;
 
-  let config_path = dir.path().join("omw.toml");
-  std::fs::write(
-    &config_path,
-    format!(
-      r#"
-        [runtime.rhai]
-        kind = "rhai"
-
-        [[agents]]
-        name = "alice"
-        runtime = "rhai"
-        script = "{brain}"
-      "#,
-      brain = brain.display(),
-    ),
-  )?;
+  let config = Config {
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    providers: Default::default(),
+    tooling: Default::default(),
+    runtime: [("rhai".to_string(), impl_config("rhai", json!({})))]
+      .into_iter()
+      .collect(),
+    endpoint: None,
+    tunables: Tunables::default(),
+  };
 
   // Without watch a broken script fails immediately.
-  let config = load_config(&config_path)?;
   let registries = omw::agent::Registries::default();
   assert!(
     omw::agent::run_agents(&config, false, &registries)
@@ -351,7 +355,6 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   // With watch the task parks on the invalid script; a fixing edit starts
   // the agent normally.
   std::fs::write(&brain, "\"fixed\"")?;
-  let config = load_config(&config_path)?;
   let registries = omw::agent::Registries::default();
   tokio::time::timeout(
     std::time::Duration::from_secs(30),
@@ -359,13 +362,4 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   )
   .await??;
   Ok(())
-}
-
-/// Load the configuration from `path` overlaid with `OMW_*` env vars.
-fn load_config(path: &std::path::Path) -> anyhow::Result<omw::config::Config> {
-  let raw: ::config::Config = ::config::Config::builder()
-    .add_source(::config::File::from(path).required(false))
-    .add_source(::config::Environment::with_prefix("OMW").separator("__"))
-    .build()?;
-  Ok(raw.try_deserialize()?)
 }

@@ -53,3 +53,4 @@ ignoreWords:
   - toctou
   - raii
   - cdylib
+  - zstd

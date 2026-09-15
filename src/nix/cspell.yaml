@@ -16,3 +16,4 @@ ignoreWords:
   - stdenv
   - journalctl
   - envfile
+  - rustflags
