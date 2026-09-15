@@ -4,7 +4,8 @@
 //!
 //! The everything server is a *stdio* MCP server, so we connect by spawning the
 //! container with `docker run -i` through the production stdio transport
-//! (`MCPTooling::build` with `transport = "stdio"`). This exercises the full
+//! (the `mcp` kind via the tooling registry). The registry build only parses
+//! config; the first tool call dials the container, exercising the full
 //! `initialize` -> `tools/list` -> `tools/call` lifecycle against a fully
 //! independent implementation of the wire protocol.
 //!
@@ -13,7 +14,7 @@
 
 use serde_json::json;
 
-use omw::tooling::build;
+use omw::tooling::Registry;
 
 const EVERYTHING_IMAGE: &str = "mcp/everything";
 
@@ -22,8 +23,9 @@ fn enabled() -> bool {
 }
 
 /// Connect to the everything server over stdio via the production build path.
-async fn everything_tooling() -> anyhow::Result<omw::tooling::ToolingEntry> {
-  build(
+/// The build only parses config; the container is dialed on first use.
+fn everything_tooling() -> anyhow::Result<omw::tooling::ToolingEntry> {
+  Registry::default().build(
     "everything",
     "mcp",
     &json!({
@@ -31,8 +33,8 @@ async fn everything_tooling() -> anyhow::Result<omw::tooling::ToolingEntry> {
       "command": "docker",
       "args": ["run", "-i", "--rm", EVERYTHING_IMAGE],
     }),
+    omw::config::Tunables::default(),
   )
-  .await
 }
 
 #[tokio::test]
@@ -42,8 +44,8 @@ async fn lists_tools_from_reference_server() -> anyhow::Result<()> {
     return Ok(());
   }
 
-  let entry = everything_tooling().await?;
-  let tools = entry.tooling.list_tools().await?;
+  let entry = everything_tooling()?;
+  let tools = entry.inner().list_tools().await?;
   let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
   assert!(
     names.contains(&"echo"),
@@ -63,9 +65,9 @@ async fn calls_add_tool_and_gets_the_sum() -> anyhow::Result<()> {
     return Ok(());
   }
 
-  let entry = everything_tooling().await?;
+  let entry = everything_tooling()?;
   let sum = entry
-    .tooling
+    .inner()
     .call_tool("add", json!({ "a": 2, "b": 3 }))
     .await?;
   assert_eq!(sum.trim(), "The sum of 2 and 3 is 5.");

@@ -13,13 +13,13 @@ use futures_util::stream::{BoxStream, Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{ChatDelta, ChatMessage, Provider, ProviderEntry, Role, ToolCall};
+use super::{ChatDelta, ChatMessage, Provider, Role, ToolCall};
 use crate::secret::Secret;
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-family provider.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Config {
+struct Config {
   #[serde(default)]
   pub base_url: Option<String>,
   #[serde(default)]
@@ -34,20 +34,18 @@ pub struct OpenAIProvider {
   client: reqwest::Client,
 }
 
-/// Build an `openai` provider from its opaque config params.
-pub fn build(name: &str, params: &Value) -> anyhow::Result<ProviderEntry> {
-  let config = Config::deserialize(params)
-    .with_context(|| format!("invalid openai provider config for {name:?}"))?;
-  tracing::debug!(name, config = ?config, "built openai provider");
-  Ok(ProviderEntry {
-    name: name.to_string(),
-    kind: OpenAIProvider::kind(),
-    provider: Arc::new(OpenAIProvider::new(config)?),
-  })
+impl super::Factory for OpenAIProvider {
+  fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>> {
+    let config = Config::deserialize(params).with_context(|| {
+      format!("invalid openai provider config for {name:?}")
+    })?;
+    tracing::debug!(name, config = ?config, "built openai provider");
+    Ok(Arc::new(OpenAIProvider::new(config)?))
+  }
 }
 
 impl OpenAIProvider {
-  pub fn new(config: Config) -> anyhow::Result<Self> {
+  fn new(config: Config) -> anyhow::Result<Self> {
     let client = reqwest::Client::builder()
       .build()
       .context("failed to build http client")?;

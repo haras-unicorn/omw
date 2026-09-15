@@ -1,17 +1,20 @@
 //! Runtime abstractions: how an agent brain is loaded and driven.
+//!
+//! A runtime instance is constructed from an impl-agnostic config entry
+//! (a name plus opaque params) by the [`Registry`].
 
 #[cfg(feature = "runtime-wasm")]
 mod bindings;
 #[cfg(feature = "runtime-wasm")]
-pub mod engine;
+mod engine;
 #[cfg(feature = "runtime-wasm")]
 mod host;
 #[cfg(feature = "runtime-js")]
-pub mod js;
+mod js;
 #[cfg(feature = "runtime-rhai")]
-pub mod rhai;
+mod rhai;
 #[cfg(feature = "runtime-wasm")]
-pub mod wasm;
+mod wasm;
 
 use crate::host::ctx::AgentContext;
 use serde_json::Value;
@@ -30,9 +33,48 @@ pub enum RunOutcome {
 /// static kind.
 #[derive(Clone)]
 pub struct RuntimeEntry {
-  pub name: String,
-  pub kind: String,
-  pub runtime: Arc<dyn Runtime>,
+  name: String,
+  kind: &'static str,
+  inner: Arc<dyn Runtime>,
+}
+
+impl RuntimeEntry {
+  /// Build an entry from a name and an implementation; the kind comes from
+  /// the implementation itself.
+  pub fn new<T: Runtime + 'static>(
+    name: impl Into<String>,
+    runtime: Arc<T>,
+  ) -> Self {
+    Self {
+      name: name.into(),
+      kind: T::kind(),
+      inner: runtime,
+    }
+  }
+
+  /// The config-derived name of this instance.
+  pub fn name(&self) -> &str {
+    &self.name
+  }
+
+  /// The static kind of this instance's implementation.
+  pub fn kind(&self) -> &'static str {
+    self.kind
+  }
+
+  /// The underlying implementation.
+  pub fn inner(&self) -> &Arc<dyn Runtime> {
+    &self.inner
+  }
+}
+
+impl std::fmt::Debug for RuntimeEntry {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RuntimeEntry")
+      .field("name", &self.name)
+      .field("kind", &self.kind)
+      .finish()
+  }
 }
 
 /// A runtime loads an agent brain and drives it for one iteration.
@@ -51,27 +93,163 @@ pub trait Runtime: Send + Sync {
   async fn validate(&self, ctx: &AgentContext) -> anyhow::Result<()>;
 }
 
-/// Build a runtime from the agent's kind and the runtime's impl config.
-pub fn build(
-  name: &str,
-  kind: &str,
-  params: &Value,
-) -> anyhow::Result<RuntimeEntry> {
-  let runtime = match kind {
-    #[cfg(feature = "runtime-wasm")]
-    "wasm" => wasm::build(name, params),
-    #[cfg(feature = "runtime-rhai")]
-    "rhai" => rhai::build(name, params),
-    #[cfg(feature = "runtime-js")]
-    "js" => js::build(name, params),
-    other => anyhow::bail!("unsupported runtime kind {other:?}"),
-  }?;
+/// Build a runtime from opaque params. Implemented per back end; the
+/// registry calls it and wraps the result into the opaque [`RuntimeEntry`].
+pub trait Factory: Send + Sync + 'static {
+  fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>>
+  where
+    Self: Sized;
+}
 
-  Ok(RuntimeEntry {
-    name: name.to_owned(),
-    kind: kind.to_owned(),
-    runtime,
-  })
+type FactoryFn =
+  Arc<dyn Fn(&str, &Value) -> anyhow::Result<Arc<dyn Runtime>> + Send + Sync>;
+
+/// Explicit registry of runtime back ends, keyed by static `kind`.
+/// [`Registry::default`] carries the feature-gated built-ins; custom back
+/// ends are added with [`Registry::register`] or
+/// [`Registry::register_factory`] before the supervisor builds entries.
+pub struct Registry {
+  factories: std::collections::HashMap<&'static str, FactoryFn>,
+}
+
+impl Registry {
+  /// An empty registry with no built-ins.
+  pub fn new() -> Self {
+    Self {
+      factories: std::collections::HashMap::new(),
+    }
+  }
+
+  fn insert(&mut self, kind: &'static str, factory: FactoryFn) {
+    self.factories.insert(kind, factory);
+  }
+
+  /// Register a back-end type implementing [`Runtime`] plus [`Factory`].
+  /// Rejects duplicate `kind` with an error, never overwrites.
+  pub fn register<T>(&mut self) -> anyhow::Result<()>
+  where
+    T: Runtime + Factory,
+  {
+    let kind = T::kind();
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate runtime kind {kind:?}");
+    }
+    let factory: FactoryFn =
+      Arc::new(|name, params| Ok(T::build(name, params)? as Arc<dyn Runtime>));
+    self.insert(kind, factory);
+    Ok(())
+  }
+
+  /// Escape hatch for hand-built instances, test doubles holding handles,
+  /// or config from elsewhere. Rejects duplicate `kind`, never overwrites.
+  pub fn register_factory<F>(
+    &mut self,
+    kind: &'static str,
+    factory: F,
+  ) -> anyhow::Result<()>
+  where
+    F: Fn(&str, &Value) -> anyhow::Result<Arc<dyn Runtime>>
+      + Send
+      + Sync
+      + 'static,
+  {
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate runtime kind {kind:?}");
+    }
+    self.insert(kind, Arc::new(factory));
+    Ok(())
+  }
+
+  /// The registered kinds, sorted for deterministic errors.
+  pub fn kinds(&self) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> = self.factories.keys().copied().collect();
+    kinds.sort_unstable();
+    kinds
+  }
+
+  /// Build a [`RuntimeEntry`] from a config entry via the registered factory.
+  /// Unknown `kind` errors with the list of registered kinds.
+  ///
+  /// Runtime construction is config-agnostic: the caller supplies the
+  /// runtime's name plus opaque params, and the registry wraps the built
+  /// implementation into the entry.
+  pub fn build(
+    &self,
+    name: &str,
+    kind: &str,
+    params: &Value,
+  ) -> anyhow::Result<RuntimeEntry> {
+    let static_kind: &'static str = self
+      .factories
+      .keys()
+      .copied()
+      .find(|k| *k == kind)
+      .ok_or_else(|| {
+        anyhow::anyhow!(
+          "unsupported runtime kind {kind:?} (registered: {})",
+          self.kinds().join(", ")
+        )
+      })?;
+    let Some(factory) = self.factories.get(static_kind) else {
+      anyhow::bail!(
+        "unsupported runtime kind {kind:?} (registered: {})",
+        self.kinds().join(", ")
+      );
+    };
+    let inner = factory(name, params)?;
+    Ok(RuntimeEntry {
+      name: name.to_owned(),
+      kind: static_kind,
+      inner,
+    })
+  }
+
+  /// Build one runtime entry for a single agent from the agent wiring.
+  /// Errors when the agent references an unknown named runtime.
+  pub fn build_for_agent(
+    &self,
+    cfg: &crate::config::Config,
+    agent: &crate::config::AgentConfig,
+  ) -> anyhow::Result<RuntimeEntry> {
+    use anyhow::Context as _;
+    let impl_cfg = cfg.runtime.get(&agent.runtime).with_context(|| {
+      format!(
+        "agent {:?} references unknown runtime {:?}",
+        agent.name, agent.runtime
+      )
+    })?;
+    self
+      .build(&agent.runtime, &impl_cfg.kind, &impl_cfg.params)
+      .with_context(|| format!("failed to build runtime {:?}", agent.runtime))
+  }
+}
+
+impl Default for Registry {
+  fn default() -> Self {
+    let mut registry = Self::new();
+    #[cfg(feature = "runtime-wasm")]
+    {
+      let _ = registry.register::<wasm::WasmRuntime>();
+    }
+    #[cfg(feature = "runtime-rhai")]
+    {
+      let _ = registry.register::<rhai::RhaiWasmRuntime>();
+    }
+    #[cfg(feature = "runtime-js")]
+    {
+      let _ = registry.register::<js::JsWasmRuntime>();
+    }
+    registry
+  }
+}
+
+/// Register runtime back-end types into a [`Registry`].
+/// Expands to one [`Registry::register`] call per type.
+#[macro_export]
+macro_rules! register_runtimes {
+  ($registry:expr, $($t:ty),* $(,)?) => {
+    $( $registry.register::<$t>()?; )*
+  };
 }
 
 #[cfg(test)]
@@ -81,18 +259,36 @@ mod tests {
   use super::*;
 
   #[test]
-  fn factory_builds_known_kinds() -> anyhow::Result<()> {
+  fn registry_builds_known_kinds() -> anyhow::Result<()> {
+    let registry = Registry::default();
     #[cfg(feature = "runtime-wasm")]
-    assert!(build("wasm", "wasm", &Value::Object(Map::new())).is_ok());
+    assert!(
+      registry
+        .build("wasm", "wasm", &Value::Object(Map::new()))
+        .is_ok()
+    );
     #[cfg(feature = "runtime-rhai")]
-    assert!(build("rhai", "rhai", &Value::Object(Map::new())).is_ok());
+    assert!(
+      registry
+        .build("rhai", "rhai", &Value::Object(Map::new()))
+        .is_ok()
+    );
     #[cfg(feature = "runtime-js")]
-    assert!(build("js", "js", &Value::Object(Map::new())).is_ok());
+    assert!(
+      registry
+        .build("js", "js", &Value::Object(Map::new()))
+        .is_ok()
+    );
     Ok(())
   }
 
   #[test]
-  fn factory_rejects_unknown_kind() {
-    assert!(build("nope", "nope", &Value::Object(Map::new())).is_err());
+  fn registry_rejects_unknown_kind() {
+    let registry = Registry::default();
+    assert!(
+      registry
+        .build("nope", "nope", &Value::Object(Map::new()))
+        .is_err()
+    );
   }
 }

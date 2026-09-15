@@ -215,6 +215,7 @@ impl WasmEngine {
   }
 
   /// Load a WASM component from an in-memory WAT byte slice.
+  #[cfg(test)]
   pub fn from_wat_bytes(bytes: &'static [u8]) -> anyhow::Result<Self> {
     let wasm = wat::parse_bytes(bytes)?;
     Self::from_wasm_bytes(&wasm)
@@ -260,7 +261,7 @@ impl WasmEngine {
     script: String,
     wasi: &WasiConfig,
   ) -> anyhow::Result<()> {
-    let span = tracing::info_span!("engine.check", agent = %ctx.name);
+    let span = tracing::info_span!("engine.check", agent = %ctx.name());
     let _entered = span.enter();
     tracing::debug!(script, "instantiating the component for validation");
     // Deliberately not `ctx.set_interrupt_handle`: validation runs while
@@ -295,7 +296,7 @@ impl WasmEngine {
     script: String,
     wasi: &WasiConfig,
   ) -> anyhow::Result<Option<String>> {
-    let span = tracing::info_span!("engine.run", agent = %ctx.name);
+    let span = tracing::info_span!("engine.run", agent = %ctx.name());
     let _entered = span.enter();
     tracing::debug!(script, "instantiating the component");
     let engine = self.engine.clone();

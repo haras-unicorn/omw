@@ -15,5 +15,6 @@
   - [The js runtime](./runtime/js.md)
 - [Hot reload](./hot-reload.md)
 - [Tunables](./tunables.md)
+- [Library](./library.md)
 - [NixOS module](./nixos/module.md)
   - [NixOS module options](./nixos/options.md)

@@ -25,7 +25,7 @@ async fn chat_all(
   messages: Vec<ChatMessage>,
 ) -> anyhow::Result<Vec<omw::provider::ChatDelta>> {
   let mut stream = entry
-    .provider
+    .inner()
     .chat_stream(model, messages, Vec::new())
     .await?;
   let mut out = Vec::new();
@@ -44,7 +44,7 @@ fn user(content: &str) -> ChatMessage {
 }
 
 fn build_provider(base_url: &str) -> anyhow::Result<ProviderEntry> {
-  omw::provider::build(
+  omw::provider::Registry::default().build(
     "openai",
     "openai",
     &json!({
@@ -131,7 +131,7 @@ async fn non_2xx_yields_an_error() -> anyhow::Result<()> {
 
   let entry = build_provider(&server.uri())?;
   let err = match entry
-    .provider
+    .inner()
     .chat("gpt-test", vec![user("hi")], Vec::new())
     .await
   {
@@ -232,7 +232,7 @@ async fn fragmented_chunks_across_http_are_buffered() -> anyhow::Result<()> {
   ])
   .await;
 
-  let entry = omw::provider::build(
+  let entry = omw::provider::Registry::default().build(
     "openai",
     "openai",
     &json!({ "base_url": url, "api_key": "sk-test" }),

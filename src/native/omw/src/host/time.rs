@@ -131,7 +131,8 @@ pub fn wait_cron(
 
 /// Block `ms` milliseconds on the bridge runtime; like `wait_for` but
 /// holding the thread instead of scheduling a `timer` event. Not cancellable.
-pub fn sleep_for(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
+#[allow(dead_code, reason = "blocking helper kept for symmetry with wait_for")]
+pub(crate) fn sleep_for(rt: &Arc<tokio::runtime::Runtime>, ms: u64) {
   let delay = Duration::from_millis(ms);
   rt.block_on(sleep_future_ms(delay));
 }
@@ -150,7 +151,8 @@ pub async fn sleep_future_ms(delay: Duration) {
 /// Block until a future timestamp fires on the bridge runtime, rejecting
 /// timestamps already passed. Like `wait_until` but holding the thread
 /// instead of scheduling a `timer` event. Not cancellable.
-pub fn sleep_until(
+#[cfg(test)]
+pub(crate) fn sleep_until(
   rt: &Arc<tokio::runtime::Runtime>,
   ts: u64,
 ) -> Result<(), String> {
@@ -162,7 +164,8 @@ pub fn sleep_until(
 /// Block until the next fire of a cron spec on the bridge runtime; like
 /// `wait_cron` but holding the thread instead of scheduling a `timer` event.
 /// Not cancellable.
-pub fn sleep_cron(
+#[cfg(test)]
+pub(crate) fn sleep_cron(
   rt: &Arc<tokio::runtime::Runtime>,
   spec: &str,
 ) -> Result<(), String> {

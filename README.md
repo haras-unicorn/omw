@@ -208,6 +208,11 @@ secrets never live in the Nix store:
 See [The NixOS module] in the documentation for the full option set, including
 `settings` vs `settingsFile`, `mode`, `user`/`group`, and `stateDir`.
 
+## Library
+
+`omw` can be used as a library in your own crate by adding `omw` to dependencies
+and enabling the runtime features you want. See the [library] page for details.
+
 ## Binary cache
 
 Builds are cached on the [haras cachix cache]. When the flake is used directly
@@ -232,6 +237,7 @@ from an overlay, add the following to your nix configuration:
 [hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
 [Rust brains]: https://haras-unicorn.github.io/omw/runtime/wasm.html#rust-brains
 [The NixOS module]: https://haras-unicorn.github.io/omw/nixos.html
+[library]: https://haras-unicorn.github.io/omw/library.html
 
 <!-- ANCHOR_END: body -->
 

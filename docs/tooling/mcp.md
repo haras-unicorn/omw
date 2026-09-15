@@ -37,10 +37,14 @@ args = ["-y", "@modelcontextprotocol/server-everything"]
 
 ## Connecting
 
-The tooling builds the transport (spawning the stdio subprocess, or opening the
-HTTP endpoint) and serves it with `rmcp` in client (`Initialize`) role. Tool
-results keep only their text content blocks, joined with newlines; binary
-content is dropped.
+The build only parses and validates config; the server is dialed lazily on the
+first tool or resource use. The first use retries with exponential backoff
+(doubling from `tooling_connect_backoff_start_ms` up to
+`tooling_connect_backoff_cap_secs`, see [tunables](../tunables.md)). A failed
+first use surfaces as `Err` for blocking callers and as the `error` event
+variant for event-driven callers; dropping the call (pump cancel, reload, or
+shutdown) cancels the wait. Tool results keep only their text content blocks,
+joined with newlines; binary content is dropped.
 
 ## Resources
 

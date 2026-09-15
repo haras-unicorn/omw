@@ -12,12 +12,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{ChatDelta, ChatMessage, Provider, ProviderEntry};
+use super::{ChatDelta, ChatMessage, Factory, Provider};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the mock provider.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Config {
+struct Config {
   /// Each string is emitted as one content delta per `chat`.
   #[serde(default)]
   pub responses: Vec<String>,
@@ -37,18 +37,15 @@ pub struct MockProvider {
   calls: Arc<Mutex<Vec<ChatCall>>>,
 }
 
-/// Build a `mock` provider from its opaque config params.
-pub fn build(name: &str, params: &Value) -> anyhow::Result<ProviderEntry> {
-  let config = Config::deserialize(params)
-    .with_context(|| format!("invalid mock provider config for {name:?}"))?;
-  Ok(ProviderEntry {
-    name: name.to_string(),
-    kind: MockProvider::kind(),
-    provider: Arc::new(MockProvider {
+impl Factory for MockProvider {
+  fn build(_name: &str, params: &Value) -> anyhow::Result<Arc<Self>> {
+    let config = Config::deserialize(params)
+      .with_context(|| "invalid mock provider config".to_string())?;
+    Ok(Arc::new(MockProvider {
       responses: config.responses,
       calls: Arc::new(Mutex::new(Vec::new())),
-    }),
-  })
+    }))
+  }
 }
 
 impl MockProvider {

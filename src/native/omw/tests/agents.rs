@@ -12,7 +12,6 @@ use std::sync::Arc;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
-use omw::config::RunArgs;
 use rmcp::model::{
   CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
   ListToolsResult, ServerCapabilities, ServerInfo, Tool,
@@ -166,12 +165,9 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
     ),
   )?;
 
-  let args = RunArgs {
-    config: Some(config_path),
-    watch: false,
-  };
-  let config = args.load_config()?;
-  omw::agent::run_agents(&config, false).await?;
+  let config = load_config(&config_path)?;
+  let registries = omw::agent::Registries::default();
+  omw::agent::run_agents(&config, false, &registries).await?;
 
   provider.verify().await;
   Ok(())
@@ -246,13 +242,11 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
     ),
   )?;
 
-  let args = RunArgs {
-    config: Some(config_path),
-    watch: true,
-  };
-  let config = args.load_config()?;
-  let run =
-    tokio::spawn(async move { omw::agent::run_agents(&config, true).await });
+  let config = load_config(&config_path)?;
+  let run = tokio::spawn(async move {
+    let registries = omw::agent::Registries::default();
+    omw::agent::run_agents(&config, true, &registries).await
+  });
 
   // Startup gate runs `validate` (rhai compile via the interpreter
   // component) before the first run, so the run may lag behind spawn by
@@ -346,21 +340,32 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   )?;
 
   // Without watch a broken script fails immediately.
-  let args = RunArgs {
-    config: Some(config_path.clone()),
-    watch: false,
-  };
-  let config = args.load_config()?;
-  assert!(omw::agent::run_agents(&config, false).await.is_err());
+  let config = load_config(&config_path)?;
+  let registries = omw::agent::Registries::default();
+  assert!(
+    omw::agent::run_agents(&config, false, &registries)
+      .await
+      .is_err()
+  );
 
   // With watch the task parks on the invalid script; a fixing edit starts
   // the agent normally.
   std::fs::write(&brain, "\"fixed\"")?;
-  let config = args.load_config()?;
+  let config = load_config(&config_path)?;
+  let registries = omw::agent::Registries::default();
   tokio::time::timeout(
     std::time::Duration::from_secs(30),
-    omw::agent::run_agents(&config, true),
+    omw::agent::run_agents(&config, true, &registries),
   )
   .await??;
   Ok(())
+}
+
+/// Load the configuration from `path` overlaid with `OMW_*` env vars.
+fn load_config(path: &std::path::Path) -> anyhow::Result<omw::config::Config> {
+  let raw: ::config::Config = ::config::Config::builder()
+    .add_source(::config::File::from(path).required(false))
+    .add_source(::config::Environment::with_prefix("OMW").separator("__"))
+    .build()?;
+  Ok(raw.try_deserialize()?)
 }
