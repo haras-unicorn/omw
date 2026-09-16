@@ -13,4 +13,4 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-omw-wasm-rust = { path = "../../native/omw-wasm-rust" }
+omw-wasm-rust = { path = "../../lib/omw-wasm-rust" }

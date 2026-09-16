@@ -12,6 +12,41 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// OMW configuration.
+#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
+pub struct Config {
+  /// Agents that OMW is going to run.
+  #[serde(default)]
+  pub agents: Vec<AgentConfig>,
+
+  /// Named provider implementations.
+  #[serde(default)]
+  pub providers: HashMap<String, ImplConfig>,
+  /// Named tooling implementations.
+  #[serde(default)]
+  pub tooling: HashMap<String, ImplConfig>,
+  /// Named runtime implementations.
+  #[serde(default)]
+  pub runtime: HashMap<String, ImplConfig>,
+  /// Optional endpoint implementation.
+  #[serde(default)]
+  pub endpoint: Option<ImplConfig>,
+
+  /// Global runtime tunables.
+  #[serde(default)]
+  pub tunables: Tunables,
+}
+
+/// A single agent wiring itself to the globals above.
+#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
+pub struct AgentConfig {
+  pub name: String,
+  /// Which named runtime implementation this agent's brain uses.
+  pub runtime: String,
+  /// The agent's brain script.
+  pub script: String,
+}
+
 /// A single configured implementation: which kind plus opaque params.
 #[derive(Deserialize, Clone, Serialize, JsonSchema)]
 pub struct ImplConfig {
@@ -206,39 +241,4 @@ impl Tunables {
   pub fn watch_debounce(&self) -> std::time::Duration {
     std::time::Duration::from_millis(self.watch_debounce_ms)
   }
-}
-
-/// OMW configuration.
-#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
-pub struct Config {
-  /// Named provider implementations.
-  #[serde(default)]
-  pub providers: HashMap<String, ImplConfig>,
-  /// Named tooling implementations.
-  #[serde(default)]
-  pub tooling: HashMap<String, ImplConfig>,
-  /// Named runtime implementations.
-  #[serde(default)]
-  pub runtime: HashMap<String, ImplConfig>,
-
-  /// Optional endpoint implementation: a `kind` string plus opaque params,
-  /// like providers/tooling/runtime. When set, a server is started and the
-  /// agents can subscribe to it as models.
-  #[serde(default)]
-  pub endpoint: Option<ImplConfig>,
-  #[serde(default)]
-  pub agents: Vec<AgentConfig>,
-  /// Global runtime tunables; all optional with built-in defaults.
-  #[serde(default)]
-  pub tunables: Tunables,
-}
-
-/// A single agent wiring itself to the globals above.
-#[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
-pub struct AgentConfig {
-  pub name: String,
-  /// Which named runtime implementation this agent's brain uses.
-  pub runtime: String,
-  /// The agent's brain script.
-  pub script: String,
 }

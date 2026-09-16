@@ -5,6 +5,7 @@
   "type": "object",
   "properties": {
     "agents": {
+      "description": "Agents that OMW is going to run.",
       "type": "array",
       "default": [],
       "items": {
@@ -12,7 +13,7 @@
       }
     },
     "endpoint": {
-      "description": "Optional endpoint implementation: a `kind` string plus opaque params,\nlike providers/tooling/runtime. When set, a server is started and the\nagents can subscribe to it as models.",
+      "description": "Optional endpoint implementation.",
       "anyOf": [
         {
           "$ref": "#/$defs/ImplConfig"
@@ -48,7 +49,7 @@
       "default": {}
     },
     "tunables": {
-      "description": "Global runtime tunables; all optional with built-in defaults.",
+      "description": "Global runtime tunables.",
       "$ref": "#/$defs/Tunables",
       "default": {
         "cancel_pumps_on_reload": true,

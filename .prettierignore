@@ -1,2 +1,3 @@
 *.lock
 CHANGELOG.md
+**/CHANGELOG.md

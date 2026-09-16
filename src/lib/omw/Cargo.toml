@@ -13,19 +13,23 @@ default = ["tooling-mcp", "provider-openai", "runtime-wasm", "endpoint-openai"]
 runtime-wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wat"]
 runtime-rhai = ["runtime-wasm"]
 runtime-js = ["runtime-wasm"]
-provider-openai = ["dep:reqwest"]
-tooling-mcp = ["dep:rmcp"]
+provider-openai = ["dep:reqwest", "rustls"]
+tooling-mcp = ["dep:rmcp", "rustls"]
 endpoint-openai = ["dep:axum"]
 mock = ["runtime-wasm"]
+rustls = ["dep:rustls"]
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+schemars.workspace = true
+serde_json.workspace = true
+rustls = { workspace = true, optional = true }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", optional = true }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
-clap = { version = "4.6.6", features = ["derive"] }
-config = "0.15.25"
 cron = { version = "0.17.0", features = ["serde"] }
 dashmap = { version = "6.2.1", features = ["serde"] }
 futures = "0.3.34"
@@ -34,32 +38,17 @@ kanal = "0.1.1"
 notify = { version = "8.2.0", features = ["serde"] }
 notify-debouncer-mini = "0.7.0"
 os-memlock = "0.2.0"
-reqwest = { version = "0.13.4", features = ["json", "stream"], optional = true }
+reqwest = { version = "0.13.4", default-features = false, features = [
+  "json",
+  "stream",
+  "rustls-no-provider",
+], optional = true }
 rmcp = { version = "3.1.4", optional = true, features = [
   "client",
   "transport-child-process",
   "transport-streamable-http-client-reqwest",
 ] }
-schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = [
-  "fs",
-  "io-util",
-  "macros",
-  "net",
-  "process",
-  "rt-multi-thread",
-  "signal",
-  "sync",
-  "time",
-] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = [
-  "env-filter",
-  "chrono",
-  "json",
-] }
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
@@ -70,9 +59,18 @@ zeroize = { version = "1.9.0", features = ["derive", "serde"] }
 wasmtime.workspace = true
 
 [dev-dependencies]
-reqwest = { version = "0.13.4", features = ["json", "stream"] }
-async-openai = { version = "0.41.3", features = ["chat-completion", "model"] }
+rustls.workspace = true
+async-openai = { version = "0.41.3", features = [
+  "chat-completion",
+  "model",
+  "rustls-no-provider",
+] }
 hyper-util = { version = "0.1.20", features = ["server"] }
+reqwest = { version = "0.13.4", default-features = false, features = [
+  "json",
+  "stream",
+  "rustls-no-provider",
+] }
 rmcp = { version = "3.1.4", features = [
   "server",
   "transport-async-rw",

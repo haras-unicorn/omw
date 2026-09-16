@@ -7,11 +7,10 @@ servers, and runs it for one iteration or loops it.
 
 ## Layout
 
-A Cargo workspace with four crates plus a single WIT contract.
+A Cargo workspace with six crates plus a single WIT contract.
 
-- `src/native/omw` — the `omw` host binary. A thin `main.rs` entrypoint plus a
-  library (`lib.rs`) that contains the runtime logic and a build script
-  (`build.rs`) plus the vendored WIT contract under `wit/`.
+- `src/lib/omw` — the `omw` library crate: the agent runtime logic, a build
+  script (`build.rs`) plus the vendored WIT contract under `wit/`.
   - `agent.rs` — bootstrap: turns a parsed config into provider + tooling +
     bus + `AgentContext`, then runs the agent's runtime for one iteration or
     loops it.
@@ -100,6 +99,10 @@ A Cargo workspace with four crates plus a single WIT contract.
 
     - `ctx.rs` is `AgentContext`.
 
+- `src/bin/omw-cli` — the OMW CLI binary crate. It contains a basic run
+  function, argument/config parsing and initialization for `tracing` and
+  `rustls`.
+
 - `src/wasm/omw-wasm-rhai-interpreter` — the Rhai guest component
   (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
@@ -110,19 +113,18 @@ A Cargo workspace with four crates plus a single WIT contract.
   `run(script)`) and registers the `omw` global (Boa) whose
   `provider`/`tooling`/`host` namespaces route to the host (camelCase).
 
-- `src/native/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
+- `src/lib/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
   (published to crates.io): re-exports the generated `omw` world bindings plus
   small builders, typed `Provider`/`Tooling` handles, `host` helpers and
   lifetime guards. Vendors the WIT contract under `wit/` (kept in sync with
-  `src/native/omw/wit/`).
+  `src/lib/omw/wit/`).
 
 - `src/wasm/omw-wasm-mock` — the test-only wasm mock brain, cross-compiled by
   the `mock` feature for the engine/wasm runtime tests (not shipped to
   crates.io; its manifest carries `publish = false`).
 
-- `src/native/omw/wit/omw.wit` — the single WIT contract, used by host
-  (`bindgen!`) and guests (`wit-bindgen::generate!`). Changes here ripple into
-  both crates.
+- `src/lib/omw/wit/omw.wit` — the single WIT contract, used by host (`bindgen!`)
+  and guests (`wit-bindgen::generate!`). Changes here ripple into both crates.
 
 - `docs/` — mdbook documentation, published to GitHub Pages.
 
@@ -148,7 +150,7 @@ A Cargo workspace with four crates plus a single WIT contract.
 
 - Async abstractions use `async_trait`.
 
-- Structured JSON logging via `tracing` (see `src/native/omw/src/log.rs`).
+- Structured JSON logging via `tracing` (see `src/bin/omw-cli/src/log.rs`).
   - Level discipline: `trace` = wire/delta level, `debug` = flow/transitions,
     `info` = lifecycle milestones, `warn` = recoverable anomalies, `error` =
     failures.
@@ -174,41 +176,40 @@ A Cargo workspace with four crates plus a single WIT contract.
 
 - Keep the `omw` WIT world(s) in sync with `runtime/bindings.rs` (host),
   `install_omw` (Rhai guest), the `omw` global (JS guest), and
-  `src/native/omw-wasm-rust/wit/` (Rust SDK).
+  `src/lib/omw-wasm-rust/wit/` (Rust SDK).
 
 ## Library surface
 
 The `omw` library exposes a small embedding contract; everything else is host
-plumbing (`pub(crate)`) or per-module private. The binary-only modules (`cli`,
-`log`) are owned by `main.rs` and are not part of the library at all.
+plumbing (`pub(crate)`) or per-module private. The `omw-cli` binary crate
+(`cli`, `log`, `tls`) is a separate crate and is not part of the library at all.
 
-| Module               | `pub` (embedding contract)                                                                                                                       | `pub(crate)` / private                                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | `Registries`, `run_agents`, `loop_agents`                                                                                                        | supervisor internals (`Shared`, `run_agent`) private                                                                              |
-| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                | default fns private                                                                                                               |
-| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`   | `openai` private mod, `mock` `pub(crate)` (test only)                                                                             |
-| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!` | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                          |
-| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                             | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                |
-| `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                        | `openai` still `pub mod` (impl detail)                                                                                            |
-| `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`)                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)` |
-| `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                           | `shutdown_signal` `pub(crate)`                                                                                                    |
-| `prelude`            | re-exports the embedding subset plus the `register_*` macros (also `#[macro_export]` at the crate root)                                          | —                                                                                                                                 |
-| binary-only          | —                                                                                                                                                | `cli` (`Cli`, `Command`, `RunArgs`, `generate_schema`), `log::init` owned by `main.rs`; `watch` is a private lib mod              |
+| Module               | `pub` (embedding contract)                                                                                                                       | `pub(crate)` / private                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`              | `Registries`, `run_agents`, `loop_agents`                                                                                                        | supervisor internals (`Shared`, `run_agent`) private                                                                                        |
+| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                | default fns private                                                                                                                         |
+| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`   | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                       |
+| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!` | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                    |
+| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                             | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                          |
+| `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                        | `openai` still `pub mod` (impl detail)                                                                                                      |
+| `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`)                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`           |
+| `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                           | `shutdown_signal` `pub(crate)`                                                                                                              |
+| `prelude`            | re-exports the embedding subset plus the `register_*` macros (also `#[macro_export]` at the crate root)                                          | —                                                                                                                                           |
+| binary-only          | —                                                                                                                                                | `cli` (`Cli`, `Command`, `RunArgs`, `generate_schema`), `log::init`, `tls::init` owned by the `omw-cli` crate; `watch` is a private lib mod |
 
 ## Development
 
 Assume you are in the default development shell. Commands go through the `dev`
 wrapper (written in `flake.nix`):
 
-- `dev run` — `cargo run --bin omw`
 - `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`
 - `dev test` — `cargo clippy --all-features -- -D warnings` and
   `cargo test --all-features`
 - `dev test fast` — like `dev test` but with extra environment that tells tests
   to ignore heavier tests (tests that require `testcontainers` or WASM
   compilation)
-- `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then `dev test`
-  — CI (`check.yaml`) runs `dev lint` and `nix flake check`
+- `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then
+  `dev test`, then `nix flake check` — CI (`check.yaml`) runs `dev lint`
 
 Do not use any shell commands other than the ones provided by `dev`. Please
 prefer `dev test fast` over `dev test` if you don't need to test stuff that
