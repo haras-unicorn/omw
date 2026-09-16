@@ -3,22 +3,12 @@ useGitignore: true
 version: "0.2"
 language: en
 ignoreWords:
-  - qwen
-  - fetchurl
-  - gguf
-  - zstd
-  - llamacpp
-  - pname
-  - langservers
-  - vhost
-  - vsock
-  - markdownignore
-  - stdenv
-  - journalctl
-  - envfile
-  - rustflags
+  - tzdata
+  - adduser
   - bwrap
   - netlink
   - suidsgid
   - rlimit
   - memlock
+  - eperm
+  - pageable

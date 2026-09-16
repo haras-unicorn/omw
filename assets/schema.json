@@ -52,6 +52,7 @@
       "description": "Global runtime tunables.",
       "$ref": "#/$defs/Tunables",
       "default": {
+        "allow_unlocked_secrets": false,
         "cancel_pumps_on_reload": true,
         "inbox_bound": 1024,
         "interrupt_budget_ms": 100,
@@ -103,6 +104,11 @@
       "description": "Runtime tunables: channel sizes, timeouts, and backoffs. All optional;\nomitted values fall back to the built-in defaults.",
       "type": "object",
       "properties": {
+        "allow_unlocked_secrets": {
+          "description": "Permit secrets to stay unlocked (pageable) when `mlock` fails, e.g.\ninside containers where the outer `RLIMIT_MEMLOCK` cannot be raised.\nDefault `false` (fail-closed). Only enable where the weaker guarantee\nis acceptable.",
+          "type": "boolean",
+          "default": false
+        },
         "cancel_pumps_on_reload": {
           "description": "Cancel open pumps (streams, timers, resources, tool calls) on reload.\n`false` keeps them across reload.",
           "type": "boolean",

@@ -1,0 +1,30 @@
+# Example omw configuration for file-based deployments (systemd, Docker).
+# Secrets come from the environment: any `OMW__`-prefixed variable layers over
+# this file, e.g. OMW__PROVIDERS__OPENAI__API_KEY overrides
+# providers.openai.api_key. Never put keys in this file.
+[providers.openai]
+kind = "openai"
+model = "gpt-4o"
+
+# Filesystem MCP tooling rooted at the workspace. In Docker this is the
+# /var/lib/omw volume; on systemd hosts it is the StateDirectory.
+[tooling.fs]
+kind = "mcp"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/var/lib/omw"]
+
+[runtime.rhai]
+kind = "rhai"
+
+[[agents]]
+name = "alice"
+runtime = "rhai"
+script = "/var/lib/omw/brain.rhai"
+
+# Optional OpenAI-compatible HTTP server. Uncomment to serve agents over HTTP
+# (expose port 8080 in Docker); the brain subscribes itself under a model
+# name with `omw::host::subscribe_endpoint("gpt-4o")`.
+# [endpoint]
+# kind = "openai"
+# listen = "0.0.0.0:8080"

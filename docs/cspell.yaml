@@ -54,3 +54,14 @@ ignoreWords:
   - raii
   - cdylib
   - zstd
+  - bwrap
+  - bubblewrap
+  - seccomp
+  - sidecar
+  - musl
+  - userns
+  - suidsgid
+  - netlink
+  - syscalls
+  - rlimit
+  - memlock

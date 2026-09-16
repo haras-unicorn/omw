@@ -1,0 +1,42 @@
+# Example compose setup for omw. Builds the image straight from the
+# release tarballs (see assets/Dockerfile); any git URL works as a build
+# context, e.g. `context: https://github.com/haras-unicorn/omw.git`.
+services:
+  omw:
+    build:
+      context: https://github.com/haras-unicorn/omw.git
+      dockerfile: assets/Dockerfile
+      args:
+        OMW_VERSION: "0.1.0"
+        # default | rhai | js
+        OMW_VARIANT: rhai
+        # x86_64-linux | aarch64-linux
+        OMW_ARCH: x86_64-linux
+    env_file:
+      - ./omw.env
+    environment:
+      # Secrets cannot mlock() inside containers (the container's own
+      # RLIMIT_MEMLOCK wins over the unit's LimitMEMLOCK=), so ensure
+      # that this doesn't make entire OMW fail.
+      - OMW__TUNABLES__ALLOW_UNLOCKED_SECRETS=true
+      # Layers over providers.openai.api_key in omw.toml; prefer env_file.
+      - OMW__PROVIDERS__OPENAI__API_KEY=${OPENAI_API_KEY}
+    volumes:
+      # Config + brains (read-only) and the agent workspace (read-write,
+      # the stateDir equivalent for filesystem MCP tooling).
+      - ./omw.toml:/etc/omw/omw.toml:ro
+      - omw-workspace:/var/lib/omw
+    # Only needed with [endpoint] (listen = "0.0.0.0:8080").
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # Example HTTP MCP server on the same network. Point a tooling at it with
+  # transport = "http" and url = "http://mcp:8000/mcp".
+  # mcp:
+  #   image: ghcr.io/modelcontextprotocol/server-everything
+  #   networks:
+  #     - default
+
+volumes:
+  omw-workspace:

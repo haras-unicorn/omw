@@ -44,3 +44,4 @@ ignoreWords:
   - aaec
   - rustls
   - rustflags
+  - pageable

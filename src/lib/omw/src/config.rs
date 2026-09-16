@@ -125,6 +125,12 @@ pub struct Tunables {
   /// `false` keeps them across reload.
   #[serde(default = "default_cancel_pumps_on_reload")]
   pub cancel_pumps_on_reload: bool,
+  /// Permit secrets to stay unlocked (pageable) when `mlock` fails, e.g.
+  /// inside containers where the outer `RLIMIT_MEMLOCK` cannot be raised.
+  /// Default `false` (fail-closed). Only enable where the weaker guarantee
+  /// is acceptable.
+  #[serde(default = "default_allow_unlocked_secrets")]
+  pub allow_unlocked_secrets: bool,
 }
 
 fn default_inbox_bound() -> usize {
@@ -179,6 +185,10 @@ fn default_cancel_pumps_on_reload() -> bool {
   true
 }
 
+fn default_allow_unlocked_secrets() -> bool {
+  false
+}
+
 impl Default for Tunables {
   fn default() -> Self {
     Self {
@@ -197,6 +207,7 @@ impl Default for Tunables {
       watch_debounce_ms: default_watch_debounce_ms(),
       session_buffer: default_session_buffer(),
       cancel_pumps_on_reload: default_cancel_pumps_on_reload(),
+      allow_unlocked_secrets: default_allow_unlocked_secrets(),
     }
   }
 }

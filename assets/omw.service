@@ -1,0 +1,47 @@
+[Unit]
+Description=OMW agent runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omw
+Group=omw
+WorkingDirectory=/var/lib/omw
+EnvironmentFile=/etc/omw/env
+ExecStart=/usr/local/bin/omw loop --config /etc/omw/omw.toml
+Restart=on-failure
+RestartSec=5s
+StateDirectory=omw
+
+# Systemd sandboxing. Mirrors `services.omw.hardening = true` from the NixOS
+# module. `MemoryDenyWriteExecute` is deliberately absent: it would break the
+# wasmtime JIT and nodejs MCP servers. `PrivateDevices=false` keeps /dev
+# usable for MCP servers and bwrap wrappers. `LimitMEMLOCK=infinity` is
+# required: secrets are mlock()ed and the empty `CapabilityBoundingSet`
+# drops CAP_IPC_LOCK, so a zero memlock limit would fail every secret with
+# EPERM. Add `BindReadOnlyPaths=` entries if brains or the config live outside
+# /var/lib/omw, and `ReadWritePaths=` entries for filesystem MCP workspaces
+# outside the state directory.
+NoNewPrivileges=true
+PrivateDevices=false
+PrivateIPC=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectProc=invisible
+ProtectSystem=strict
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0077
+LimitMEMLOCK=infinity
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

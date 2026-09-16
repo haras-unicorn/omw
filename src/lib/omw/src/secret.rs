@@ -1,15 +1,55 @@
 //! A secret string wrapper that redacts on `Debug` and `Serialize`.
 //!
 //! The bytes live in a fixed-size `Box<[u8]>` (no realloc moves), are
-//! `mlock`ed against swap (fail-closed at construction), excluded from
-//! core dumps on a best-effort basis, and zeroized before `munlock` on
-//! drop. Deserializes transparently from a plain string (TOML/env), but
-//! never renders the inner value through `Debug` or `Serialize`, so
-//! `tracing` fields using `?` and config debug output cannot leak it.
-//! Call [`Secret::expose`] only at the point of use.
+//! `mlock`ed against swap (fail-closed at construction unless
+//! [`allow_unlocked`] scopes permission, e.g. inside containers where the
+//! outer `RLIMIT_MEMLOCK` cannot be raised), excluded from core dumps on a
+//! best-effort basis, and zeroized before `munlock` on drop. Deserializes
+//! transparently from a plain string (TOML/env), but never renders the inner
+//! value through `Debug` or `Serialize`, so `tracing` fields using `?` and
+//! config debug output cannot leak it. Call [`Secret::expose`] only at the
+//! point of use.
+
+use std::cell::Cell;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
+
+thread_local! {
+  static ALLOW_UNLOCKED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Scope guard that permits [`Secret`]s to stay unlocked (pageable) while
+/// held. Used when the process cannot `mlock`, e.g. inside containers where
+/// the outer `RLIMIT_MEMLOCK` is enforced regardless of the unit's
+/// `LimitMEMLOCK=`. Fail-closed stays the default outside the scope.
+pub struct AllowUnlockedGuard {
+  _private: (),
+}
+
+impl AllowUnlockedGuard {
+  fn enter() -> Self {
+    ALLOW_UNLOCKED.set(true);
+    Self { _private: () }
+  }
+}
+
+impl Drop for AllowUnlockedGuard {
+  fn drop(&mut self) {
+    ALLOW_UNLOCKED.set(false);
+  }
+}
+
+/// Run `f` with unlocked secrets permitted. Nesting is flat: dropping the
+/// outer guard disables permission again.
+pub fn allow_unlocked<R>(f: impl FnOnce() -> R) -> R {
+  let _guard = AllowUnlockedGuard::enter();
+  f()
+}
+
+fn unlocked_permitted() -> bool {
+  ALLOW_UNLOCKED.get()
+}
 
 #[derive(PartialEq, Eq)]
 pub struct Secret(Box<[u8]>);
@@ -17,9 +57,18 @@ pub struct Secret(Box<[u8]>);
 impl Secret {
   pub fn new(value: String) -> anyhow::Result<Self> {
     let mut bytes: Box<[u8]> = value.into_bytes().into_boxed_slice();
-    lock(&bytes).map_err(|error| {
-      anyhow::anyhow!("mlock failed for secret (check RLIMIT_MEMLOCK): {error}")
-    })?;
+    if let Err(error) = lock(&bytes) {
+      if unlocked_permitted() {
+        tracing::warn!(
+          error = %error,
+          "mlock failed for secret, continuing unlocked"
+        );
+      } else {
+        anyhow::bail!(
+          "mlock failed for secret (check RLIMIT_MEMLOCK): {error}"
+        );
+      }
+    }
     dontdump(&mut bytes);
     Ok(Self(bytes))
   }
@@ -179,6 +228,17 @@ mod tests {
     let secret = Secret::new(String::new())?;
     assert_eq!(secret.expose(), "");
     Ok(())
+  }
+
+  #[test]
+  fn allow_unlocked_scope_is_flat() {
+    // Even an empty secret exercises the scope plumbing; the point is the
+    // guard restores fail-closed mode on drop.
+    assert!(!unlocked_permitted());
+    allow_unlocked(|| {
+      assert!(unlocked_permitted());
+    });
+    assert!(!unlocked_permitted());
   }
 
   #[test]

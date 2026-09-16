@@ -592,19 +592,31 @@ impl Shared {
     registries: &Registries,
     shutdown: Shutdown,
   ) -> anyhow::Result<Self> {
-    let providers = registries.providers.build_entries(cfg)?;
-    let tooling = registries.tooling.build_entries(cfg)?;
-    let runtimes = cfg
-      .agents
-      .iter()
-      .map(|agent| {
-        registries
-          .runtimes
-          .build_for_agent(cfg, agent)
-          .map(|entry| (agent.name.clone(), entry))
-      })
-      .collect::<anyhow::Result<HashMap<_, _>>>()?;
-    let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
+    // Secrets lock with `mlock` at construction; permit unlocked secrets for
+    // the whole bootstrap when the tunable opts in (e.g. inside containers
+    // where the outer `RLIMIT_MEMLOCK` cannot be raised).
+    let build = || -> anyhow::Result<_> {
+      let providers = registries.providers.build_entries(cfg)?;
+      let tooling = registries.tooling.build_entries(cfg)?;
+      let runtimes = cfg
+        .agents
+        .iter()
+        .map(|agent| {
+          registries
+            .runtimes
+            .build_for_agent(cfg, agent)
+            .map(|entry| (agent.name.clone(), entry))
+        })
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+      let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
+      Ok((providers, tooling, runtimes, bus))
+    };
+    let (providers, tooling, runtimes, bus) =
+      if cfg.tunables.allow_unlocked_secrets {
+        crate::secret::allow_unlocked(build)
+      } else {
+        build()
+      }?;
     let (endpoint_registry, endpoint_task) =
       if let Some(entry) = registries.endpoints.build_entry(cfg)? {
         let registry = Arc::new(EndpointRegistry::with_tunables(
