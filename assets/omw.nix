@@ -7,7 +7,6 @@
     stateDir = "omw";
     settings.providers.openai = {
       kind = "openai";
-      api_key = "$OPENAI_API_KEY";
       model = "gpt-4o";
     };
     settings.tooling.fs = {
@@ -28,6 +27,6 @@
         script = "/var/lib/omw/brain.rhai";
       }
     ];
-    environment.OPENAI_API_KEY = "…";
+    environment.OMW__PROVIDERS__OPENAI__API_KEY = "…";
   };
 }

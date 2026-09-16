@@ -323,7 +323,7 @@ in
               }
               open --raw (nix build --no-link --print-out-paths ".#options")
                 | prettier --parser markdown
-                | save -f "./docs/nixos/options.md"
+                | save -f "./docs/deployment/nixos/options.md"
               open --raw (nix build --no-link --print-out-paths ".#schema")
                 | prettier --parser json
                 | save -f "./assets/schema.json"
@@ -345,7 +345,7 @@ in
                   exit 1
                 }
               }
-              if ((open --raw ./docs/nixos/options.md
+              if ((open --raw ./docs/deployment/nixos/options.md
                 | str trim)
                 != (open --raw (nix build --no-link --print-out-paths ".#options")
                 | prettier --parser markdown

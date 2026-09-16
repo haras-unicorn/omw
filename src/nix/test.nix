@@ -62,7 +62,49 @@ let
       '';
     };
 
-    envsubst = {
+    env-overlay = {
+      containers.machine = {
+        services.omw = {
+          settings = {
+            # The container's own RLIMIT_MEMLOCK (8M) cannot be raised from
+            # the unit, so mlock fails: opt into unlocked secrets here.
+            tunables.allow_unlocked_secrets = true;
+            providers.openai = {
+              kind = "openai";
+              api_key = "from-file";
+              model = "gpt-4o";
+            };
+            runtime.rhai.kind = "rhai";
+            agents = [
+              {
+                name = "alice";
+                runtime = "rhai";
+                script = "/etc/brain.rhai";
+              }
+            ];
+          };
+          environment = {
+            OMW__PROVIDERS__OPENAI__API_KEY = "from-env";
+          };
+          # The `environmentFile` is a path into the machine; drop the env file
+          # via `environment.etc` alongside the script.
+          environmentFile = "/etc/omw.env";
+        };
+
+        environment.etc."brain.rhai".text = marker-script "omw-env-overlay-marker";
+        environment.etc."omw.env".text = "OMW__FROM_ENVFILE=yes\n";
+      };
+      testScript = ''
+        start_all()
+        machine.wait_until_succeeds('journalctl -u omw.service --no-pager | grep -F "omw-env-overlay-marker"')
+        machine.succeed('systemctl show -p Environment --value omw.service | grep -F "OMW__PROVIDERS__OPENAI__API_KEY=from-env"')
+        machine.succeed('systemctl show -p EnvironmentFiles --value omw.service | grep -F "/etc/omw.env"')
+        machine.wait_until_fails("systemctl is-active omw.service")
+        machine.succeed("test \"$(systemctl show -p Result --value omw.service)\" = success")
+      '';
+    };
+
+    hardening = {
       containers.machine = {
         services.omw = {
           settings = {
@@ -71,32 +113,58 @@ let
               {
                 name = "alice";
                 runtime = "rhai";
-                script = "$SCRIPT_FROM_ENV";
-              }
-              {
-                name = "bob";
-                runtime = "rhai";
-                script = "$SCRIPT_FROM_ENVFILE";
+                script = "/etc/brain.rhai";
               }
             ];
           };
-          environment = {
-            SCRIPT_FROM_ENV = "/etc/brain.rhai";
-          };
-          # The `environmentFile` is a path into the machine;drop the env file via
-          # `environment.etc` alongside the scripts.
-
-          environmentFile = "/etc/omw.env";
         };
 
-        environment.etc."brain.rhai".text = marker-script "omw-envsubst-env-marker";
-        environment.etc."brain-bob.rhai".text = marker-script "omw-envsubst-envfile-marker";
-        environment.etc."omw.env".text = "SCRIPT_FROM_ENVFILE=/etc/brain-bob.rhai\n";
+        environment.etc."brain.rhai".text = marker-script "omw-hardening-marker";
       };
       testScript = ''
         start_all()
-        machine.wait_until_succeeds('journalctl -u omw.service --no-pager | grep -F "omw-envsubst-env-marker"')
-        machine.wait_until_succeeds('journalctl -u omw.service --no-pager | grep -F "omw-envsubst-envfile-marker"')
+        machine.wait_until_succeeds('journalctl -u omw.service --no-pager | grep -F "omw-hardening-marker"')
+        machine.succeed('test "$(systemctl show -p NoNewPrivileges --value omw.service)" = yes')
+        machine.succeed('test "$(systemctl show -p ProtectSystem --value omw.service)" = strict')
+        machine.succeed('test "$(systemctl show -p ProtectHome --value omw.service)" = yes')
+        machine.succeed('test "$(systemctl show -p PrivateIPC --value omw.service)" = yes')
+        machine.succeed('test "$(systemctl show -p RestrictSUIDSGID --value omw.service)" = yes')
+        machine.wait_until_fails("systemctl is-active omw.service")
+        machine.succeed("test \"$(systemctl show -p Result --value omw.service)\" = success")
+      '';
+    };
+
+    hardening-off = {
+      containers.machine = {
+        users.groups.omw = { };
+        users.users.omw = {
+          isSystemUser = true;
+          group = "omw";
+        };
+
+        services.omw = {
+          hardening = false;
+          # DynamicUser implies a lot of protections
+          user = "omw";
+          group = "omw";
+          settings = {
+            runtime.rhai.kind = "rhai";
+            agents = [
+              {
+                name = "alice";
+                runtime = "rhai";
+                script = "/etc/brain.rhai";
+              }
+            ];
+          };
+        };
+
+        environment.etc."brain.rhai".text = marker-script "omw-hardening-off-marker";
+      };
+      testScript = ''
+        start_all()
+        machine.wait_until_succeeds('journalctl -u omw.service --no-pager | grep -F "omw-hardening-off-marker"')
+        machine.succeed('test "$(systemctl show -p ProtectSystem --value omw.service)" = no')
         machine.wait_until_fails("systemctl is-active omw.service")
         machine.succeed("test \"$(systemctl show -p Result --value omw.service)\" = success")
       '';
@@ -157,6 +225,9 @@ let
       containers.machine = {
         services.omw = {
           extraArgs = [ "--watch" ];
+          # The watcher rewrites the brain in place, which needs a writable
+          # path under `ProtectSystem=strict`.
+          readWritePaths = [ "/etc" ];
           settings = {
             runtime.rhai.kind = "rhai";
             agents = [

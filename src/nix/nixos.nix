@@ -62,10 +62,9 @@ let
           description = ''
             The omw configuration provided as an attribute set, rendered to TOML
             at build time. Mutually exclusive with `services.omw.settingsFile`.
-            Environment
-            variables of the form `$VAR` or `''${VAR}` are substituted into the config
-            before omw reads it (see `services.omw.environment`), which is the
-            intended way to supply API keys and other secrets at runtime.
+            Secrets are layered at runtime from `OMW__`-prefixed environment
+            variables (see `services.omw.environment`), so API keys never have
+            to live in the Nix store.
           '';
         };
 
@@ -74,8 +73,7 @@ let
           default = null;
           description = ''
             Path to an omw configuration file (TOML). Mutually exclusive with
-            `services.omw.settings`. Environment variables are substituted into the
-            file before omw reads it.
+            `services.omw.settings`.
           '';
         };
 
@@ -83,9 +81,10 @@ let
           type = lib.types.attrsOf lib.types.str;
           default = { };
           description = ''
-            Environment variables exported at the start of the service script,
-            before omw starts. They are also visible to `envsubst` when
-            interpolating the configuration, which is the intended way to supply
+            Environment variables for the service (becomes systemd
+            `Environment=`). `OMW__`-prefixed variables layer over the file
+            configuration, e.g. `OMW__PROVIDERS__OPENAI__API_KEY` overrides
+            `providers.openai.api_key`, which is the intended way to supply
             API keys and other secrets.
           '';
         };
@@ -94,6 +93,53 @@ let
           type = lib.types.nullOr lib.types.path;
           default = null;
           description = "Path to a systemd `EnvironmentFile` for the service.";
+        };
+
+        hardening = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Enable systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`,
+            …). Safe for stdio MCP servers (including ones wrapping commands in
+            `bwrap`) and node-based servers. Sets `LimitMEMLOCK=infinity`
+            alongside the empty capability set (inside containers the outer
+            `RLIMIT_MEMLOCK` still wins — set
+            `OMW__TUNABLES__ALLOW_UNLOCKED_SECRETS=true` in the environment
+            there instead). Deliberately omits
+            `MemoryDenyWriteExecute`, which would break the wasmtime JIT and
+            nodejs MCP servers. Set to false if the sandbox gets in the way;
+            `services.omw.serviceConfig` can override individual keys either way.
+          '';
+        };
+
+        readOnlyPaths = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = ''
+            Extra paths exposed read-only inside the sandbox
+            (`BindReadOnlyPaths=`). Needed with hardening when brains or the
+            config file live outside the state directory (e.g. `/etc`).
+          '';
+        };
+
+        readWritePaths = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = ''
+            Extra paths exposed read-write inside the sandbox
+            (`ReadWritePaths=`). Needed with hardening when a filesystem MCP
+            tooling works outside the state directory.
+          '';
+        };
+
+        serviceConfig = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+          description = ''
+            Extra systemd `serviceConfig` merged last, so it wins over the
+            module defaults (including the hardening set). Escape hatch for
+            anything the module does not model explicitly.
+          '';
         };
 
         extraArgs = lib.mkOption {
@@ -144,50 +190,75 @@ let
           }
         ];
 
-        systemd.services.omw = {
-          description = "OMW agent runtime";
-          wantedBy = [ "multi-user.target" ];
-          after = [ "network-online.target" ];
-          wants = [ "network-online.target" ];
+        systemd.services.omw =
+          let
+            settingsPath =
+              if cfg.settings != null then settingsFormat.generate "omw.toml" cfg.settings else cfg.settingsFile;
 
-          path = [
-            pkgs.envsubst
-            cfg.package
-          ];
+            args = lib.escapeShellArgs (
+              [
+                cfg.mode
+                "--config"
+                (toString settingsPath)
+              ]
+              ++ cfg.extraArgs
+            );
+          in
+          {
+            description = "OMW agent runtime";
+            wantedBy = [ "multi-user.target" ];
+            after = [ "network-online.target" ];
+            wants = [ "network-online.target" ];
 
-          script =
-            let
-              exports = lib.concatMapStringsSep "\n" (
-                name: "export ${lib.escapeShellArg name}=${lib.escapeShellArg cfg.environment.${name}}"
-              ) (builtins.attrNames cfg.environment);
+            path = [ cfg.package ];
 
-              args = lib.escapeShellArgs (
-                [
-                  cfg.mode
-                  "--config"
-                  "/dev/stdin"
-                ]
-                ++ cfg.extraArgs
-              );
+            script = "exec omw ${args}";
 
-              settings =
-                if cfg.settings != null then settingsFormat.generate "omw.toml" cfg.settings else cfg.settingsFile;
-            in
-            ''
-              ${exports}
-              envsubst < ${settings} | exec omw ${args}
-            '';
+            environment = cfg.environment;
 
-          serviceConfig = {
-            Type = "simple";
-            Restart = "on-failure";
-            User = lib.mkIf (cfg.user != null) cfg.user;
-            Group = lib.mkIf (cfg.group != null) cfg.group;
-            DynamicUser = lib.mkIf (cfg.user == null && cfg.group == null) true;
-            EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
-            StateDirectory = lib.mkIf (cfg.stateDir != null) cfg.stateDir;
+            serviceConfig = lib.mkMerge [
+              {
+                Type = "simple";
+                Restart = "on-failure";
+                RestartSec = "5s";
+                User = lib.mkIf (cfg.user != null) cfg.user;
+                Group = lib.mkIf (cfg.group != null) cfg.group;
+                DynamicUser = lib.mkIf (cfg.user == null && cfg.group == null) true;
+                EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
+                StateDirectory = lib.mkIf (cfg.stateDir != null) cfg.stateDir;
+                WorkingDirectory = lib.mkIf (cfg.stateDir != null) "/var/lib/${cfg.stateDir}";
+              }
+              (lib.mkIf cfg.hardening {
+                NoNewPrivileges = true;
+                PrivateDevices = false;
+                PrivateIPC = true;
+                ProtectClock = true;
+                ProtectControlGroups = true;
+                ProtectHome = true;
+                ProtectKernelModules = true;
+                ProtectProc = "invisible";
+                ProtectSystem = "strict";
+                RemoveIPC = true;
+                RestrictAddressFamilies = [
+                  "AF_UNIX"
+                  "AF_NETLINK"
+                  "AF_INET"
+                  "AF_INET6"
+                ];
+                RestrictRealtime = true;
+                RestrictSUIDSGID = true;
+                LockPersonality = true;
+                SystemCallArchitectures = "native";
+                UMask = "0077";
+                LimitMEMLOCK = "infinity";
+                CapabilityBoundingSet = "";
+                AmbientCapabilities = "";
+                BindReadOnlyPaths = lib.mkIf (cfg.readOnlyPaths != [ ]) cfg.readOnlyPaths;
+                ReadWritePaths = lib.mkIf (cfg.readWritePaths != [ ]) cfg.readWritePaths;
+              })
+              cfg.serviceConfig
+            ];
           };
-        };
       };
     };
 in

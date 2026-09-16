@@ -179,9 +179,10 @@ See the [docs] for the full reference.
 
 ### NixOS
 
-The flake ships a NixOS module exposing `services.omw` — a systemd unit that
-runs omw from a config file, `envsubst`-ing environment variables into it so
-secrets never live in the Nix store:
+The flake ships a NixOS module exposing `services.omw` — a hardened systemd unit
+that runs omw from a config file, layering `OMW__`-prefixed environment
+variables over it so secrets never live in the Nix store. Plain-systemd and
+Docker deployments are covered too — see [Deployment] in the documentation:
 
 ```nix
 {
@@ -233,10 +234,12 @@ from an overlay, add the following to your nix configuration:
 
 [haras cachix cache]: https://app.cachix.org/cache/haras
 [docs]: https://haras-unicorn.github.io/omw/
+[Deployment]: https://haras-unicorn.github.io/omw/deployment/deployment.html
 [endpoint]: https://haras-unicorn.github.io/omw/endpoint/interface.html
 [hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
 [Rust brains]: https://haras-unicorn.github.io/omw/runtime/wasm.html#rust-brains
-[The NixOS module]: https://haras-unicorn.github.io/omw/nixos.html
+[The NixOS module]:
+  https://haras-unicorn.github.io/omw/deployment/nixos/module.html
 [library]: https://haras-unicorn.github.io/omw/library.html
 
 <!-- ANCHOR_END: body -->

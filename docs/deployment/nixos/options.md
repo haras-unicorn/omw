@@ -30,9 +30,10 @@ _Default:_
 
 ## services\.omw\.environment
 
-Environment variables exported at the start of the service script, before omw
-starts\. They are also visible to `envsubst` when interpolating the
-configuration, which is the intended way to supply API keys and other secrets\.
+Environment variables for the service (becomes systemd `Environment=`)\.
+`OMW__`-prefixed variables layer over the file configuration, e\.g\.
+`OMW__PROVIDERS__OPENAI__API_KEY` overrides `providers.openai.api_key`, which is
+the intended way to supply API keys and other secrets\.
 
 _Type:_ attribute set of string
 
@@ -79,6 +80,25 @@ _Default:_
 null
 ```
 
+## services\.omw\.hardening
+
+Enable systemd hardening (`NoNewPrivileges`, `ProtectSystem=strict`, …)\. Safe
+for stdio MCP servers (including ones wrapping commands in `bwrap`) and
+node-based servers\. Sets `LimitMEMLOCK=infinity` alongside the empty capability
+set (inside containers the outer `RLIMIT_MEMLOCK` still wins — set
+`OMW__TUNABLES__ALLOW_UNLOCKED_SECRETS=true` in the environment there instead)\.
+Deliberately omits `MemoryDenyWriteExecute`, which would break the wasmtime JIT
+and nodejs MCP servers\. Set to false if the sandbox gets in the way;
+`services.omw.serviceConfig` can override individual keys either way\.
+
+_Type:_ boolean
+
+_Default:_
+
+```nix
+true
+```
+
 ## services\.omw\.mode
 
 Which mode to run omw in: `run` executes every agent once, `loop` keeps running
@@ -92,13 +112,53 @@ _Default:_
 "loop"
 ```
 
+## services\.omw\.readOnlyPaths
+
+Extra paths exposed read-only inside the sandbox (`BindReadOnlyPaths=`)\. Needed
+with hardening when brains or the config file live outside the state directory
+(e\.g\. `/etc`)\.
+
+_Type:_ list of string
+
+_Default:_
+
+```nix
+[ ]
+```
+
+## services\.omw\.readWritePaths
+
+Extra paths exposed read-write inside the sandbox (`ReadWritePaths=`)\. Needed
+with hardening when a filesystem MCP tooling works outside the state directory\.
+
+_Type:_ list of string
+
+_Default:_
+
+```nix
+[ ]
+```
+
+## services\.omw\.serviceConfig
+
+Extra systemd `serviceConfig` merged last, so it wins over the module defaults
+(including the hardening set)\. Escape hatch for anything the module does not
+model explicitly\.
+
+_Type:_ attribute set
+
+_Default:_
+
+```nix
+{ }
+```
+
 ## services\.omw\.settings
 
 The omw configuration provided as an attribute set, rendered to TOML at build
-time\. Mutually exclusive with `services.omw.settingsFile`\. Environment
-variables of the form `$VAR` or `${VAR}` are substituted into the config before
-omw reads it (see `services.omw.environment`), which is the intended way to
-supply API keys and other secrets at runtime\.
+time\. Mutually exclusive with `services.omw.settingsFile`\. Secrets are layered
+at runtime from `OMW__`-prefixed environment variables (see
+`services.omw.environment`), so API keys never have to live in the Nix store\.
 
 _Type:_ null or TOML value
 
@@ -111,8 +171,7 @@ null
 ## services\.omw\.settingsFile
 
 Path to an omw configuration file (TOML)\. Mutually exclusive with
-`services.omw.settings`\. Environment variables are substituted into the file
-before omw reads it\.
+`services.omw.settings`\.
 
 _Type:_ null or absolute path
 
