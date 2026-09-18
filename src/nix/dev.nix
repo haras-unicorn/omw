@@ -341,6 +341,30 @@ in
               cargo run --all-features -p omw --example $example
             }
 
+            def "main brain example" [example: string, flavor: string] {
+              if $flavor not-in [rhai js wasm] {
+                print -e $"unknown flavor ($flavor); expected one of rhai, js, wasm"
+                exit 1
+              }
+              cd (flake-root)
+              let prefix = $"example_($example | str replace --all '-' '_')_($flavor)"
+              cargo test --all-features -p omw --test examples -- $prefix
+            }
+
+            def "main examples" [] {
+              cd (flake-root)
+              for example in [
+                embed_with_defaults
+                custom_provider
+                custom_tooling
+                custom_runtime
+                custom_endpoint
+              ] {
+                cargo run --all-features -p omw --example $example
+              }
+              cargo test --all-features -p omw --test examples
+            }
+
             def --wrapped "main test nixos" [test: string, ...args: string] {
               cd (flake-root)
               (nix build
@@ -415,6 +439,7 @@ in
               cargo fmt --all -- --check
               cargo clippy --all-features -- -D warnings
               cargo test --all-features
+              dev examples
               nix flake check --all-systems --show-trace
             }
 
