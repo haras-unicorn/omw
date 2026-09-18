@@ -119,10 +119,14 @@ the test.
 ### Brain examples
 
 Each brain example is also self-running via
-`dev brain example <example> <flavor>` (e.g. `dev brain example 01-hello rhai`).
+`dev brain example <example> <flavor>` (e.g. `dev brain example 01-hello rhai`),
+which sets `OMW_EXAMPLE_FILTER` to that `<example>/<flavor>` pair.
 
-`dev examples` runs every library example plus the full `tests/examples.rs`
-brain harness; `dev lint` runs it right before `nix flake check`.
+`dev examples` lists and runs every example one by one: each
+`src/lib/omw/examples/*.rs` via `cargo run -p omw --example`, then each
+`examples/<name>/` flavor (`rhai`, `js`, `wasm`) via the `tests/examples.rs`
+harness with `OMW_EXAMPLE_FILTER` pinned to that pair. `dev lint` runs it right
+before `nix flake check`.
 
 One integration test file, `src/lib/omw/tests/examples.rs`, drives the real
 example files on disk (`examples/<name>/brain.rhai`, `brain.js`, and the
@@ -162,12 +166,13 @@ steps add one file under `src/lib/omw/examples/`.
         TOML. Library-only; not referenced from brain TOMLs. Test:
         `dev lib example custom_tooling` runs
         `call_tool`, asserts the recorded name/arguments, exits 0.
-4. [ ] `examples/01-hello/` — blocking `chat`, terminal message is the reply.
-       Files: `brain.rhai`, `brain.js`, `rust/`, `omw.*.toml`, `README.md`.
-       Shipped TOMLs use built-in kinds pointed at localhost; the test builds
-       the `Config` programmatically and overrides `base_url` with the wiremock
-        URL. Test: `dev brain example 01-hello <flavor>` (one
-        `tests/examples.rs` case per variant) drives the on-disk
+  4. [ ] `examples/01-hello/` — blocking `chat`, terminal message is the reply.
+        Files: `brain.rhai`, `brain.js`, `rust/`, `omw.*.toml`, `README.md`.
+        Shipped TOMLs use built-in kinds pointed at localhost; the test builds
+        the `Config` programmatically and overrides `base_url` with the wiremock
+         URL. Test: `dev brain example 01-hello <flavor>` (the `tests/examples.rs`
+        harness discovers `examples/*/` at runtime, so no harness change is
+        needed) drives the on-disk
         brain through `run_agents` and asserts the reply text. Only the rust
         `.wasm` case needs `OMW_TEST_WASM_RUNTIME_NON_NATIVE` (nested
         `wasm32-wasip2` build); rhai/js always run.

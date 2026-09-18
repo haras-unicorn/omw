@@ -347,22 +347,36 @@ in
                 exit 1
               }
               cd (flake-root)
-              let prefix = $"example_($example | str replace --all '-' '_')_($flavor)"
-              cargo test --all-features -p omw --test examples -- $prefix
+              with-env { OMW_EXAMPLE_FILTER: $"($example)/($flavor)" } {
+                cargo test --all-features -p omw --test examples
+              }
             }
 
             def "main examples" [] {
               cd (flake-root)
-              for example in [
-                embed_with_defaults
-                custom_provider
-                custom_tooling
-                custom_runtime
-                custom_endpoint
-              ] {
-                cargo run --all-features -p omw --example $example
+              for file in (
+                ls ./src/lib/omw/examples | where name ends-with ".rs" | get name
+              ) {
+                let stem = ($file | path parse | get stem)
+                print $"lib example: ($stem)"
+                cargo run --all-features -p omw --example $stem
               }
-              cargo test --all-features -p omw --test examples
+              for dir in (
+                if ("examples" | path exists) {
+                  ls examples | where type == dir | get name
+                } else {
+                  []
+                }
+              ) {
+                for flavor in [rhai js wasm] {
+                  print $"brain example: ($dir | path basename)/($flavor)"
+                  with-env {
+                    OMW_EXAMPLE_FILTER: $"($dir | path basename)/($flavor)"
+                  } {
+                    cargo test --all-features -p omw --test examples
+                  }
+                }
+              }
             }
 
             def --wrapped "main test nixos" [test: string, ...args: string] {

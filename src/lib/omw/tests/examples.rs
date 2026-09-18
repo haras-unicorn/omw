@@ -3,19 +3,24 @@
 //! as `tests/agents.rs` — a wiremock OpenAI provider plus an in-process
 //! rmcp streamable-HTTP echo server.
 //!
-//! The four `examples/<name>/` directories do not exist yet, so every
-//! case currently passes after asserting their absence. As each brain
-//! example lands (all three variants plus TOMLs and a README in one
-//! step), its cases start driving the on-disk `brain.rhai` / `brain.js`
-//! / compiled rust `brain.wasm` through `run_agents` and assert the
+//! One test discovers its cases at runtime by listing `examples/*/`
+//! (three flavors per example: `rhai`, `js`, `wasm`), so adding or
+//! renaming an example needs no harness change. `OMW_EXAMPLE_FILTER`
+//! selects a subset by substring match on `<example>/<flavor>`
+//! (`dev brain example <example> <flavor>` sets it to exactly that;
+//! `dev examples` loops every example one by one the same way).
+//!
+//! The four `examples/<name>/` directories do not exist yet, so the
+//! test currently finds zero cases and passes. As each brain example
+//! lands (all three variants plus TOMLs and a README in one step),
+//! `run_case` starts driving the on-disk `brain.rhai` / `brain.js` /
+//! compiled rust `brain.wasm` through `run_agents` and asserting the
 //! terminal outcome.
 //!
-//! Only the rust `.wasm` variant cases are heavy (nested
+//! Only the rust `.wasm` flavor is heavy (nested
 //! `cargo build --target wasm32-wasip2` + `wasm-tools`, like `build.rs`
-//! does), so only those skip behind the existing
-//! `OMW_TEST_WASM_RUNTIME_NON_NATIVE` var. `dev brain example
-//! <example> <flavor>` runs one case (e.g.
-//! `dev brain example 01-hello rhai`).
+//! does), so only those cases skip behind the existing
+//! `OMW_TEST_WASM_RUNTIME_NON_NATIVE` var.
 
 use std::path::PathBuf;
 
@@ -28,64 +33,87 @@ fn repo_root() -> PathBuf {
     .join("..")
 }
 
-fn brain_dir(example: &str) -> PathBuf {
-  repo_root().join("examples").join(example)
+/// Substring selection on `<example>/<flavor>`; empty or unset runs all.
+fn selected(example: &str, flavor: &str) -> bool {
+  let Ok(filter) = std::env::var("OMW_EXAMPLE_FILTER") else {
+    return true;
+  };
+  if filter.is_empty() {
+    return true;
+  }
+  format!("{example}/{flavor}").contains(filter.as_str())
 }
 
-/// Only the rust `.wasm` cases are heavy (nested `wasm32-wasip2`
-/// builds): skip them unless the non-native gate is set, the same gate
+/// List every `<example>/<flavor>` case by scanning `examples/*/`; three
+/// flavors per example directory, sorted for deterministic runs.
+fn discover() -> anyhow::Result<Vec<(String, String)>> {
+  let root = repo_root().join("examples");
+  if !root.exists() {
+    return Ok(Vec::new());
+  }
+  let mut examples: Vec<String> = Vec::new();
+  for entry in std::fs::read_dir(&root)? {
+    let entry = entry?;
+    if !entry.file_type()?.is_dir() {
+      continue;
+    }
+    let Ok(name) = entry.file_name().into_string() else {
+      continue;
+    };
+    examples.push(name);
+  }
+  examples.sort_unstable();
+  let mut cases = Vec::new();
+  for example in examples {
+    for flavor in ["rhai", "js", "wasm"] {
+      cases.push((example.clone(), flavor.to_string()));
+    }
+  }
+  Ok(cases)
+}
+
+/// Only the rust `.wasm` flavor is heavy (nested `wasm32-wasip2`
+/// builds): skip it unless the non-native gate is set, the same gate
 /// the engine and `rhai.rs` / `js.rs` unit tests already use.
 fn enabled_non_native() -> bool {
   std::env::var_os("OMW_TEST_WASM_RUNTIME_NON_NATIVE")
     .is_some_and(|value| value != "0")
 }
 
-/// Placeholder until the brain example lands: assert the directory is
-/// still absent, so a landed-but-unwired example fails loudly instead
-/// of silently passing.
-fn assert_not_yet_present(example: &str) -> anyhow::Result<()> {
-  let dir = brain_dir(example);
-  assert!(
-    !dir.exists(),
-    "brain example {example:?} landed at {dir:?} but its harness case is still a placeholder",
-  );
-  Ok(())
+/// Placeholder until the brain example lands: a landed-but-unwired
+/// example fails loudly instead of silently passing.
+async fn run_case(example: &str, flavor: &str) -> anyhow::Result<()> {
+  anyhow::bail!(
+    "brain example {example:?} ({flavor}) landed but is not wired yet"
+  )
 }
 
-macro_rules! brain_case {
-  ($example:literal, $test_name:ident) => {
-    #[tokio::test]
-    async fn $test_name() -> anyhow::Result<()> {
-      assert_not_yet_present($example)
+#[tokio::test]
+async fn brain_examples() -> anyhow::Result<()> {
+  let mut cases = discover()?;
+  cases.retain(|(example, flavor)| selected(example, flavor));
+  if cases.is_empty() {
+    eprintln!("brain examples: no cases selected");
+    return Ok(());
+  }
+  let mut failures: Vec<String> = Vec::new();
+  for (example, flavor) in &cases {
+    if flavor == "wasm" && !enabled_non_native() {
+      eprintln!("skipping: {example}/{flavor} (non-native gate not set)");
+      continue;
     }
-  };
-}
-
-macro_rules! wasm_brain_case {
-  ($example:literal, $test_name:ident) => {
-    #[tokio::test]
-    async fn $test_name() -> anyhow::Result<()> {
-      if !enabled_non_native() {
-        eprintln!("skipping: OMW_TEST_WASM_RUNTIME_NON_NATIVE not set");
-        return Ok(());
-      }
-      assert_not_yet_present($example)
+    eprintln!("brain example: {example}/{flavor}");
+    if let Err(error) = run_case(example, flavor).await {
+      failures.push(format!("{example}/{flavor}: {error:#}"));
     }
-  };
+  }
+  if failures.is_empty() {
+    Ok(())
+  } else {
+    anyhow::bail!(
+      "{} brain example(s) failed:\n{}",
+      failures.len(),
+      failures.join("\n")
+    )
+  }
 }
-
-brain_case!("01-hello", example_01_hello_rhai);
-brain_case!("01-hello", example_01_hello_js);
-wasm_brain_case!("01-hello", example_01_hello_wasm);
-
-brain_case!("02-tool-agent", example_02_tool_agent_rhai);
-brain_case!("02-tool-agent", example_02_tool_agent_js);
-wasm_brain_case!("02-tool-agent", example_02_tool_agent_wasm);
-
-brain_case!("03-endpoint", example_03_endpoint_rhai);
-brain_case!("03-endpoint", example_03_endpoint_js);
-wasm_brain_case!("03-endpoint", example_03_endpoint_wasm);
-
-brain_case!("04-ping-pong", example_04_ping_pong_rhai);
-brain_case!("04-ping-pong", example_04_ping_pong_js);
-wasm_brain_case!("04-ping-pong", example_04_ping_pong_wasm);
