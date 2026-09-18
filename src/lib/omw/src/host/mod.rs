@@ -7,3 +7,4 @@ pub(crate) mod resources;
 pub(crate) mod streams;
 pub(crate) mod time;
 pub(crate) mod tool_calls;
+pub mod trace;

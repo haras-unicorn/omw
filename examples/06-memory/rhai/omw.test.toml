@@ -1,0 +1,29 @@
+# 06-memory: seeded memory fast-forwards an agent to a state.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/06-memory`.
+
+[providers.openai]
+kind = "mock"
+turns = [{ content = "seeded reply" }]
+
+# Inserted into alice's memory before her brain first runs. She reads it and
+# picks the model name from it, so the seeded value shows up in the trace.
+[memory.alice]
+handle = "seed-42"
+
+[runtime.runtime]
+kind = "rhai"
+
+[[agents]]
+name = "alice"
+runtime = "runtime"
+script = "brain.rhai"
+
+[assertions.alice]
+outcome = "completed"
+events = [
+  { kind = "call", op = "memory_get", detail = { key = "handle" } },
+  { kind = "call", op = "chat", detail = { model = "seed-42" } },
+]

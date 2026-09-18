@@ -12,7 +12,7 @@ use serde_json::Value;
 
 #[cfg(feature = "tooling-mcp")]
 pub mod mcp;
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub(crate) mod mock;
 
 /// A tool exposed by a tooling.
@@ -130,6 +130,12 @@ pub trait Tooling: Send + Sync {
     &self,
     uri: &str,
   ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>;
+
+  /// Attach the optional trace channel so a scripted tooling can gate its
+  /// steps on observed events. Defaults to a no-op.
+  fn attach_trace(&self, trace: crate::host::trace::TraceSender) {
+    let _ = trace;
+  }
 }
 
 /// Build a tooling from opaque params plus tunables. Implemented per back
@@ -281,7 +287,7 @@ impl Default for Registry {
     {
       let _ = registry.register::<mcp::MCPTooling>();
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     {
       let _ = registry.register::<mock::MockTooling>();
     }
@@ -331,6 +337,7 @@ mod tests {
       tooling: HashMap::new(),
       runtime: HashMap::new(),
       endpoint: None,
+      memory: std::collections::BTreeMap::new(),
       agents: Vec::new(),
       tunables: crate::config::Tunables::default(),
     };
@@ -352,6 +359,7 @@ mod tests {
       )]),
       runtime: HashMap::new(),
       endpoint: None,
+      memory: std::collections::BTreeMap::new(),
       agents: Vec::new(),
       tunables: crate::config::Tunables::default(),
     };

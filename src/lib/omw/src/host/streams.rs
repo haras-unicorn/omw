@@ -203,7 +203,7 @@ mod tests {
     let entry = crate::provider::Registry::default().build(
       "mock",
       "mock",
-      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+      &serde_json::json!({ "turns": [{ "content": "Hello, world" }] }),
     )?;
     let uuid = crate::host::bus::new_uuid();
     spawn_pump(
@@ -219,12 +219,9 @@ mod tests {
     );
     let first = bus.recv("alice", Duration::from_secs(5))?;
     match first.event {
-      Event::ChatDelta(d) => assert_eq!(d.content.as_deref(), Some("Hello")),
-      other => anyhow::bail!("expected a delta, got {other:?}"),
-    }
-    let second = bus.recv("alice", Duration::from_secs(5))?;
-    match second.event {
-      Event::ChatDelta(d) => assert_eq!(d.content.as_deref(), Some(", world")),
+      Event::ChatDelta(d) => {
+        assert_eq!(d.content.as_deref(), Some("Hello, world"));
+      }
       other => anyhow::bail!("expected a delta, got {other:?}"),
     }
     let end = bus.recv("alice", Duration::from_secs(5))?;

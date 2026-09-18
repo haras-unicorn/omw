@@ -9,8 +9,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use kanal::{Receiver, Sender};
+use tokio::sync::broadcast;
 
 use crate::host::events::{EndpointMessage, Event, EventEnvelope};
+use crate::host::trace::{TraceEvent, TraceSender};
 use crate::provider::ChatMessage;
 use crate::tooling::Tool;
 
@@ -28,6 +30,8 @@ type AgentChannels = (Sender<EventEnvelope>, Receiver<EventEnvelope>);
 pub struct MessageBus {
   inner: Mutex<BusInner>,
   tunables: crate::config::Tunables,
+  /// Optional trace tap. `None` (the default) is zero-overhead.
+  trace: Option<TraceSender>,
 }
 
 impl Default for MessageBus {
@@ -68,7 +72,49 @@ impl MessageBus {
     Self {
       inner: Mutex::new(BusInner::default()),
       tunables,
+      trace: None,
     }
+  }
+
+  /// Like [`with_tunables`](Self::with_tunables) but with an active trace tap.
+  pub fn with_trace(
+    tunables: crate::config::Tunables,
+    trace: TraceSender,
+  ) -> Self {
+    Self {
+      inner: Mutex::new(BusInner::default()),
+      tunables,
+      trace: Some(trace),
+    }
+  }
+
+  /// Push one observation onto the trace channel, if any is attached.
+  pub(crate) fn trace_event(&self, event: TraceEvent) {
+    if let Some(tx) = &self.trace {
+      let _ = tx.send(event);
+    }
+  }
+
+  /// A fresh subscriber to the trace channel, or `None` when no trace is
+  /// attached.
+  pub fn trace_receiver(&self) -> Option<broadcast::Receiver<TraceEvent>> {
+    self.trace.as_ref().map(TraceSender::subscribe)
+  }
+
+  /// The trace sender, or `None` when no trace is attached. Used by the
+  /// endpoint and tooling mocks to gate a scripted step on an observed event
+  /// (`after` ordering).
+  pub fn trace_sender(&self) -> Option<TraceSender> {
+    self.trace.clone()
+  }
+
+  /// Tap an inbox observation at the success path of `recv` / `try_recv`.
+  fn trace_inbound(&self, agent: &str, envelope: &EventEnvelope) {
+    self.trace_event(TraceEvent::Inbound {
+      agent: agent.to_string(),
+      id: envelope.id.clone(),
+      event: envelope.event.clone(),
+    });
   }
 
   /// Subscribe `subscriber` to messages from `source`, returning a fresh UUID
@@ -335,6 +381,7 @@ impl MessageBus {
       match rx.recv_timeout(remaining.min(slice)) {
         Ok(envelope) => {
           tracing::trace!(name, "received an event from the inbox");
+          self.trace_inbound(name, &envelope);
           return Ok(envelope);
         }
         // Empty, closed, or a timeout all read as "no event right now".
@@ -349,6 +396,16 @@ impl MessageBus {
 
   /// Non-blocking poll of the next event from `name`'s inbox.
   pub fn try_recv(&self, name: &str) -> anyhow::Result<Option<EventEnvelope>> {
+    let envelope = self.try_recv_raw(name)?;
+    if let Some(envelope) = &envelope {
+      self.trace_inbound(name, envelope);
+    }
+    Ok(envelope)
+  }
+
+  /// [`try_recv`](Self::try_recv) without the trace tap. Host-internal polling
+  /// (the system-event drain) must not pollute the observed stream.
+  fn try_recv_raw(&self, name: &str) -> anyhow::Result<Option<EventEnvelope>> {
     let (_, rx) = self.channels(name);
     match rx.try_recv() {
       Ok(Some(envelope)) => {
@@ -371,7 +428,7 @@ impl MessageBus {
   pub fn drain_system(&self, name: &str) -> anyhow::Result<()> {
     let lifecycle = self.lifecycle_of(name);
     let mut kept: Vec<EventEnvelope> = Vec::new();
-    while let Some(envelope) = self.try_recv(name)? {
+    while let Some(envelope) = self.try_recv_raw(name)? {
       match &envelope.event {
         Event::Reload | Event::Shutdown => {}
         Event::Error(_) => {
@@ -691,5 +748,49 @@ mod tests {
     bus.endpoint_subscribe("alice", "zeta".to_string()).unwrap();
     bus.endpoint_subscribe("bob", "alpha".to_string()).unwrap();
     assert_eq!(bus.endpoint_models(), vec!["alpha", "zeta"]);
+  }
+
+  #[test]
+  fn recv_taps_an_inbound_trace_event() -> anyhow::Result<()> {
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let bus = MessageBus::with_trace(crate::config::Tunables::default(), tx);
+    let sub = bus.subscribe("alice", "bob");
+    bus.send("bob", "alice", "hello".to_string());
+    let _ = bus.recv("alice", Duration::from_secs(1))?;
+    let traced = rx.try_recv().map_err(|e| anyhow::anyhow!("{e}"))?;
+    match traced {
+      TraceEvent::Inbound { agent, id, event } => {
+        assert_eq!(agent, "alice");
+        assert_eq!(id, sub);
+        assert_eq!(event, Event::Message("hello".to_string()));
+      }
+      other => anyhow::bail!("unexpected trace event: {other:?}"),
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn try_recv_taps_but_the_system_drain_does_not() -> anyhow::Result<()> {
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let bus = MessageBus::with_trace(crate::config::Tunables::default(), tx);
+    let sub = bus.subscribe("alice", "bob");
+    bus.send("bob", "alice", "hello".to_string());
+    bus.deliver("alice", &new_uuid(), Event::Reload);
+    // The drain drops the reload without tracing it.
+    bus.drain_system("alice")?;
+    assert!(
+      rx.try_recv().is_err(),
+      "the drained system event must not be traced"
+    );
+    // The queued message is still observed by a normal try_recv.
+    let envelope = bus
+      .try_recv("alice")?
+      .ok_or_else(|| anyhow::anyhow!("expected the queued message"))?;
+    assert_eq!(envelope.id, sub);
+    assert!(matches!(
+      rx.try_recv().map_err(|e| anyhow::anyhow!("{e}"))?,
+      TraceEvent::Inbound { .. }
+    ));
+    Ok(())
   }
 }

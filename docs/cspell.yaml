@@ -18,6 +18,7 @@ ignoreWords:
   - openai
   - mcp
   - wasm
+  - gpt
   - wasip
   - wasmtime
   - wasi
@@ -65,3 +66,13 @@ ignoreWords:
   - syscalls
   - rlimit
   - memlock
+  - alikes
+  - assertable
+  - behaviour
+  - behaviourally
+  - disambiguators
+  - inspectable
+  - repoint
+  - reserialize
+  - scriptable
+  - usize

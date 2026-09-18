@@ -35,6 +35,14 @@ pub(crate) fn tooling_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
     "subscribe_resource".into(),
     method("tooling_subscribe_resource")?.into(),
   );
+  m.insert(
+    "unsubscribe_resource_list".into(),
+    method("tooling_unsubscribe_resource_list")?.into(),
+  );
+  m.insert(
+    "unsubscribe_resource".into(),
+    method("tooling_unsubscribe_resource")?.into(),
+  );
   Ok(m)
 }
 

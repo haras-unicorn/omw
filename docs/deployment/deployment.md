@@ -1,7 +1,7 @@
 # Deployment
 
 `omw` runs anywhere its single static binary runs. The release tarballs
-(`omw-<arch>.tar.gz`, plus `-rhai` / `-js` flavors) contain a statically linked
+(`omw-<arch>.tar.gz`, plus `-rhai` / `-js` variants) contain a statically linked
 musl binary — no runtime dependencies besides CA certificates for TLS — so the
 same artifact drops onto NixOS (via the [NixOS module](./nixos/module.md)), onto
 any systemd host (via the [plain unit](./systemd.md)), or into a minimal

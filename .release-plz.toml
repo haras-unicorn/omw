@@ -5,8 +5,9 @@ release = false
 name = "omw"
 release = true
 version_group = "omw"
-git_tag_enable = false
-git_release_enable = false
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+changelog_include = ["omw-cli", "omw-test"]
 
 [[package]]
 name = "omw-wasm-rust"
@@ -18,7 +19,14 @@ git_release_enable = false
 name = "omw-cli"
 release = true
 version_group = "omw"
-git_tag_name = "v{{ version }}"
-git_release_name = "v{{ version }}"
-changelog_include = ["omw"]
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-test"
+release = true
+version_group = "omw"
+git_tag_enable = false
+git_release_enable = false
 semver_check = false

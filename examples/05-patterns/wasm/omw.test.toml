@@ -1,0 +1,33 @@
+# 05-patterns: assertions over a multi-turn provider script.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/05-patterns`.
+
+[providers.openai]
+kind = "mock"
+turns = [
+  { content = "alpha" },
+  { content = "beta" },
+  { content = "gamma" },
+]
+
+[runtime.runtime]
+kind = "wasm"
+
+[[agents]]
+name = "alice"
+runtime = "runtime"
+script = "brain.wasm"
+
+# Four chats, but only four assertions and none of them has to name every
+# event: string leaves are regexes, `$any` consumes one event, `$skip` consumes
+# the ones in between, and unlisted events are ignored.
+[assertions.alice]
+outcome = "completed"
+events = [
+  { kind = "call", op = "chat", detail = { model = "^gpt-a.*" } },
+  { "$any" = true },
+  { "$skip" = 1 },
+  { kind = "call", op = "chat", detail = { model = "^gpt-a.*" } },
+]

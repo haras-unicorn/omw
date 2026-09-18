@@ -12,6 +12,8 @@ use serde_json::Value;
 use crate::host::bus::MessageBus;
 use crate::host::endpoint::EndpointRegistry;
 
+#[cfg(any(test, feature = "mock"))]
+pub(crate) mod mock;
 #[cfg(feature = "endpoint-openai")]
 pub mod openai;
 
@@ -198,6 +200,10 @@ impl Default for Registry {
     #[cfg(feature = "endpoint-openai")]
     {
       let _ = registry.register::<openai::OpenAIEndpoint>();
+    }
+    #[cfg(any(test, feature = "mock"))]
+    {
+      let _ = registry.register::<mock::MockEndpoint>();
     }
     registry
   }

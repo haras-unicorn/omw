@@ -6,7 +6,7 @@ use crate::provider::ChatDelta;
 use crate::tooling::ResourceContent;
 
 /// The result of a single tool invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ToolResult {
   pub name: String,
   pub arguments: String,
@@ -16,7 +16,7 @@ pub struct ToolResult {
 /// An inbound endpoint request routed to a subscribed agent. `session`
 /// distinguishes the request from others in the same subscription, and
 /// addresses the agent's streamed deltas back out through `stream-endpoint`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct EndpointMessage {
   pub session: String,
   pub messages: Vec<crate::provider::ChatMessage>,
@@ -26,14 +26,19 @@ pub struct EndpointMessage {
 /// An endpoint session ended: normally (`error` absent) when the agent's
 /// reply completed, or abruptly (`error` present) when the session was
 /// interrupted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct EndpointSessionEnd {
   pub session: String,
   pub error: Option<String>,
 }
 
 /// A strongly-typed event delivered into an agent's inbox.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serializes adjacently tagged as `{ "kind" = <kebab-case>, "data" = <payload>
+/// }` (unit events omit `data`), so the assertion `payload` patterns and the
+/// trace's `event_kind` names share one vocabulary.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "kebab-case")]
 pub enum Event {
   /// A message from a subscribed agent.
   Message(String),

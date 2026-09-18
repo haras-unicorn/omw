@@ -24,6 +24,17 @@
       ],
       "default": null
     },
+    "memory": {
+      "description": "Per-agent seeded memory, keyed by agent name then key. Seeded into the\nagent's memory before its brain first runs, so a test (or a deployment)\ncan fast-forward an agent to a state. Seeded values persist like any\nother memory, including across hot reloads.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
     "providers": {
       "description": "Named provider implementations.",
       "type": "object",
@@ -65,6 +76,7 @@
         "session_buffer": 8192,
         "tooling_connect_backoff_cap_secs": 30,
         "tooling_connect_backoff_start_ms": 100,
+        "trace_buffer": 4096,
         "watch_debounce_ms": 200
       }
     }
@@ -189,6 +201,13 @@
           "type": "integer",
           "format": "uint64",
           "default": 100,
+          "minimum": 0
+        },
+        "trace_buffer": {
+          "description": "How many trace events the `omw-test` broadcast channel buffers.",
+          "type": "integer",
+          "format": "uint",
+          "default": 4096,
           "minimum": 0
         },
         "watch_debounce_ms": {

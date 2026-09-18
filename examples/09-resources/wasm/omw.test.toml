@@ -1,0 +1,77 @@
+# 09-resources: subscribe to the resource list and one resource, and react to
+# the mock's scripted, `after`-gated updates.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/09-resources`.
+
+[tooling.docs]
+kind = "mock"
+delay_ms = 10
+
+# What `list-resources` / `read-resource` start from.
+initial_resource_list = [
+  { uri = "mem://notes", name = "notes", mime_type = "text/plain" },
+]
+initial_resource_contents = { "mem://notes" = "v1" }
+
+# Two full-replacement list updates, each gated on a trace event. The mock logs
+# the trace, so `after` fires once the named call has been observed (even if it
+# preceded the step); the two updates of one subscription still replay in order.
+resource_list_updates = [
+  {
+    resources = [
+      { uri = "mem://notes", name = "notes", mime_type = "text/plain" },
+    ],
+    after = { kind = "call", op = "subscribe_resource_list" },
+  },
+  {
+    resources = [
+      { uri = "mem://notes", name = "notes", mime_type = "text/plain" },
+      { uri = "mem://todo", name = "todo", mime_type = "text/plain" },
+    ],
+    after = { kind = "call", op = "list_resources" },
+  },
+]
+
+# One content update, gated on the brain reading the resource.
+resource_content_updates = [
+  {
+    uri = "mem://notes",
+    content = "v2",
+    after = { kind = "call", op = "read_resource" },
+  },
+]
+
+[runtime.runtime]
+kind = "wasm"
+
+[[agents]]
+name = "reader"
+runtime = "runtime"
+script = "brain.wasm"
+
+[assertions.reader]
+outcome = "completed"
+events = [
+  { kind = "call", op = "subscribe_resource_list" },
+  { kind = "inbound", event = "resource-list-updated" },
+  { kind = "inbound", event = "resource-list-updated" },
+  {
+    kind = "call",
+    op = "subscribe_resource",
+    detail = { uri = "mem://notes" },
+  },
+  {
+    kind = "inbound",
+    event = "resource-updated",
+    payload = { data = { uri = "mem://notes", content = "v2" } },
+  },
+  {
+    kind = "call",
+    op = "read_resource",
+    detail = { uri = "mem://notes" },
+  },
+  { kind = "call", op = "unsubscribe_resource_list" },
+  { kind = "call", op = "unsubscribe_resource" },
+]

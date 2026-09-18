@@ -7,7 +7,7 @@
 //! impl is constructed (see the `Registry` in each of `provider`, `tooling`,
 //! `runtime` and `endpoint`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,13 @@ pub struct Config {
   /// Optional endpoint implementation.
   #[serde(default)]
   pub endpoint: Option<ImplConfig>,
+
+  /// Per-agent seeded memory, keyed by agent name then key. Seeded into the
+  /// agent's memory before its brain first runs, so a test (or a deployment)
+  /// can fast-forward an agent to a state. Seeded values persist like any
+  /// other memory, including across hot reloads.
+  #[serde(default)]
+  pub memory: BTreeMap<String, BTreeMap<String, String>>,
 
   /// Global runtime tunables.
   #[serde(default)]
@@ -118,6 +125,9 @@ pub struct Tunables {
   /// in ms.
   #[serde(default = "default_watch_debounce_ms")]
   pub watch_debounce_ms: u64,
+  /// How many trace events the `omw-test` broadcast channel buffers.
+  #[serde(default = "default_trace_buffer")]
+  pub trace_buffer: usize,
   /// How many deltas a single endpoint session buffers before drops.
   #[serde(default = "default_session_buffer")]
   pub session_buffer: usize,
@@ -177,6 +187,10 @@ fn default_watch_debounce_ms() -> u64 {
   200
 }
 
+fn default_trace_buffer() -> usize {
+  crate::host::trace::DEFAULT_TRACE_BUFFER
+}
+
 fn default_session_buffer() -> usize {
   8192
 }
@@ -205,6 +219,7 @@ impl Default for Tunables {
       tooling_connect_backoff_cap_secs:
         default_tooling_connect_backoff_cap_secs(),
       watch_debounce_ms: default_watch_debounce_ms(),
+      trace_buffer: default_trace_buffer(),
       session_buffer: default_session_buffer(),
       cancel_pumps_on_reload: default_cancel_pumps_on_reload(),
       allow_unlocked_secrets: default_allow_unlocked_secrets(),

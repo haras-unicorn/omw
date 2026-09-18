@@ -291,7 +291,7 @@ mod tests {
   #[test]
   fn interpreter_routes_to_provider_tooling_and_host() -> anyhow::Result<()> {
     let provider = MockProvider::noop();
-    let tooling = MockTooling::noop();
+    let tooling = MockTooling::with_tool_call("some-tool", "ok");
     let mut providers = HashMap::new();
     providers.insert(
       "mock-provider".to_string(),
@@ -324,7 +324,7 @@ mod tests {
 
     let runtime = JsWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
-    assert_eq!(outcome, RunOutcome::Exited("|".to_string()));
+    assert_eq!(outcome, RunOutcome::Exited("|ok".to_string()));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
       .enable_all()
@@ -346,7 +346,7 @@ mod tests {
 
   #[test]
   fn tooling_call_tool_delivers_a_tool_result_event() -> anyhow::Result<()> {
-    let tooling = MockTooling::noop();
+    let tooling = MockTooling::with_tool_call("some-tool", "ok");
     let mut tooling_map = HashMap::new();
     tooling_map.insert(
       "mock-tooling".to_string(),
@@ -370,7 +370,7 @@ mod tests {
     let outcome = run(&runtime, &ctx)?;
     assert_eq!(
       outcome,
-      RunOutcome::Exited("true|tool-result|".to_string()),
+      RunOutcome::Exited("true|tool-result|ok".to_string()),
       "callTool should return a handle and recv should yield a tool-result event"
     );
     Ok(())
@@ -381,7 +381,7 @@ mod tests {
     let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
-      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+      &serde_json::json!({ "turns": [{ "content": "Hello, world" }] }),
     )?;
     let mut providers = HashMap::new();
     providers.insert("mock-provider".to_string(), provider);
@@ -417,7 +417,7 @@ mod tests {
     let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
-      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+      &serde_json::json!({ "turns": [{ "content": "Hello, world" }] }),
     )?;
     let mut providers = HashMap::new();
     providers.insert("mock-provider".to_string(), provider);

@@ -14,6 +14,7 @@ use crate::host::endpoint::EndpointRegistry;
 use crate::host::memory::Memory;
 use crate::host::streams::CancelRegistry;
 use crate::host::streams::StreamRegistry;
+use crate::host::trace::{TraceEvent, TraceSender};
 use crate::provider::ProviderEntry;
 use crate::tooling::ToolingEntry;
 
@@ -51,6 +52,8 @@ pub struct AgentContext {
   /// server is configured. `None` when the agent cannot use the `endpoint-*`
   /// host imports (they error out).
   endpoint: Option<Arc<EndpointRegistry>>,
+  /// Optional trace tap for outbound host calls. `None` is zero-overhead.
+  trace: Option<TraceSender>,
   /// The tokio runtime used to bridge synchronous runtime host calls to
   /// the async provider/tooling implementations.
   rt: Option<Arc<tokio::runtime::Runtime>>,
@@ -62,6 +65,10 @@ pub struct AgentContext {
   /// Cooperative shutdown flag, set on SIGTERM/SIGINT. Behaves like reload
   /// but is terminal: the supervisor does not restart the run.
   shutdown: Arc<AtomicBool>,
+  /// Cooperative per-agent stop flag, set by the testing harness once an
+  /// `outcome = "asserted"` agent's assertions settle. Behaves like reload
+  /// but is terminal (no restart, not a failure).
+  stop: Arc<AtomicBool>,
   /// Preemptive interrupt for the currently running brain, stashed by the
   /// runtime so the supervisor can stop an unyielding run once the grace
   /// expires. A no-op when no run is active.
@@ -114,6 +121,17 @@ impl AgentContext {
     self.endpoint.as_ref()
   }
 
+  /// Record one outbound host call on the trace channel, if attached.
+  pub(crate) fn trace_call(&self, op: &str, detail: serde_json::Value) {
+    if let Some(tx) = &self.trace {
+      let _ = tx.send(TraceEvent::Call {
+        agent: self.name.clone(),
+        op: op.to_string(),
+        detail,
+      });
+    }
+  }
+
   /// Swap the brain script path, keeping memory and all other state.
   /// Test-only: production reloads re-read the same path.
   #[cfg(test)]
@@ -149,6 +167,7 @@ impl AgentContext {
       resources,
       tool_calls,
       endpoint,
+      None,
       Tunables::default(),
     )
   }
@@ -168,6 +187,7 @@ impl AgentContext {
     resources: Arc<CancelRegistry>,
     tool_calls: Arc<CancelRegistry>,
     endpoint: Option<Arc<EndpointRegistry>>,
+    trace: Option<TraceSender>,
     tunables: Tunables,
   ) -> anyhow::Result<Self> {
     Ok(Self {
@@ -182,6 +202,7 @@ impl AgentContext {
       resources,
       tool_calls,
       endpoint,
+      trace,
       rt: Some(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
           .enable_all()
@@ -191,6 +212,7 @@ impl AgentContext {
       tunables,
       reload: Arc::new(AtomicBool::new(false)),
       shutdown: Arc::new(AtomicBool::new(false)),
+      stop: Arc::new(AtomicBool::new(false)),
       interrupt: Arc::new(Mutex::new(None)),
     })
   }
@@ -209,6 +231,11 @@ impl AgentContext {
     self.shutdown.load(Ordering::Relaxed)
   }
 
+  /// Whether a per-agent stop has been requested (and not yet cleared).
+  pub(crate) fn stop_requested(&self) -> bool {
+    self.stop.load(Ordering::Relaxed)
+  }
+
   /// Signal this agent's run to reload: the blocking `host.recv` aborts
   /// with a reload error, waking the brain out of its wait.
   pub(crate) fn request_reload(&self) {
@@ -220,11 +247,17 @@ impl AgentContext {
     self.shutdown.store(true, Ordering::Relaxed);
   }
 
-  /// Clear previously requested reload/shutdown flags, so the next iteration
-  /// starts clean.
+  /// Share the testing harness's per-agent stop flag with this context.
+  pub(crate) fn set_stop_flag(&mut self, stop: Arc<AtomicBool>) {
+    self.stop = stop;
+  }
+
+  /// Clear previously requested reload/shutdown/stop flags, so the next
+  /// iteration starts clean.
   pub(crate) fn clear_reload(&self) {
     self.reload.store(false, Ordering::Relaxed);
     self.shutdown.store(false, Ordering::Relaxed);
+    self.stop.store(false, Ordering::Relaxed);
   }
 
   /// Stash the preemptive interrupt of the currently running brain.
@@ -266,6 +299,10 @@ impl AgentContext {
         handle.abort();
         return Err("agent shutting down".to_string());
       }
+      if self.stop_requested() {
+        handle.abort();
+        return Err("agent stopped".to_string());
+      }
       if self.reload_requested() {
         handle.abort();
         return Err("agent reloaded".to_string());
@@ -282,6 +319,8 @@ impl AgentContext {
         return done.map_err(|_| {
           if self.shutdown_requested() {
             "agent shutting down".to_string()
+          } else if self.stop_requested() {
+            "agent stopped".to_string()
           } else {
             "agent reloaded".to_string()
           }

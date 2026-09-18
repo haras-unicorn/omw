@@ -14,13 +14,14 @@ use serde_json::Value;
 
 use crate::tooling::Tool;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub(crate) mod mock;
 #[cfg(feature = "provider-openai")]
 mod openai;
 
 /// A single chat participant role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
   System,
   User,
@@ -29,7 +30,7 @@ pub enum Role {
 }
 
 /// A tool invocation the model asked for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ToolCall {
   pub id: String,
   pub name: String,
@@ -37,7 +38,7 @@ pub struct ToolCall {
 }
 
 /// A single message in the chat history.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatMessage {
   pub role: Role,
   pub content: Option<String>,
@@ -45,7 +46,7 @@ pub struct ChatMessage {
 }
 
 /// A streaming delta of model output.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatDelta {
   pub content: Option<String>,
   pub tool_call: Option<ToolCall>,
@@ -54,7 +55,7 @@ pub struct ChatDelta {
 
 /// The in-band result of a blocking `chat` call: the concatenated text, the
 /// fully-reassembled tool calls, and the terminal finish reason.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatResult {
   pub content: Option<String>,
   pub tool_calls: Vec<ToolCall>,
@@ -319,7 +320,7 @@ impl Default for Registry {
     {
       let _ = registry.register::<openai::OpenAIProvider>();
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     {
       let _ = registry.register::<mock::MockProvider>();
     }
@@ -351,6 +352,7 @@ mod tests {
       tooling: HashMap::new(),
       runtime: HashMap::new(),
       endpoint: None,
+      memory: std::collections::BTreeMap::new(),
       agents: Vec::new(),
       tunables: crate::config::Tunables::default(),
     }
@@ -399,6 +401,7 @@ mod tests {
       tooling: HashMap::new(),
       runtime: HashMap::new(),
       endpoint: None,
+      memory: std::collections::BTreeMap::new(),
       agents: vec![AgentConfig {
         name: "a".to_string(),
         runtime: "rhai".to_string(),
