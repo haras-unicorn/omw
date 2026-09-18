@@ -141,11 +141,11 @@ Do one step at a time, in order. Each step is one example; brains ship all three
 variants (rhai, js, rust) plus TOMLs and a README in the same step. Library
 steps add one file under `src/lib/omw/examples/`.
 
-1. `embed_with_defaults.rs` — file-loaded `Config` (`toml`), TLS `OnceLock`
+1. [x] `embed_with_defaults.rs` — file-loaded `Config` (`toml`), TLS `OnceLock`
    snippet, `Registries::default()`, `run_agents`. Needs `toml` in dev-deps.
    Test: `cargo run -p omw --example embed_with_defaults` exits 0 on its inline
    TOML.
-2. `custom_provider.rs` — scripted `EchoProvider` (`responses` streaming
+2. [x] `custom_provider.rs` — scripted `EchoProvider` (`responses` streaming
    `ChatDelta`) + `Factory` + `register_providers!` + `[providers.echo]` TOML.
    Library-only teaching material (brains use built-in kinds, not this). Test:
    the example runs `chat`/`chat_stream`, asserts the recorded model/messages,
