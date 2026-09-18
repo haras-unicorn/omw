@@ -1,13 +1,16 @@
 name: update
+
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
   schedule:
     - cron: 0 6 * * 1
   workflow_dispatch: {}
+
 jobs:
   update:
-    permissions:
-      contents: write
-      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,9 +23,7 @@ jobs:
         with:
           name: haras
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      - run: |
-          nix flake update
-          cargo update
+      - run: nix develop .#ci --command dev update
       - uses: peter-evans/create-pull-request@v6
         with:
           token: "${{ secrets.UPDATE_TOKEN }}"

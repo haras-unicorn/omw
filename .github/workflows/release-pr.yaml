@@ -1,22 +1,20 @@
-name: release
+name: release-pr
 
 permissions:
   contents: write
-  pull-requests: read
+  pull-requests: write
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types:
-      - closed
 
 jobs:
-  release:
-    if:
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release-plz-')
+  release-pr:
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,7 +29,9 @@ jobs:
         with:
           name: haras
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      - run: nix develop .#ci --command dev release
+      - run: nix develop .#ci --command dev release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -218,6 +218,13 @@ wrapper (written in `flake.nix`):
 - `dev test fast` — like `dev test` but with extra environment that tells tests
   to ignore heavier tests (tests that require `testcontainers` or WASM
   compilation)
+- `dev update` — `nix flake update` plus `cargo update`
+- `dev release-pr` — `release-plz release-pr` (opens the release PR)
+- `dev release` — `release-plz release` (tags + publishes on release PR merge)
+- `dev build` — `nix build`s the
+  `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball` packages (per-arch
+  `omw[-rhai,-js]-<arch>.tar.gz` via `runCommand`) and uploads them to the tag
+  release (`GITHUB_REF_NAME`) with `gh`
 - `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then
   `dev test`, then `nix flake check` — CI (`check.yaml`) runs `dev lint`
 
