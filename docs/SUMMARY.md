@@ -16,6 +16,7 @@
 - [Hot reload](./hot-reload.md)
 - [Tunables](./tunables.md)
 - [Library](./library.md)
+- [Examples](./examples.md)
 - [Deployment](./deployment/deployment.md)
   - [Systemd](./deployment/systemd.md)
   - [Docker](./deployment/docker.md)
