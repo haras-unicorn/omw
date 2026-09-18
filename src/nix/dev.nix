@@ -11,7 +11,10 @@ let
     let
       qwen-3-5-600M = pkgs.fetchurl {
         name = "qwen-3-5-600M.gguf";
-        url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf";
+        url =
+          "https://huggingface.co"
+          + "/unsloth/Qwen3.5-0.8B-GGUF"
+          + "/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf";
         hash = "sha256-MXfr1nr+RDg3TaGeaQvBuYdW9+D+qSQOG+QEM2FWp7U=";
       };
 
@@ -20,6 +23,8 @@ let
         "x86_64-unknown-linux-musl"
         "aarch64-unknown-linux-musl"
       ];
+
+      system = pkgs.stdenv.hostPlatform.system;
 
       muslCc = pkgs.pkgsStatic.stdenv.cc;
       staticTarget =
@@ -30,7 +35,9 @@ let
       staticTargetLower = builtins.replaceStrings [ "-" ] [ "_" ] staticTarget;
       staticTargetUpper = inputs.nixpkgs.lib.toUpper staticTargetLower;
 
-      rust = (inputs.rust-overlay.lib.mkRustBin { } pkgs).stable.latest.default.override {
+      rustBase = inputs.rust-overlay.lib.mkRustBin { } pkgs;
+
+      rust = rustBase.stable.latest.default.override {
         extensions = [
           "rustfmt"
           "clippy"
@@ -42,7 +49,7 @@ let
 
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (
         _:
-        (inputs.rust-overlay.lib.mkRustBin { } pkgs).stable.latest.default.override {
+        rustBase.stable.latest.default.override {
           inherit targets;
         }
       );
@@ -138,13 +145,17 @@ let
       '';
 
       buildVariant =
-        features:
+        variant:
         let
+          features = if variant == null then "" else "runtime-${variant}";
+
           depArgs =
             staticDepArgs
-            // lib.optionalAttrs (features != null) {
-              cargoExtraArgs = "-p omw-cli --features ${features} --target ${staticTarget}";
+            // lib.optionalAttrs (variant != null) {
+              cargoExtraArgs = "-p omw-cli" + " --features ${features}" + " --target ${staticTarget}";
             };
+
+          suffix = if variant == null then "" else "-${variant}";
         in
         rec {
           unwrapped = craneLib.buildPackage (
@@ -174,13 +185,24 @@ let
               {
                 omw-unwrapped = unwrapped;
               };
+
+          tarball =
+            pkgs.runCommand "omw${suffix}-${system}.tar.gz"
+              {
+                nativeBuildInputs = [ pkgs.gnutar ];
+              }
+              ''
+                mkdir -p staging
+                cp -L "${unwrapped}/bin/omw" "staging/omw${suffix}-${system}"
+                tar -czf "$out" -C staging "omw${suffix}-${system}"
+              '';
         };
 
       default = buildVariant null;
 
-      rhai = buildVariant "runtime-rhai";
+      rhai = buildVariant "rhai";
 
-      js = buildVariant "runtime-js";
+      js = buildVariant "js";
     in
     {
       inherit
@@ -193,12 +215,15 @@ let
 
       unwrapped = default.unwrapped;
       package = default.wrapped;
+      tarball = default.tarball;
 
       rhai-unwrapped = rhai.unwrapped;
       rhai-package = rhai.wrapped;
+      rhai-tarball = rhai.tarball;
 
       js-unwrapped = js.unwrapped;
       js-package = js.wrapped;
+      js-tarball = js.tarball;
     };
 in
 {
@@ -217,12 +242,15 @@ in
         {
           omw = packages.package;
           omw-unwrapped = packages.unwrapped;
+          omw-tarball = packages.tarball;
 
           omw-rhai = packages.rhai-package;
           omw-rhai-unwrapped = packages.rhai-unwrapped;
+          omw-rhai-tarball = packages.rhai-tarball;
 
           omw-js = packages.js-package;
           omw-js-unwrapped = packages.js-unwrapped;
+          omw-js-tarball = packages.js-tarball;
         };
     in
     {
@@ -267,9 +295,12 @@ in
               mdbook
               taplo
               fd
+              jq
               delta
               cachix
+              cargo-semver-checks
               release-plz
+              gh
               docker
               markdown-link-check
               cspell
@@ -371,13 +402,83 @@ in
                   --quiet
                   ...(fd '.*.md' . | lines))
                 (taplo lint
-                  --schema "https://raw.githubusercontent.com/release-plz/release-plz/refs/tags/release-plz-v0.3.148/.schema/latest.json"
+                  --schema ("https://raw.githubusercontent.com"
+                    + "/release-plz/release-plz"
+                    + "/refs/tags/release-plz-v0.3.148/.schema/latest.json")
                   .release-plz.toml)
               }
               cargo fmt --all -- --check
               cargo clippy --all-features -- -D warnings
               cargo test --all-features
               nix flake check --all-systems --show-trace
+            }
+
+            def "main update" [] {
+              cd (flake-root)
+              nix flake update
+              cargo update
+            }
+
+            def "main release-pr" [] {
+              cd (flake-root)
+              setup git credentials
+              let repo = $"($env.GITHUB_SERVER_URL)/($env.GITHUB_REPOSITORY)"
+              (release-plz release-pr
+                --git-token $env.GITHUB_TOKEN
+                --repo-url $repo
+                --forge github
+                -o json)
+            }
+
+            def "main release" [] {
+              cd (flake-root)
+              setup git credentials
+              (release-plz release
+                --git-token $env.GITHUB_TOKEN
+                --forge github
+                --token $env.CARGO_REGISTRY_TOKEN
+                -o json)
+            }
+
+            def "main build" [] {
+              cd (flake-root)
+              mkdir result
+              def "make tarball" [variant?: string] {
+                let package = if $variant == null {
+                  "omw-tarball"
+                } else {
+                  $"omw-($variant)-tarball"
+                }
+                let suffix = if $variant == null { "" } else { $"-($variant)" }
+                let build = (nix build
+                  --no-link
+                  --print-out-paths
+                  --show-trace
+                  $".#($package)") | str trim
+                let name = ("result/omw"
+                  + $suffix
+                  + "-${pkgs.stdenv.hostPlatform.system}"
+                  + ".tar.gz")
+                ln -sf $build $name
+                return $name
+              }
+              (gh release upload $env.GITHUB_REF_NAME
+                (make tarball)
+                (make tarball rhai)
+                (make tarball js)
+                --clobber)
+            }
+
+            def "setup git credentials" [] {
+              let json = (gh api graphql
+                -f query='query { viewer { name login databaseId } }'
+                --jq '.data.viewer')
+              let name = $json | jq --raw-output '.name // .login'
+              let email = $json
+                | jq --raw-output ('"\(.databaseId)+\(.login)'
+                    + '@users.noreply.github.com"')
+              git config --global user.name $name
+              git config --global user.email $email
             }
           '';
 
@@ -443,6 +544,7 @@ in
               ''
                 mdbook build -d "$out" "$src/docs"
               '';
+
           schema =
             pkgs.runCommand "omw-schema.json"
               {
@@ -483,15 +585,19 @@ in
 
           default = packages.package;
           unwrapped = packages.unwrapped;
+          tarball = packages.tarball;
 
           omw = packages.package;
           omw-unwrapped = packages.unwrapped;
+          omw-tarball = packages.tarball;
 
           omw-rhai = packages.rhai-package;
           omw-rhai-unwrapped = packages.rhai-unwrapped;
+          omw-rhai-tarball = packages.rhai-tarball;
 
           omw-js = packages.js-package;
           omw-js-unwrapped = packages.js-unwrapped;
+          omw-js-tarball = packages.js-tarball;
         };
 
       checks =
