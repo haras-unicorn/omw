@@ -153,7 +153,7 @@ steps add one file under `src/lib/omw/examples/`.
        TOML. Library-only teaching material (brains use built-in kinds, not
        this). Test: the example runs `chat`/`chat_stream`, asserts the recorded
        model/messages, exits 0.
-3. [ ] `custom_tooling.rs` — in-memory echo tool (canned `value`, records
+3. [x] `custom_tooling.rs` — in-memory echo tool (canned `value`, records
        `ToolCall`) + `Factory::build(name, params, tunables)` + `[tooling.echo]`
        TOML. Library-only; not referenced from brain TOMLs. Test: the example
        runs `call_tool`, asserts the recorded name/arguments, exits 0.
@@ -180,10 +180,10 @@ steps add one file under `src/lib/omw/examples/`.
        per runtime. Same file shape. Test: one case per variant pair;
        `run_agents` completes and both agents exchanged ping/pong. Same `.wasm`
        gate as 01.
-8. [ ] `custom_runtime.rs` — pure-Rust inline `Runtime` (`run` / `validate`)
+8. [x] `custom_runtime.rs` — pure-Rust inline `Runtime` (`run` / `validate`)
        bypassing the WASM engine. Test: the example runs an agent through
        `run_agents` and asserts `Completed`.
-9. [ ] `custom_endpoint.rs` — minimal `Endpoint::serve` stub
+9. [x] `custom_endpoint.rs` — minimal `Endpoint::serve` stub
        (`shutdown.wait()` + session registry). Test: the example boots
        `run_agents` with the stub endpoint and exits 0.
 10. [ ] Docs pass — `library.md`, `runtime/{rhai,js,wasm}.md`,
