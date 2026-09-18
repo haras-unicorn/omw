@@ -55,6 +55,15 @@ wasmtime-wasi = { workspace = true, optional = true }
 wat = { workspace = true, optional = true }
 zeroize = { version = "1.9.0", features = ["derive", "serde"] }
 
+[[example]]
+name = "embed_with_defaults"
+required-features = [
+  "provider-openai",
+  "tooling-mcp",
+  "runtime-wasm",
+  "endpoint-openai",
+]
+
 [build-dependencies]
 wasmtime.workspace = true
 

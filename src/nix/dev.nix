@@ -338,7 +338,7 @@ in
 
             def "main lib example" [example: string] {
               cd (flake-root)
-              cargo run -p omw --example $example
+              cargo run --all-features -p omw --example $example
             }
 
             def --wrapped "main test nixos" [test: string, ...args: string] {
