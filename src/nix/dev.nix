@@ -347,7 +347,7 @@ in
                 exit 1
               }
               cd (flake-root)
-              with-env { OMW_EXAMPLE_FILTER: $"($example)/($flavor)" } {
+              with-env { OMW_TEST_EXAMPLE_FILTER: $"($example)/($flavor)" } {
                 cargo test --all-features -p omw --test examples
               }
             }

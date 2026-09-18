@@ -120,13 +120,13 @@ the test.
 
 Each brain example is also self-running via
 `dev brain example <example> <flavor>` (e.g. `dev brain example 01-hello rhai`),
-which sets `OMW_EXAMPLE_FILTER` to that `<example>/<flavor>` pair.
+which sets `OMW_TEST_EXAMPLE_FILTER` to that `<example>/<flavor>` pair.
 
 `dev examples` lists and runs every example one by one: each
 `src/lib/omw/examples/*.rs` via `cargo run -p omw --example`, then each
 `examples/<name>/` flavor (`rhai`, `js`, `wasm`) via the `tests/examples.rs`
-harness with `OMW_EXAMPLE_FILTER` pinned to that pair. `dev lint` runs it right
-before `nix flake check`.
+harness with `OMW_TEST_EXAMPLE_FILTER` pinned to that pair. `dev lint` runs it
+right before `nix flake check`.
 
 One integration test file, `src/lib/omw/tests/examples.rs`, drives the real
 example files on disk (`examples/<name>/brain.rhai`, `brain.js`, and the
