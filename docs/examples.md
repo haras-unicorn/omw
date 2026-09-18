@@ -110,13 +110,16 @@ always-on. No testcontainers, no keys, no network.
 
 Compile-covered for free: `cargo clippy --all-features` and
 `cargo test --all-features` both build everything under `src/lib/omw/examples/`.
-Each example is also self-running via `cargo run -p omw --example <name>` and
-exits 0 on a programmatic `Config` plus custom registries — no keys, no network,
-no services. A `custom_*` example asserts on the recorded calls (model/messages
-for providers, name/arguments for tooling) before exiting, so a successful run
-is the test.
+Each example is also self-running via `dev lib example <example>` and exits 0 on
+a programmatic `Config` plus custom registries — no keys, no network, no
+services. A `custom_*` example asserts on the recorded calls (model/messages for
+providers, name/arguments for tooling) before exiting, so a successful run is
+the test.
 
 ### Brain examples
+
+Each brain example is also self-running via
+`dev brain example <example> <flavor>` (e.g. `dev brain example 01-hello rhai`).
 
 One integration test file, `src/lib/omw/tests/examples.rs`, drives the real
 example files on disk (`examples/<name>/brain.rhai`, `brain.js`, and the
@@ -142,44 +145,47 @@ variants (rhai, js, rust) plus TOMLs and a README in the same step. Library
 steps add one file under `src/lib/omw/examples/`.
 
 1. [x] `embed_with_defaults.rs` — file-loaded `Config` (`toml`), TLS `OnceLock`
-   snippet, `Registries::default()`, `run_agents`. Needs `toml` in dev-deps.
-   Test: `cargo run -p omw --example embed_with_defaults` exits 0 on its inline
-   TOML.
+       snippet, `Registries::default()`, `run_agents`. Needs `toml` in dev-deps.
+       Test: `cargo run -p omw --example embed_with_defaults` exits 0 on its
+       inline TOML.
 2. [x] `custom_provider.rs` — scripted `EchoProvider` (`responses` streaming
-   `ChatDelta`) + `Factory` + `register_providers!` + `[providers.echo]` TOML.
-   Library-only teaching material (brains use built-in kinds, not this). Test:
-   the example runs `chat`/`chat_stream`, asserts the recorded model/messages,
-   exits 0.
-3. `custom_tooling.rs` — in-memory echo tool (canned `value`, records
-   `ToolCall`) + `Factory::build(name, params, tunables)` + `[tooling.echo]`
-   TOML. Library-only; not referenced from brain TOMLs. Test: the example runs
-   `call_tool`, asserts the recorded name/arguments, exits 0.
-4. `examples/01-hello/` — blocking `chat`, terminal message is the reply. Files:
-   `brain.rhai`, `brain.js`, `rust/`, `omw.*.toml`, `README.md`. Shipped TOMLs
-   use built-in kinds pointed at localhost; the test builds the `Config`
-   programmatically and overrides `base_url` with the wiremock URL. Test: one
-   `tests/examples.rs` case per variant drives the on-disk brain through
-   `run_agents` and asserts the reply text. Only the rust `.wasm` case needs
-   `OMW_TEST_WASM_RUNTIME_NON_NATIVE` (nested `wasm32-wasip2` build); rhai/js
-   always run.
-5. `examples/02-tool-agent/` — `chat` → `call_tool_blocking` → final `chat` →
-   `"<chat>|<tool>"`. Same file shape as 01. Test: one case per variant against
-   the wiremock provider plus the in-process echo MCP server (`mcp/http` +
-   ephemeral `url`); asserts `"<chat>|<tool>"`. Same `.wasm` gate as 01.
-6. `examples/03-endpoint/` — `subscribe_endpoint` + `recv()` loop +
-   `stream_endpoint` with terminal `finish_reason`. TOML adds `[endpoint]`;
-   README shows the `curl` call. Same file shape. Test: one case per variant;
-   the test is the endpoint client (`POST /v1/chat/completions`, one streamed +
-   one buffered call). Same `.wasm` gate as 01.
-7. `examples/04-ping-pong/` — alice/bob `subscribe_agent` / `send_agent` +
-   `memory_set` handles, no provider or tooling. Two `[[agents]]`, one TOML per
-   runtime. Same file shape. Test: one case per variant pair; `run_agents`
-   completes and both agents exchanged ping/pong. Same `.wasm` gate as 01.
-8. `custom_runtime.rs` — pure-Rust inline `Runtime` (`run` / `validate`)
-   bypassing the WASM engine. Test: the example runs an agent through
-   `run_agents` and asserts `Completed`.
-9. `custom_endpoint.rs` — minimal `Endpoint::serve` stub (`shutdown.wait()` +
-   session registry). Test: the example boots `run_agents` with the stub
-   endpoint and exits 0.
-10. Docs pass — `library.md`, `runtime/{rhai,js,wasm}.md`, `examples/README.md`,
-    stub removal. Test: `dev lint` (prettier, cspell, markdownlint, link check).
+       `ChatDelta`) + `Factory` + `register_providers!` + `[providers.echo]`
+       TOML. Library-only teaching material (brains use built-in kinds, not
+       this). Test: the example runs `chat`/`chat_stream`, asserts the recorded
+       model/messages, exits 0.
+3. [ ] `custom_tooling.rs` — in-memory echo tool (canned `value`, records
+       `ToolCall`) + `Factory::build(name, params, tunables)` + `[tooling.echo]`
+       TOML. Library-only; not referenced from brain TOMLs. Test: the example
+       runs `call_tool`, asserts the recorded name/arguments, exits 0.
+4. [ ] `examples/01-hello/` — blocking `chat`, terminal message is the reply.
+       Files: `brain.rhai`, `brain.js`, `rust/`, `omw.*.toml`, `README.md`.
+       Shipped TOMLs use built-in kinds pointed at localhost; the test builds
+       the `Config` programmatically and overrides `base_url` with the wiremock
+       URL. Test: one `tests/examples.rs` case per variant drives the on-disk
+       brain through `run_agents` and asserts the reply text. Only the rust
+       `.wasm` case needs `OMW_TEST_WASM_RUNTIME_NON_NATIVE` (nested
+       `wasm32-wasip2` build); rhai/js always run.
+5. [ ] `examples/02-tool-agent/` — `chat` → `call_tool_blocking` → final `chat`
+       → `"<chat>|<tool>"`. Same file shape as 01. Test: one case per variant
+       against the wiremock provider plus the in-process echo MCP server
+       (`mcp/http` + ephemeral `url`); asserts `"<chat>|<tool>"`. Same `.wasm`
+       gate as 01.
+6. [ ] `examples/03-endpoint/` — `subscribe_endpoint` + `recv()` loop +
+       `stream_endpoint` with terminal `finish_reason`. TOML adds `[endpoint]`;
+       README shows the `curl` call. Same file shape. Test: one case per
+       variant; the test is the endpoint client (`POST /v1/chat/completions`,
+       one streamed + one buffered call). Same `.wasm` gate as 01.
+7. [ ] `examples/04-ping-pong/` — alice/bob `subscribe_agent` / `send_agent` +
+       `memory_set` handles, no provider or tooling. Two `[[agents]]`, one TOML
+       per runtime. Same file shape. Test: one case per variant pair;
+       `run_agents` completes and both agents exchanged ping/pong. Same `.wasm`
+       gate as 01.
+8. [ ] `custom_runtime.rs` — pure-Rust inline `Runtime` (`run` / `validate`)
+       bypassing the WASM engine. Test: the example runs an agent through
+       `run_agents` and asserts `Completed`.
+9. [ ] `custom_endpoint.rs` — minimal `Endpoint::serve` stub
+       (`shutdown.wait()` + session registry). Test: the example boots
+       `run_agents` with the stub endpoint and exits 0.
+10. [ ] Docs pass — `library.md`, `runtime/{rhai,js,wasm}.md`,
+        `examples/README.md`, stub removal. Test: `dev lint` (prettier, cspell,
+        markdownlint, link check).
