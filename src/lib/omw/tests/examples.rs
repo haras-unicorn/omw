@@ -5,10 +5,11 @@
 //!
 //! One test discovers its cases at runtime by listing `examples/*/`
 //! (three flavors per example: `rhai`, `js`, `wasm`), so adding or
-//! renaming an example needs no harness change. `OMW_EXAMPLE_FILTER`
-//! selects a subset by substring match on `<example>/<flavor>`
-//! (`dev brain example <example> <flavor>` sets it to exactly that;
-//! `dev examples` loops every example one by one the same way).
+//! renaming an example needs no harness change.
+//! `OMW_TEST_EXAMPLE_FILTER` selects a subset by substring match
+//! on `<example>/<flavor>` (`dev brain example <example> <flavor>`
+//! sets it to exactly that; `dev examples` loops every example
+//! one by one the same way).
 //!
 //! The four `examples/<name>/` directories do not exist yet, so the
 //! test currently finds zero cases and passes. As each brain example
@@ -35,7 +36,7 @@ fn repo_root() -> PathBuf {
 
 /// Substring selection on `<example>/<flavor>`; empty or unset runs all.
 fn selected(example: &str, flavor: &str) -> bool {
-  let Ok(filter) = std::env::var("OMW_EXAMPLE_FILTER") else {
+  let Ok(filter) = std::env::var("OMW_TEST_EXAMPLE_FILTER") else {
     return true;
   };
   if filter.is_empty() {

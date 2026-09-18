@@ -371,7 +371,7 @@ in
                 for flavor in [rhai js wasm] {
                   print $"brain example: ($dir | path basename)/($flavor)"
                   with-env {
-                    OMW_EXAMPLE_FILTER: $"($dir | path basename)/($flavor)"
+                    OMW_TEST_EXAMPLE_FILTER: $"($dir | path basename)/($flavor)"
                   } {
                     cargo test --all-features -p omw --test examples
                   }
