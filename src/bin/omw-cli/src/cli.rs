@@ -357,6 +357,22 @@ mod tests {
 
   #[test]
   #[serial(env)]
+  fn trace_buffer_tunable_default_and_override() -> anyhow::Result<()> {
+    let defaults = omw::config::Tunables::default();
+    assert_eq!(
+      defaults.trace_buffer,
+      omw::host::trace::DEFAULT_TRACE_BUFFER
+    );
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.toml");
+    std::fs::write(&path, "[tunables]\ntrace_buffer = 16\n")?;
+    let cfg = cli(path).load_config()?;
+    assert_eq!(cfg.tunables.trace_buffer, 16);
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
   fn tooling_connect_backoff_tunables_default_and_override()
   -> anyhow::Result<()> {
     let dir = tempdir()?;

@@ -45,3 +45,4 @@ ignoreWords:
   - rustls
   - rustflags
   - pageable
+  - behaviour

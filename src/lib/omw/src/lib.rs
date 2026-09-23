@@ -18,5 +18,6 @@ pub mod provider;
 pub mod runtime;
 pub mod secret;
 pub mod shutdown;
+pub mod testing;
 pub mod tooling;
-mod watch;
+pub mod watch;

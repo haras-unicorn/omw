@@ -1804,6 +1804,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "h2"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2941,6 +2947,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "os-memlock",
+ "regex",
  "reqwest",
  "rmcp",
  "rustls",
@@ -2951,6 +2958,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "toml 1.1.6+spec-1.1.0",
  "tracing",
  "uuid",
  "wasmtime",
@@ -2971,6 +2979,23 @@ dependencies = [
  "rustls",
  "schemars 1.2.2",
  "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "omw-test"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "glob",
+ "omw",
+ "rustls",
  "serial_test",
  "tempfile",
  "tokio",
@@ -4814,10 +4839,12 @@ version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
 dependencies = [
+ "indexmap 2.14.2",
  "serde_core",
  "serde_spanned",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

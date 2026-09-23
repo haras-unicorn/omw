@@ -91,8 +91,10 @@ mod tests {
 
   use super::*;
   use crate::host::bus::MessageBus;
-  use crate::tooling::mock::MockTooling;
-  use crate::tooling::{ResourceContent, ResourceInfo, Tooling};
+  use crate::tooling::mock::{FailingTooling, MockTooling};
+  use crate::tooling::{
+    ResourceContent, ResourceInfo, ResourceNotification, Tooling,
+  };
 
   #[test]
   fn pump_delivers_resource_updated_with_content_tagged_with_uuid()
@@ -140,10 +142,18 @@ mod tests {
     );
     let bus = Arc::new(MessageBus::new());
     let subs = Arc::new(CancelRegistry::new());
-    let tooling: Arc<dyn Tooling> = MockTooling::noop();
+    // The stream yields an update, but the tooling cannot read it: the pump
+    // must surface the read failure without tearing the subscription down.
+    let tooling: Arc<dyn Tooling> = Arc::new(FailingTooling);
+    let stream = futures_util::stream::once(async {
+      Ok(ResourceNotification::Updated {
+        uri: "file:///a".to_string(),
+      })
+    })
+    .chain(futures_util::stream::pending());
+    let stream = Box::pin(stream);
     let uuid = crate::host::bus::new_uuid();
 
-    let stream = rt.block_on(tooling.subscribe_resource("file:///a"))?;
     spawn_pump(
       Arc::clone(&subs),
       Arc::clone(&rt),

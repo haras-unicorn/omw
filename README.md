@@ -31,7 +31,7 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
   _resources_; resource subscriptions deliver change events.
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
-  as an opt-in flavor, as does the `js` runtime. The default `omw`
+  as an opt-in variant, as does the `js` runtime. The default `omw`
   package/binary ships with the `runtime-wasm`, `provider-openai`,
   `tooling-mcp`, and `endpoint-openai` back ends but without either script
   runtime, whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
@@ -83,7 +83,7 @@ tar -xzf omw.tar.gz
 ./omw-x86_64-linux
 ```
 
-The rhai flavor is the same shape, with the `-rhai` name:
+The rhai variant is the same shape, with the `-rhai` name:
 
 ```sh
 curl -L -o omw-rhai.tar.gz \
@@ -92,7 +92,7 @@ tar -xzf omw-rhai.tar.gz
 ./omw-rhai-x86_64-linux
 ```
 
-The js flavor is the same shape, with the `-js` name:
+The js variant is the same shape, with the `-js` name:
 
 ```sh
 curl -L -o omw-js.tar.gz \
@@ -214,6 +214,15 @@ See [The NixOS module] in the documentation for the full option set, including
 `omw` can be used as a library in your own crate by adding `omw` to dependencies
 and enabling the runtime features you want. See the [library] page for details.
 
+## Examples and testing
+
+The [examples] are runnable agents that exercise the whole stack — provider,
+tooling, endpoint, agents — with no keys, no network, and no external services,
+each in rhai, js, and wasm. The `omw-test` binary runs them deterministically
+against in-process scripted doubles and checks what every agent saw and did
+against an `[assertions]` section; the [testing] pages cover the binary, the
+assertion language, and each mock. See [examples] for the tour.
+
 ## Binary cache
 
 Builds are cached on the [haras cachix cache]. When the flake is used directly
@@ -241,6 +250,8 @@ from an overlay, add the following to your nix configuration:
 [The NixOS module]:
   https://haras-unicorn.github.io/omw/deployment/nixos/module.html
 [library]: https://haras-unicorn.github.io/omw/library.html
+[examples]: https://haras-unicorn.github.io/omw/examples.html
+[testing]: https://haras-unicorn.github.io/omw/testing/testing.html
 
 <!-- ANCHOR_END: body -->
 

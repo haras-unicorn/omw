@@ -184,6 +184,7 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
       .into_iter()
       .collect(),
     endpoint: None,
+    memory: std::collections::BTreeMap::new(),
     tunables: Tunables::default(),
   };
 
@@ -252,6 +253,7 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
       .into_iter()
       .collect(),
     endpoint: None,
+    memory: std::collections::BTreeMap::new(),
     tunables: Tunables::default(),
   };
   let run = tokio::spawn(async move {
@@ -341,6 +343,7 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
       .into_iter()
       .collect(),
     endpoint: None,
+    memory: std::collections::BTreeMap::new(),
     tunables: Tunables::default(),
   };
 

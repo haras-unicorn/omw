@@ -30,6 +30,16 @@ impl Memory {
     self.inner.insert(key, value);
   }
 
+  /// Insert several entries at once, overwriting any existing values.
+  pub(crate) fn seed(
+    &self,
+    entries: impl IntoIterator<Item = (String, String)>,
+  ) {
+    for (key, value) in entries {
+      self.inner.insert(key, value);
+    }
+  }
+
   pub fn remove(&self, key: &str) -> bool {
     self.inner.remove(key).is_some()
   }
@@ -76,5 +86,25 @@ mod tests {
     let second = Memory::new();
     first.set("k".to_string(), "v".to_string());
     assert_eq!(second.get("k"), None);
+  }
+
+  #[test]
+  fn seed_inserts_all_entries_and_overwrites() {
+    let memory = Memory::new();
+    memory.set("handle".to_string(), "old".to_string());
+    memory.seed([
+      ("handle".to_string(), "uuid-1".to_string()),
+      ("state".to_string(), "waiting".to_string()),
+    ]);
+    assert_eq!(memory.get("handle"), Some("uuid-1".to_string()));
+    assert_eq!(memory.get("state"), Some("waiting".to_string()));
+  }
+
+  #[test]
+  fn seed_survives_a_shared_handle_like_a_reload() {
+    let memory = std::sync::Arc::new(Memory::new());
+    memory.seed([("handle".to_string(), "uuid-1".to_string())]);
+    let reloaded = std::sync::Arc::clone(&memory);
+    assert_eq!(reloaded.get("handle"), Some("uuid-1".to_string()));
   }
 }

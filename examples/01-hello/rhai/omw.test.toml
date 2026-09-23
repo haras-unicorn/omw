@@ -1,0 +1,22 @@
+# 01-hello: one blocking chat against the mock provider.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with `omw-test run examples/01-hello`.
+
+[providers.openai]
+kind = "mock"
+turns = [{ content = "hello, world" }]
+
+[runtime.runtime]
+kind = "rhai"
+
+[[agents]]
+name = "alice"
+runtime = "runtime"
+script = "brain.rhai"
+
+[assertions.alice]
+outcome = "completed"
+events = [
+  { kind = "call", op = "chat" },
+]

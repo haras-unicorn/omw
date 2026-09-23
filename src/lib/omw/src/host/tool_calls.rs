@@ -89,7 +89,8 @@ mod tests {
         .build()?,
     );
     let bus = Arc::new(MessageBus::new());
-    let tooling: Arc<dyn Tooling> = MockTooling::noop();
+    let tooling: Arc<dyn Tooling> =
+      MockTooling::with_tool_call("some-tool", "ok");
     let calls = Arc::new(CancelRegistry::new());
     let uuid = crate::host::bus::new_uuid();
 
@@ -111,7 +112,7 @@ mod tests {
       Event::ToolResult(ToolResult {
         name: "some-tool".to_string(),
         arguments: r#"{"a":1}"#.to_string(),
-        result: String::new(),
+        result: "ok".to_string(),
       })
     );
     assert!(

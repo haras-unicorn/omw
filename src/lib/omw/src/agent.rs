@@ -3,7 +3,7 @@
 //! iteration (`run`) or loops it (`loop`, restarting on failure with exponential
 //! backoff).
 //!
-//! With `--watch`, a [`ScriptWatcher`](crate::watch::ScriptWatcher) tracks each
+//! With `--watch`, a [`Scripts`](crate::watch::Scripts) tracks each
 //! agent's brain script: when the file changes, the agent's current run is
 //! ended cooperatively and the next iteration starts immediately. The shared
 //! registries (providers, tooling, bus, endpoint) are kept alive across
@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures_util::future::join_all;
 use tokio::sync::mpsc;
@@ -27,9 +28,10 @@ use crate::host::ctx::AgentContext;
 use crate::host::endpoint::EndpointRegistry;
 use crate::host::events::Event;
 use crate::host::streams::{CancelRegistry, StreamRegistry};
+use crate::host::trace::{TraceEvent, TraceSender};
 use crate::runtime::RunOutcome;
 use crate::shutdown::{Shutdown, shutdown_signal};
-use crate::watch::ScriptWatcher;
+use crate::watch::Scripts;
 
 /// The back-end registries the supervisor builds entries from. Owned by
 /// the caller and passed into [`run_agents`] / [`loop_agents`], so custom
@@ -65,6 +67,31 @@ impl Default for Registries {
   }
 }
 
+/// Per-agent cooperative stop flags, shared between the testing harness (which
+/// flips them) and the agent contexts (which poll them). Empty in normal runs,
+/// so the flag is never set and behaviour is unchanged.
+#[derive(Clone, Default)]
+pub(crate) struct StopRegistry {
+  flags: Arc<dashmap::DashMap<String, Arc<AtomicBool>>>,
+}
+
+impl StopRegistry {
+  /// The stop flag for `agent`, created (unset) on first use.
+  pub(crate) fn flag(&self, agent: &str) -> Arc<AtomicBool> {
+    let entry = self
+      .flags
+      .entry(agent.to_string())
+      .or_insert_with(|| Arc::new(AtomicBool::new(false)));
+    Arc::clone(&entry)
+  }
+
+  /// Request that `agent` stop. Creates the flag if the agent has not started
+  /// yet, so an early stop still lands.
+  pub(crate) fn request_stop(&self, agent: &str) {
+    self.flag(agent).store(true, Ordering::Relaxed);
+  }
+}
+
 /// Run every configured agent once, then aggregate their results.
 ///
 /// With `watch`, a reload of an agent's script ends its current run early and
@@ -80,33 +107,138 @@ pub async fn run_agents(
   watch: bool,
   registries: &Registries,
 ) -> anyhow::Result<()> {
+  run_once(cfg, watch, registries, None).await
+}
+
+/// Like [`run_agents`] but with an active trace channel: every agent's inbox
+/// observations and outbound host calls are pushed onto `tx`, and the function
+/// returns the collected [`TraceEvent`] stream once every agent has stopped.
+///
+/// A receiver-drain task subscribes to `tx` and buffers events concurrently,
+/// so a long run does not overflow the broadcast buffer; a lagged receiver is
+/// reported as an error rather than silently dropping observations.
+pub async fn run_agents_traced(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+  tx: TraceSender,
+) -> anyhow::Result<Vec<TraceEvent>> {
+  let tx_for_run = tx.clone();
+  let rx = tx.subscribe();
+  let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+  let (collected_tx, mut collected_rx) =
+    tokio::sync::mpsc::unbounded_channel::<TraceEvent>();
+  let lagged = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let collector_lagged = Arc::clone(&lagged);
+  let collector =
+    tokio::spawn(collect_trace(rx, stop_rx, collected_tx, collector_lagged));
+  let run = run_once(cfg, watch, registries, Some(tx_for_run)).await;
+  let _ = stop_tx.send(());
+  let collected_tx = collector.await?;
+  run?;
+  if lagged.load(std::sync::atomic::Ordering::Relaxed) {
+    anyhow::bail!(
+      "trace receiver lagged: more than the broadcast buffer of events \
+       accumulated; raise the buffer size"
+    );
+  }
+  let mut events = Vec::new();
+  while let Ok(event) = collected_rx.try_recv() {
+    events.push(event);
+  }
+  drop(collected_tx);
+  Ok(events)
+}
+
+/// Run every configured agent once with an optional trace tap. The traced
+/// entry points funnel through here so `run` and `run_agents_traced` behave
+/// identically except for the tap.
+async fn run_once(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+  trace: Option<TraceSender>,
+) -> anyhow::Result<()> {
   let shutdown = Shutdown::new();
-  let shared =
-    Arc::new(Shared::build(cfg, registries, shutdown.clone()).await?);
   let signal = spawn_signal(&shutdown);
+  let result = run_agents_inner(
+    cfg,
+    watch,
+    registries,
+    trace,
+    shutdown,
+    StopRegistry::default(),
+  )
+  .await;
+  signal.abort();
+  result
+}
+
+/// The testing harness's controlled entry point: like [`run_once`] but with a
+/// caller-owned [`Shutdown`] (so the harness can force stragglers down) and a
+/// [`StopRegistry`] (so it can stop an `asserted` agent once its assertions
+/// settle). No OS signal subscription is installed.
+pub(crate) async fn run_agents_controlled(
+  cfg: &Config,
+  registries: &Registries,
+  trace: TraceSender,
+  shutdown: Shutdown,
+  stops: StopRegistry,
+) -> anyhow::Result<()> {
+  run_agents_inner(cfg, false, registries, Some(trace), shutdown, stops).await
+}
+
+/// Shared body of `run`: build the process registries, spawn one task per
+/// agent (each with its stop flag), collect results, and force the run down
+/// when `shutdown` is requested.
+async fn run_agents_inner(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+  trace: Option<TraceSender>,
+  shutdown: Shutdown,
+  stops: StopRegistry,
+) -> anyhow::Result<()> {
+  let shared = Arc::new(
+    Shared::build(cfg, registries, shutdown.clone(), trace.clone()).await?,
+  );
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
-  let results = join_all(cfg.agents.iter().map(|agent| {
+  let mut handles = Vec::new();
+  for agent in &cfg.agents {
     let config = cfg.clone();
     let agent = agent.clone();
+    let name = agent.name.clone();
     let shared = Arc::clone(&shared);
     let watch_tx = watch_tx.clone();
-    tokio::spawn(async move {
-      match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
-        Ok(AgentStop::Completed(outcome)) => Ok(outcome),
-        // Shutdown already maps to `Ok` below; keep the message for logs.
-        Ok(AgentStop::Shutdown) => Err(anyhow::anyhow!("agent shutting down")),
-        Err(error) => Err(error),
+    let stop = stops.flag(&name);
+    let handle = tokio::spawn(async move {
+      run_agent(&config, &agent, &shared, watch_tx.clone(), stop).await
+    });
+    handles.push((name, handle));
+  }
+  let mut results = Vec::with_capacity(handles.len());
+  for (name, handle) in handles {
+    let result = match handle.await {
+      Ok(Ok(AgentStop::Completed(outcome))) => {
+        if let Some(tx) = trace.as_ref() {
+          let _ = tx.send(TraceEvent::Outcome {
+            agent: name,
+            outcome,
+          });
+        }
+        Ok(())
       }
-    })
-  }))
-  .await
-  .into_iter()
-  .map(|task| match task {
-    Ok(result) => result,
-    Err(join_error) => Err(anyhow::Error::from(join_error)),
-  })
-  .collect::<Vec<_>>();
-  signal.abort();
+      // Shutdown already maps to `Ok` below; keep the message for logs.
+      Ok(Ok(AgentStop::Shutdown)) => {
+        Err(anyhow::anyhow!("agent shutting down"))
+      }
+      // A stop is terminal and not a failure.
+      Ok(Ok(AgentStop::Stopped)) => Ok(()),
+      Ok(Err(error)) => Err(error),
+      Err(join_error) => Err(anyhow::Error::from(join_error)),
+    };
+    results.push(result);
+  }
   if let Some(watcher) = watcher {
     watcher.abort();
   }
@@ -115,6 +247,45 @@ pub async fn run_agents(
     return Ok(());
   }
   collect_agent_results(results)
+}
+
+/// Concurrently drain `rx` into `collected_tx` until `stop_rx` fires, then
+/// perform a final synchronous drain of whatever is still buffered. Returns
+/// the sender half so the caller can keep the collection channel open until
+/// it has emptied it.
+async fn collect_trace(
+  mut rx: tokio::sync::broadcast::Receiver<TraceEvent>,
+  mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+  collected_tx: tokio::sync::mpsc::UnboundedSender<TraceEvent>,
+  lagged: Arc<std::sync::atomic::AtomicBool>,
+) -> tokio::sync::mpsc::UnboundedSender<TraceEvent> {
+  use std::sync::atomic::Ordering;
+  use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+  loop {
+    tokio::select! {
+      biased;
+      _ = &mut stop_rx => {
+        loop {
+          match rx.try_recv() {
+            Ok(event) => { let _ = collected_tx.send(event); }
+            Err(TryRecvError::Lagged(_)) => {
+              lagged.store(true, Ordering::Relaxed);
+            }
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+          }
+        }
+        break;
+      }
+      received = rx.recv() => match received {
+        Ok(event) => { let _ = collected_tx.send(event); }
+        Err(RecvError::Lagged(_)) => {
+          lagged.store(true, Ordering::Relaxed);
+        }
+        Err(RecvError::Closed) => break,
+      },
+    }
+  }
+  collected_tx
 }
 
 /// Run every configured agent in a loop forever, restarting immediately on
@@ -129,9 +300,31 @@ pub async fn loop_agents(
   watch: bool,
   registries: &Registries,
 ) -> anyhow::Result<()> {
+  loop_once(cfg, watch, registries, None).await
+}
+
+/// Like [`loop_agents`] but with an active trace channel. Every iteration's
+/// inbox observations, host calls and (on success) outcome are pushed onto
+/// `tx`; the function itself never returns while agents keep looping.
+pub async fn loop_agents_traced(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+  tx: TraceSender,
+) -> anyhow::Result<()> {
+  loop_once(cfg, watch, registries, Some(tx)).await
+}
+
+async fn loop_once(
+  cfg: &Config,
+  watch: bool,
+  registries: &Registries,
+  trace: Option<TraceSender>,
+) -> anyhow::Result<()> {
   let shutdown = Shutdown::new();
-  let shared =
-    Arc::new(Shared::build(cfg, registries, shutdown.clone()).await?);
+  let shared = Arc::new(
+    Shared::build(cfg, registries, shutdown.clone(), trace.clone()).await?,
+  );
   let signal = spawn_signal(&shutdown);
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   join_all(cfg.agents.iter().map(|agent| {
@@ -139,22 +332,35 @@ pub async fn loop_agents(
     let agent = agent.clone();
     let shared = Arc::clone(&shared);
     let watch_tx = watch_tx.clone();
+    let trace = trace.clone();
     tokio::spawn(async move {
       let backoff_start = config.tunables.loop_backoff_start();
       let backoff_cap = config.tunables.loop_backoff_cap();
       let mut delay = backoff_start;
+      // `loop` has no testing harness, so the stop flag is never set.
+      let stop = Arc::new(AtomicBool::new(false));
       loop {
         if shared.shutdown.is_requested() {
           tracing::info!(agent = %agent.name, "agent shutting down");
           break;
         }
-        match run_agent(&config, &agent, &shared, watch_tx.clone()).await {
+        match run_agent(&config, &agent, &shared, watch_tx.clone(), Arc::clone(&stop)).await {
           Ok(AgentStop::Completed(completed)) => {
             tracing::info!(agent = %agent.name, ?completed, "agent iteration completed");
+            if let Some(tx) = &trace {
+              let _ = tx.send(TraceEvent::Outcome {
+                agent: agent.name.clone(),
+                outcome: completed.clone(),
+              });
+            }
             delay = backoff_start;
           }
           Ok(AgentStop::Shutdown) => {
             tracing::info!(agent = %agent.name, "agent shutting down");
+            break;
+          }
+          Ok(AgentStop::Stopped) => {
+            tracing::info!(agent = %agent.name, "agent stopped");
             break;
           }
           Err(error) => {
@@ -204,15 +410,19 @@ enum RunEnd {
 enum Abort {
   Reload,
   Shutdown,
+  Stop,
 }
 
 /// How `run_agent` stops: a terminal brain outcome or a terminal shutdown.
 /// Reloads never escape: the same context retries in place with pumps
-/// cancelled, so `run` keeps agents up and `loop` never sees a reload.
+/// cancelled, so `run` keeps agents up and `loop` never sees a reload. A
+/// `Stopped` stop is the testing harness's per-agent assertion stop: terminal,
+/// never restarted, and not a failure.
 #[derive(Debug)]
 enum AgentStop {
   Completed(RunOutcome),
   Shutdown,
+  Stopped,
 }
 
 /// Build a fresh [`AgentContext`] for one agent and run its brain.
@@ -226,11 +436,12 @@ async fn run_agent(
   agent: &AgentConfig,
   shared: &Shared,
   watch_tx: Option<ReloadTx>,
+  stop: Arc<AtomicBool>,
 ) -> anyhow::Result<AgentStop> {
   let runtime = shared.runtimes.get(&agent.name).ok_or_else(|| {
     anyhow::anyhow!("agent {:?} has no built runtime", agent.name)
   })?;
-  let ctx = AgentContext::with_tunables(
+  let mut ctx = AgentContext::with_tunables(
     agent.name.clone(),
     PathBuf::from(&agent.script),
     shared.providers.clone(),
@@ -241,8 +452,15 @@ async fn run_agent(
     Arc::new(CancelRegistry::new()),
     Arc::new(CancelRegistry::new()),
     shared.endpoint_registry.clone(),
+    shared.trace.clone(),
     config.tunables,
   )?;
+  ctx.set_stop_flag(stop);
+  if let Some(seed) = config.memory.get(&agent.name) {
+    ctx
+      .memory()
+      .seed(seed.iter().map(|(key, value)| (key.clone(), value.clone())));
+  }
   // Startup gate: a broken script never produces a first iteration.
   // Without `--watch` this fails fast, same as today. With `--watch` the
   // watcher is already registered below, so an edit fixing the script
@@ -346,6 +564,16 @@ async fn run_agent(
         drain_reload(&mut reload_rx);
         continue;
       }
+      RunEnd::Aborted(Abort::Stop) => {
+        tracing::info!(agent = %agent.name, "agent stopped by the testing harness");
+        // Terminal, and no next iteration will run, so cancel this run's
+        // ownerless pumps like a shutdown does.
+        ctx.streams().cancel_all();
+        ctx.timers().cancel_all();
+        ctx.resources().cancel_all();
+        ctx.tool_calls().cancel_all();
+        return Ok(AgentStop::Stopped);
+      }
       RunEnd::Failed(error) => {
         tracing::error!(agent = %agent.name, error = %error, "agent run failed");
         return Err(error);
@@ -440,6 +668,9 @@ fn classify_finished(
   if ctx.shutdown_requested() {
     return RunEnd::Aborted(Abort::Shutdown);
   }
+  if ctx.stop_requested() {
+    return RunEnd::Aborted(Abort::Stop);
+  }
   if ctx.reload_requested() {
     return RunEnd::Aborted(Abort::Reload);
   }
@@ -499,7 +730,7 @@ fn drain_reload(reload_rx: &mut mpsc::UnboundedReceiver<()>) {
   while reload_rx.try_recv().is_ok() {}
 }
 
-/// Agent-name -> reload-sender registry fed by the [`ScriptWatcher`] pump.
+/// Agent-name -> reload-sender registry fed by the [`Scripts`] pump.
 /// Held per agent task and cloned where the supervisor needs it.
 #[derive(Clone)]
 struct ReloadTx {
@@ -539,7 +770,7 @@ fn start_watcher(
     senders: Arc::new(dashmap::DashMap::new()),
   };
   let pump_reload = reload.clone();
-  let mut watcher = ScriptWatcher::with_tunables(&cfg.agents, cfg.tunables)?;
+  let mut watcher = Scripts::with_tunables(&cfg.agents, cfg.tunables)?;
   if watcher.is_empty() {
     tracing::warn!("--watch is set but no agent script can be watched");
     return Ok((None, None));
@@ -556,7 +787,7 @@ fn start_watcher(
 /// Aggregate the results of every agent task into one, erroring if any of
 /// them failed.
 fn collect_agent_results(
-  results: Vec<anyhow::Result<RunOutcome>>,
+  results: Vec<anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
   let mut errors: Vec<String> = Vec::new();
   for result in results {
@@ -584,6 +815,8 @@ struct Shared {
   endpoint_registry: Option<Arc<EndpointRegistry>>,
   endpoint_task: Option<tokio::task::JoinHandle<()>>,
   shutdown: Shutdown,
+  /// Optional trace tap shared with every agent context and the bus.
+  trace: Option<TraceSender>,
 }
 
 impl Shared {
@@ -591,6 +824,7 @@ impl Shared {
     cfg: &Config,
     registries: &Registries,
     shutdown: Shutdown,
+    trace: Option<TraceSender>,
   ) -> anyhow::Result<Self> {
     // Secrets lock with `mlock` at construction; permit unlocked secrets for
     // the whole bootstrap when the tunable opts in (e.g. inside containers
@@ -598,6 +832,11 @@ impl Shared {
     let build = || -> anyhow::Result<_> {
       let providers = registries.providers.build_entries(cfg)?;
       let tooling = registries.tooling.build_entries(cfg)?;
+      if let Some(tx) = &trace {
+        for entry in tooling.values() {
+          entry.inner().attach_trace(tx.clone());
+        }
+      }
       let runtimes = cfg
         .agents
         .iter()
@@ -608,7 +847,10 @@ impl Shared {
             .map(|entry| (agent.name.clone(), entry))
         })
         .collect::<anyhow::Result<HashMap<_, _>>>()?;
-      let bus = Arc::new(MessageBus::with_tunables(cfg.tunables));
+      let bus = match &trace {
+        Some(tx) => Arc::new(MessageBus::with_trace(cfg.tunables, tx.clone())),
+        None => Arc::new(MessageBus::with_tunables(cfg.tunables)),
+      };
       Ok((providers, tooling, runtimes, bus))
     };
     let (providers, tooling, runtimes, bus) =
@@ -647,6 +889,7 @@ impl Shared {
       endpoint_registry,
       endpoint_task,
       shutdown,
+      trace,
     })
   }
 }
@@ -721,10 +964,7 @@ mod tests {
 
   #[test]
   fn collect_agent_results_succeeds_when_all_succeed() -> anyhow::Result<()> {
-    let results = vec![
-      Ok(RunOutcome::Completed),
-      Ok(RunOutcome::Exited("bye".to_string())),
-    ];
+    let results = vec![Ok(()), Ok(())];
     collect_agent_results(results)?;
     Ok(())
   }
@@ -750,5 +990,176 @@ mod tests {
         .to_string()
         .contains("agent task joined with an error")
     );
+  }
+
+  /// A provider/tooling-free runtime that exercises both trace taps: one
+  /// outbound call and one observed inbox event.
+  struct ProbeRuntime;
+
+  #[async_trait::async_trait]
+  impl crate::runtime::Runtime for ProbeRuntime {
+    fn kind() -> &'static str {
+      "probe"
+    }
+
+    async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
+      ctx.trace_call("probe", serde_json::json!({ "n": 1 }));
+      ctx
+        .bus()
+        .deliver(ctx.name(), "self", Event::Message("ping".to_string()));
+      let _ = ctx
+        .bus()
+        .recv(ctx.name(), std::time::Duration::from_secs(1))?;
+      Ok(RunOutcome::Completed)
+    }
+
+    async fn validate(&self, _ctx: &AgentContext) -> anyhow::Result<()> {
+      Ok(())
+    }
+  }
+
+  fn probe_config() -> Config {
+    Config {
+      agents: vec![AgentConfig {
+        name: "alice".to_string(),
+        runtime: "probe".to_string(),
+        script: "unused".to_string(),
+      }],
+      providers: HashMap::new(),
+      tooling: HashMap::new(),
+      runtime: HashMap::from([(
+        "probe".to_string(),
+        crate::config::ImplConfig {
+          kind: "probe".to_string(),
+          params: serde_json::json!({}),
+        },
+      )]),
+      endpoint: None,
+      memory: std::collections::BTreeMap::new(),
+      tunables: crate::config::Tunables::default(),
+    }
+  }
+
+  #[tokio::test]
+  async fn run_agents_traced_reports_inbound_calls_and_outcome()
+  -> anyhow::Result<()> {
+    let mut registries = Registries::new();
+    registries.runtimes.register_factory("probe", |_, _| {
+      Ok(Arc::new(ProbeRuntime) as Arc<dyn crate::runtime::Runtime>)
+    })?;
+    let (tx, _rx) =
+      tokio::sync::broadcast::channel(crate::host::trace::DEFAULT_TRACE_BUFFER);
+    let events =
+      run_agents_traced(&probe_config(), false, &registries, tx).await?;
+    let grouped = crate::host::trace::group(events);
+    let alice = grouped
+      .get("alice")
+      .ok_or_else(|| anyhow::anyhow!("missing alice trace"))?;
+    assert_eq!(alice.outcome, Some(RunOutcome::Completed));
+    assert!(alice.events.iter().any(|event| matches!(
+      event,
+      TraceEvent::Call { op, .. } if op == "probe"
+    )));
+    assert!(alice.events.iter().any(|event| matches!(
+      event,
+      TraceEvent::Inbound { event: Event::Message(message), .. }
+        if message == "ping"
+    )));
+    Ok(())
+  }
+
+  /// A runtime that exits with the value of the `handle` memory key, so a test
+  /// can observe what the brain saw at startup.
+  struct MemoryRuntime;
+
+  #[async_trait::async_trait]
+  impl crate::runtime::Runtime for MemoryRuntime {
+    fn kind() -> &'static str {
+      "memory"
+    }
+
+    async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
+      Ok(RunOutcome::Exited(
+        ctx.memory().get("handle").unwrap_or_default(),
+      ))
+    }
+
+    async fn validate(&self, _ctx: &AgentContext) -> anyhow::Result<()> {
+      Ok(())
+    }
+  }
+
+  fn memory_config(
+    memory: std::collections::BTreeMap<
+      String,
+      std::collections::BTreeMap<String, String>,
+    >,
+  ) -> Config {
+    Config {
+      agents: vec![
+        AgentConfig {
+          name: "alice".to_string(),
+          runtime: "memory".to_string(),
+          script: "unused".to_string(),
+        },
+        AgentConfig {
+          name: "bob".to_string(),
+          runtime: "memory".to_string(),
+          script: "unused".to_string(),
+        },
+      ],
+      providers: HashMap::new(),
+      tooling: HashMap::new(),
+      runtime: HashMap::from([(
+        "memory".to_string(),
+        crate::config::ImplConfig {
+          kind: "memory".to_string(),
+          params: serde_json::json!({}),
+        },
+      )]),
+      endpoint: None,
+      memory,
+      tunables: crate::config::Tunables::default(),
+    }
+  }
+
+  #[tokio::test]
+  async fn seeded_memory_is_visible_to_the_brain_and_per_agent()
+  -> anyhow::Result<()> {
+    use std::collections::BTreeMap;
+
+    let mut registries = Registries::new();
+    registries.runtimes.register_factory("memory", |_, _| {
+      Ok(Arc::new(MemoryRuntime) as Arc<dyn crate::runtime::Runtime>)
+    })?;
+    let config = memory_config(BTreeMap::from([
+      (
+        "alice".to_string(),
+        BTreeMap::from([("handle".to_string(), "alice-uuid".to_string())]),
+      ),
+      (
+        "bob".to_string(),
+        BTreeMap::from([("handle".to_string(), "bob-uuid".to_string())]),
+      ),
+    ]));
+    let (tx, _rx) =
+      tokio::sync::broadcast::channel(crate::host::trace::DEFAULT_TRACE_BUFFER);
+    let events = run_agents_traced(&config, false, &registries, tx).await?;
+    let grouped = crate::host::trace::group(events);
+    assert_eq!(
+      grouped
+        .get("alice")
+        .ok_or_else(|| anyhow::anyhow!("missing alice trace"))?
+        .outcome,
+      Some(RunOutcome::Exited("alice-uuid".to_string()))
+    );
+    assert_eq!(
+      grouped
+        .get("bob")
+        .ok_or_else(|| anyhow::anyhow!("missing bob trace"))?
+        .outcome,
+      Some(RunOutcome::Exited("bob-uuid".to_string()))
+    );
+    Ok(())
   }
 }

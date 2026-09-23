@@ -40,3 +40,5 @@ ignoreWords:
   - schemars
   - rustls
   - serde
+  - embedders
+  - embedder

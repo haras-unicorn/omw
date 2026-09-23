@@ -1,0 +1,41 @@
+# 08-endpoint-order: the endpoint mock gates a request on a trace event.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/08-endpoint-order`.
+
+[providers.openai]
+kind = "mock"
+turns = [{ content = "ack" }]
+
+[endpoint]
+kind = "mock"
+# `after` makes the request wait for the agent's `chat` call, so the test can
+# assert the inbound request arrives at a specific point in the trace.
+requests = [
+  {
+    model = "gpt-4o",
+    messages = [{ content = "hi" }],
+    stream = true,
+    after = { kind = "call", op = "chat" },
+  },
+]
+
+[runtime.runtime]
+kind = "rhai"
+
+[[agents]]
+name = "server"
+runtime = "runtime"
+script = "brain.rhai"
+
+[assertions.server]
+outcome = "completed"
+events = [
+  { kind = "call", op = "subscribe_endpoint" },
+  { kind = "call", op = "chat" },
+  { kind = "inbound", event = "endpoint-message" },
+  { kind = "call", op = "stream_endpoint", detail = { content = "ack" } },
+  { kind = "call", op = "stream_endpoint", detail = { finish_reason = "stop" } },
+  { kind = "call", op = "unsubscribe_endpoint" },
+]

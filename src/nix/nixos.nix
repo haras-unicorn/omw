@@ -25,7 +25,7 @@ let
           ];
           default = "default";
           description = ''
-            Which package flavor to run: `default` (the crates.io-equivalent
+            Which package variant to run: `default` (the crates.io-equivalent
             build, without the rhai runtime), `rhai` (adds the bundled rhai
             interpreter via the `omw-rhai` package) or `js` (adds the bundled
             js interpreter via the `omw-js` package). Overridable with `package`.
@@ -40,7 +40,7 @@ let
             else if cfg.variant == "js" then
               self.packages.${pkgs.stdenv.hostPlatform.system}.omw-js
             else
-              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+              self.packages.${pkgs.stdenv.hostPlatform.system}.omw;
           description = "The omw package to run.";
         };
 

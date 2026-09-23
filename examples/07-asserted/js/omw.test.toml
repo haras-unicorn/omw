@@ -1,0 +1,24 @@
+# 07-asserted: `outcome = "asserted"` stops a brain that would otherwise loop.
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/07-asserted`.
+
+[runtime.runtime]
+kind = "js"
+
+[[agents]]
+name = "alice"
+runtime = "runtime"
+script = "brain.js"
+
+# The brain subscribes to itself, pings itself, then loops on `recv` forever.
+# `outcome = "asserted"` stops it as soon as these events settle, so the test
+# checks a prefix of an endless run instead of waiting for it to exit.
+[assertions.alice]
+outcome = "asserted"
+events = [
+  { kind = "call", op = "subscribe_agent" },
+  { kind = "call", op = "send_agent" },
+  { kind = "inbound", event = "message" },
+]

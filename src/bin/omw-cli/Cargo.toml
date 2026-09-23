@@ -29,8 +29,8 @@ tracing-subscriber.workspace = true
 schemars.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
-clap = { version = "4.6.6", features = ["derive"] }
-config = { version = "0.15.25" }
+clap.workspace = true
+config.workspace = true
 omw = { version = "0.1.1", path = "../../lib/omw", default-features = false }
 
 [dev-dependencies]

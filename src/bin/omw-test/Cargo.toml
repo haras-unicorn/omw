@@ -1,0 +1,36 @@
+[package]
+name = "omw-test"
+version = "0.1.1"
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[features]
+default = ["runtime-wasm", "runtime-rhai", "runtime-js"]
+runtime-wasm = ["omw/runtime-wasm"]
+runtime-rhai = ["omw/runtime-rhai"]
+runtime-js = ["omw/runtime-js"]
+# Internal helper: cross-build single-file rust brains for wasm32-wasip2. Only
+# the dev shell enables it; it assumes the in-repo SDK layout and is not a
+# supported user workflow.
+compile-wasm = []
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rustls.workspace = true
+clap.workspace = true
+config.workspace = true
+omw = { version = "0.1.1", path = "../../lib/omw", default-features = false, features = [
+  "mock",
+] }
+glob = "0.3.4"
+
+[dev-dependencies]
+serial_test = "4.0.1"
+tempfile = "3.27.0"

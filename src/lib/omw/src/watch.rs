@@ -1,23 +1,94 @@
-//! Hot-reload file watching: maps each agent's brain script to the agents
-//! that use it and reports which agents to restart when a script changes.
+//! Debounced filesystem watching.
 //!
-//! Parent directories are watched (non-recursively) so editors that save
-//! atomically (`write temp + rename`) still trigger, and events are debounced
-//! so a single save restarts an agent once. State preservation is the
-//! supervisor's job: only agent names are reported here; the supervisor keeps
-//! the shared [`MessageBus`](crate::host::bus::MessageBus) (inboxes,
+//! [`Watcher`] is the general primitive: point it at one or more paths with a
+//! debounce window and await the next batch of changed paths. [`Scripts`]
+//! builds on it to map each agent's brain script to the agents running it, so
+//! a supervisor can restart just the affected agents on change.
+//!
+//! Parent directories are watched (non-recursively) by [`Scripts`] so editors
+//! that save atomically (`write temp + rename`) still trigger, and events are
+//! debounced so a single save restarts an agent once. State preservation is
+//! the supervisor's job: only agent names are reported here; the supervisor
+//! keeps the shared [`MessageBus`](crate::host::bus::MessageBus) (inboxes,
 //! subscriptions) alive and restarts just the run.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context as _;
-use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_mini::notify::RecommendedWatcher;
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 use tokio::sync::mpsc;
 
 use crate::config::{AgentConfig, Tunables};
+
+pub use notify_debouncer_mini::notify::RecursiveMode;
+
+/// A debounced watcher over zero or more paths.
+pub struct Watcher {
+  _debouncer: Debouncer<RecommendedWatcher>,
+  rx: mpsc::UnboundedReceiver<Vec<PathBuf>>,
+}
+
+impl Watcher {
+  /// Create a watcher with no paths yet; add them with [`add`](Self::add).
+  pub fn new(debounce: Duration) -> anyhow::Result<Self> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let debouncer = new_debouncer(
+      debounce,
+      move |result: DebounceEventResult| match result {
+        Ok(events) => {
+          let paths = events
+            .into_iter()
+            .map(|event| event.path)
+            .collect::<Vec<_>>();
+          let _ = tx.send(paths);
+        }
+        Err(error) => {
+          tracing::warn!(error = %error, "watcher error");
+        }
+      },
+    )
+    .context("failed to create the watcher")?;
+    Ok(Self {
+      _debouncer: debouncer,
+      rx,
+    })
+  }
+
+  /// Create a watcher over `path` watched with `mode`.
+  pub fn watch(
+    path: &Path,
+    mode: RecursiveMode,
+    debounce: Duration,
+  ) -> anyhow::Result<Self> {
+    let mut watcher = Self::new(debounce)?;
+    watcher.add(path, mode)?;
+    Ok(watcher)
+  }
+
+  /// Add another `path` to this watcher.
+  pub fn add(
+    &mut self,
+    path: &Path,
+    mode: RecursiveMode,
+  ) -> anyhow::Result<()> {
+    notify_debouncer_mini::notify::Watcher::watch(
+      self._debouncer.watcher(),
+      path,
+      mode,
+    )
+    .with_context(|| format!("failed to watch {}", path.display()))
+  }
+
+  /// Wait for the next debounced batch of changed paths. `None` means the
+  /// watcher is gone.
+  pub async fn next_change(&mut self) -> Option<Vec<PathBuf>> {
+    self.rx.recv().await
+  }
+}
 
 /// One watched script file plus every agent running it.
 #[derive(Debug)]
@@ -31,13 +102,12 @@ struct WatchedScript {
 }
 
 /// Watches every agent script in `agents`, reporting agent names to restart.
-pub struct ScriptWatcher {
-  _debouncer: Debouncer<RecommendedWatcher>,
-  rx: mpsc::UnboundedReceiver<Vec<PathBuf>>,
+pub struct Scripts {
+  watcher: Watcher,
   scripts: Vec<WatchedScript>,
 }
 
-impl ScriptWatcher {
+impl Scripts {
   /// Start watching the scripts of `agents`. Scripts whose parent directory
   /// does not exist are skipped with a warning.
   #[cfg(test)]
@@ -99,35 +169,11 @@ impl ScriptWatcher {
       });
     }
 
-    let (tx, rx) = mpsc::unbounded_channel();
-    let mut debouncer = new_debouncer(
-      tunables.watch_debounce(),
-      move |result: DebounceEventResult| match result {
-        Ok(events) => {
-          let paths = events
-            .into_iter()
-            .map(|event| event.path)
-            .collect::<Vec<_>>();
-          let _ = tx.send(paths);
-        }
-        Err(error) => {
-          tracing::warn!(error = %error, "script watcher error");
-        }
-      },
-    )
-    .context("failed to create the script watcher")?;
-
+    let mut watcher = Watcher::new(tunables.watch_debounce())?;
     let mut dirs: HashSet<PathBuf> = HashSet::new();
     for script in &scripts {
       if dirs.insert(script.parent.clone()) {
-        notify_debouncer_mini::notify::Watcher::watch(
-          debouncer.watcher(),
-          &script.parent,
-          RecursiveMode::NonRecursive,
-        )
-        .with_context(|| {
-          format!("failed to watch {}", script.parent.display())
-        })?;
+        watcher.add(&script.parent, RecursiveMode::NonRecursive)?;
       }
     }
     tracing::info!(
@@ -135,11 +181,7 @@ impl ScriptWatcher {
       dirs = dirs.len(),
       "watching agent scripts for hot reload"
     );
-    Ok(Self {
-      _debouncer: debouncer,
-      rx,
-      scripts,
-    })
+    Ok(Self { watcher, scripts })
   }
 
   /// Whether no script could be watched.
@@ -151,7 +193,7 @@ impl ScriptWatcher {
   /// sorted order. Events for unrelated files in watched directories are
   /// skipped internally; `None` means the watcher is gone.
   pub async fn next_reload(&mut self) -> Option<Vec<String>> {
-    while let Some(paths) = self.rx.recv().await {
+    while let Some(paths) = self.watcher.next_change().await {
       let agents = resolve(&paths, &self.scripts);
       if agents.is_empty() {
         continue;
@@ -160,6 +202,21 @@ impl ScriptWatcher {
       return Some(agents);
     }
     None
+  }
+}
+
+/// The directory watched recursively for `path`: the directory itself, or a
+/// file's parent. Convenience for [`Watcher::watch`] with
+/// [`RecursiveMode::Recursive`].
+pub fn scope(path: &Path) -> PathBuf {
+  if path.is_dir() {
+    path.to_path_buf()
+  } else {
+    path
+      .parent()
+      .filter(|parent| !parent.as_os_str().is_empty())
+      .unwrap_or(Path::new("."))
+      .to_path_buf()
   }
 }
 
@@ -206,7 +263,6 @@ fn resolve(paths: &[PathBuf], scripts: &[WatchedScript]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::time::Duration;
 
   fn agent(name: &str, script: &str) -> AgentConfig {
     AgentConfig {
@@ -230,6 +286,28 @@ mod tests {
   }
 
   #[test]
+  fn scope_of_a_directory_is_itself() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    assert_eq!(scope(dir.path()), dir.path().to_path_buf());
+    Ok(())
+  }
+
+  #[test]
+  fn scope_of_a_file_is_its_parent() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("case/omw.test.toml");
+    std::fs::create_dir_all(dir.path().join("case"))?;
+    std::fs::write(&file, "")?;
+    assert_eq!(scope(&file), dir.path().join("case"));
+    Ok(())
+  }
+
+  #[test]
+  fn scope_of_a_bare_file_is_the_current_directory() {
+    assert_eq!(scope(Path::new("omw.test.toml")), PathBuf::from("."));
+  }
+
+  #[test]
   fn resolve_matches_scripts_and_dedupes_agents() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let brain = dir.path().join("brain.rhai");
@@ -250,19 +328,19 @@ mod tests {
     let brain = dir.path().join("brain.rhai");
     std::fs::write(&brain, "1")?;
     let script = brain.to_string_lossy().to_string();
-    let watcher =
-      ScriptWatcher::new(&[agent("alice", &script), agent("bob", &script)])?;
-    assert!(!watcher.is_empty());
-    assert_eq!(watcher.scripts.len(), 1);
-    assert_eq!(watcher.scripts[0].agents, vec!["alice", "bob"]);
+    let scripts =
+      Scripts::new(&[agent("alice", &script), agent("bob", &script)])?;
+    assert!(!scripts.is_empty());
+    assert_eq!(scripts.scripts.len(), 1);
+    assert_eq!(scripts.scripts[0].agents, vec!["alice", "bob"]);
     Ok(())
   }
 
   #[test]
   fn new_skips_scripts_without_a_watchable_directory() -> anyhow::Result<()> {
-    let watcher =
-      ScriptWatcher::new(&[agent("alice", "/nonexistent-dir-omw/brain.rhai")])?;
-    assert!(watcher.is_empty());
+    let scripts =
+      Scripts::new(&[agent("alice", "/nonexistent-dir-omw/brain.rhai")])?;
+    assert!(scripts.is_empty());
     Ok(())
   }
 
@@ -271,11 +349,11 @@ mod tests {
     let dir = tempfile::tempdir()?;
     let brain = dir.path().join("brain.rhai");
     std::fs::write(&brain, "v1")?;
-    let mut watcher =
-      ScriptWatcher::new(&[agent("alice", &brain.to_string_lossy())])?;
+    let mut scripts =
+      Scripts::new(&[agent("alice", &brain.to_string_lossy())])?;
     std::fs::write(&brain, "v2")?;
     let reload =
-      tokio::time::timeout(Duration::from_secs(10), watcher.next_reload())
+      tokio::time::timeout(Duration::from_secs(10), scripts.next_reload())
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting for a reload"))?
         .ok_or_else(|| anyhow::anyhow!("watcher closed"))?;
@@ -289,12 +367,11 @@ mod tests {
     let dir = tempfile::tempdir()?;
     let brain = dir.path().join("brain.rhai");
     std::fs::write(&brain, "v1")?;
-    let mut watcher =
-      ScriptWatcher::new(&[agent("alice", &brain.to_string_lossy())])
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let mut scripts = Scripts::new(&[agent("alice", &brain.to_string_lossy())])
+      .map_err(|e| anyhow::anyhow!(e))?;
     std::fs::write(dir.path().join("other.rhai"), "unrelated")?;
     assert!(
-      tokio::time::timeout(Duration::from_secs(2), watcher.next_reload())
+      tokio::time::timeout(Duration::from_secs(2), scripts.next_reload())
         .await
         .is_err(),
       "an unrelated file should not trigger a reload"

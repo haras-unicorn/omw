@@ -291,7 +291,7 @@ mod tests {
   #[test]
   fn interpreter_routes_to_provider_tooling_and_host() -> anyhow::Result<()> {
     let provider = MockProvider::noop();
-    let tooling = MockTooling::noop();
+    let tooling = MockTooling::with_tool_call("some-tool", "ok");
     let mut providers = HashMap::new();
     providers.insert(
       "mock-provider".to_string(),
@@ -324,7 +324,7 @@ mod tests {
 
     let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
     let outcome = run(&runtime, &ctx)?;
-    assert_eq!(outcome, RunOutcome::Exited("|".to_string()));
+    assert_eq!(outcome, RunOutcome::Exited("|ok".to_string()));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
       .enable_all()
@@ -346,7 +346,7 @@ mod tests {
 
   #[test]
   fn tooling_call_tool_delivers_a_tool_result_event() -> anyhow::Result<()> {
-    let tooling = MockTooling::noop();
+    let tooling = MockTooling::with_tool_call("some-tool", "ok");
     let tooling_map = HashMap::from([(
       "mock-tooling".to_string(),
       crate::tooling::ToolingEntry::new("mock-tooling", tooling),
@@ -369,7 +369,7 @@ mod tests {
     let outcome = run(&runtime, &ctx)?;
     assert_eq!(
       outcome,
-      RunOutcome::Exited("true|tool-result|".to_string()),
+      RunOutcome::Exited("true|tool-result|ok".to_string()),
       "call_tool should return a handle and recv should yield a tool-result event"
     );
     Ok(())
@@ -380,7 +380,7 @@ mod tests {
     let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
-      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+      &serde_json::json!({ "turns": [{ "content": "Hello, world" }] }),
     )?;
     let mut providers = HashMap::new();
     providers.insert("mock-provider".to_string(), provider);
@@ -416,7 +416,7 @@ mod tests {
     let provider = crate::provider::Registry::default().build(
       "mock-provider",
       "mock",
-      &serde_json::json!({ "responses": ["Hello", ", world"] }),
+      &serde_json::json!({ "turns": [{ "content": "Hello, world" }] }),
     )?;
     let mut providers = HashMap::new();
     providers.insert("mock-provider".to_string(), provider);
@@ -438,6 +438,81 @@ mod tests {
       RunOutcome::Exited("Hello, world|0".to_string()),
       "blocking chat should return the accumulated content in-band"
     );
+    Ok(())
+  }
+
+  #[test]
+  fn provider_chat_traces_messages_and_tools() -> anyhow::Result<()> {
+    let provider = crate::provider::Registry::default().build(
+      "mock-provider",
+      "mock",
+      &serde_json::json!({ "turns": [{ "content": "ok" }] }),
+    )?;
+    let mut providers = HashMap::new();
+    providers.insert("mock-provider".to_string(), provider);
+
+    let script = r#"
+      let p = omw::provider::get("mock-provider");
+      p.chat(
+        "gpt-test",
+        [ #{ role: "system", content: "be brief" },
+          #{ role: "user", content: "hi" } ],
+        [ #{ name: "echo", description: "echo", input_schema: "{}" } ],
+      );
+      "done"
+    "#;
+    let dir = tempdir()?;
+    let path = dir.path().join("trace_chat.rhai");
+    std::fs::write(&path, script)?;
+
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let bus = Arc::new(MessageBus::with_trace(
+      crate::config::Tunables::default(),
+      tx.clone(),
+    ));
+    let ctx = AgentContext::with_tunables(
+      "test-agent".to_string(),
+      path,
+      providers,
+      HashMap::new(),
+      bus,
+      Arc::new(crate::host::streams::StreamRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      Arc::new(crate::host::streams::CancelRegistry::new()),
+      None,
+      Some(tx),
+      crate::config::Tunables::default(),
+    )?;
+
+    let runtime = RhaiWasmRuntime::new("".to_owned(), Config::default())?;
+    run(&runtime, &ctx)?;
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+      events.push(event);
+    }
+    let expected = crate::testing::parse(
+      r#"
+        [assertions.test-agent]
+        events = [
+          {
+            kind = "call",
+            op = "chat",
+            detail = {
+              provider = "mock-provider",
+              model = "gpt-test",
+              messages = [
+                { role = "system", content = "be brief" },
+                { role = "user", content = "hi" },
+              ],
+              tools = [ { name = "echo" } ],
+            },
+          },
+        ]
+      "#,
+    )?;
+    crate::testing::check(&crate::testing::collect(events), &expected)?;
     Ok(())
   }
 

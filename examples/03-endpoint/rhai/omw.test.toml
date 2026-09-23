@@ -1,0 +1,39 @@
+# 03-endpoint: an agent that serves the endpoint under "gpt-4o".
+#
+# Shared across variants. `dev format` expands this into each
+# `<variant>/omw.test.toml`; run the case with
+# `omw-test run examples/03-endpoint`.
+
+[providers.openai]
+kind = "mock"
+turns = [{ content = "hello" }, { content = "bye" }]
+
+[runtime.runtime]
+kind = "rhai"
+
+[endpoint]
+kind = "mock"
+requests = [
+  { model = "gpt-4o", messages = [{ content = "hi" }], stream = true },
+  { model = "gpt-4o", messages = [{ content = "bye" }], stream = false },
+]
+
+[[agents]]
+name = "server"
+runtime = "runtime"
+script = "brain.rhai"
+
+[assertions.server]
+outcome = "completed"
+events = [
+  { kind = "call", op = "subscribe_endpoint" },
+  { kind = "inbound", event = "endpoint-message" },
+  { kind = "call", op = "chat" },
+  { kind = "call", op = "stream_endpoint", detail = { content = "hello" } },
+  { kind = "call", op = "stream_endpoint", detail = { finish_reason = "stop" } },
+  { kind = "inbound", event = "endpoint-message" },
+  { kind = "call", op = "chat" },
+  { kind = "call", op = "stream_endpoint", detail = { content = "bye" } },
+  { kind = "call", op = "stream_endpoint", detail = { finish_reason = "stop" } },
+  { kind = "call", op = "unsubscribe_endpoint" },
+]

@@ -13,10 +13,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 The default features are `runtime-wasm`, `provider-openai`, `tooling-mcp`, and
 `endpoint-openai`. The `runtime-rhai` and `runtime-js` script runtimes are
-opt-in features; a `--no-default-features` build yields empty registries.
-(Runnable `examples/` programs land in a separate PR.) The CLI-only stack
-(`clap`, `config`, `tracing-subscriber`) lives in the separate `omw-cli` crate,
-so library consumers never pull it in.
+opt-in features; a `--no-default-features` build yields empty registries. The
+CLI-only stack (`clap`, `config`, `tracing-subscriber`) lives in the separate
+`omw-cli` crate, so library consumers never pull it in.
 
 ## TLS setup
 
@@ -66,6 +65,50 @@ async fn main() -> anyhow::Result<()> {
 restart agents on failure instead of running once. `Config` is impl-agnostic
 (`kind` plus opaque params per entry), so unknown `kind` values fail at `build`
 time with the list of registered kinds.
+
+## Running
+
+`run_agents(&cfg, watch, &registries)` runs every agent once and returns when
+they all stop. `loop_agents` keeps every agent running forever, restarting on
+success immediately and on failure with exponential backoff (the
+`loop_backoff_*` tunables). The `watch` flag enables hot reload: with it, a
+brain-script change restarts just the affected agent (without backoff) while the
+shared bus, inboxes, and subscriptions survive.
+
+Both have `_traced` variants that take a `TraceSender`. `run_agents_traced`
+returns the collected `Vec<TraceEvent>` once the run ends (and errors if the
+receiver lagged); `loop_agents_traced` streams events as they happen and never
+returns while agents keep looping. The trace is the same stream `omw-test`
+asserts on. Subscribe to it yourself to build a live view (a logger, a UI): the
+`observability` library example streams every event and then verifies the same
+run with `check`.
+
+## Testing
+
+`omw::testing` is the deterministic brain-testing substrate. `Assertions` is the
+parsed `[assertions]` model, with `parse` reading it from a config string and
+`collect` gathering a recorded trace into something `check` can verify.
+`Harness` drives a `Config` through the controlled run path against the
+in-config `kind = "mock"` doubles, consuming the trace live, stopping
+`outcome = "asserted"` agents as their assertions settle, and returning a
+`Report` of per-agent verdicts. The `omw-test` binary is a thin CLI over this.
+
+See [testing](./testing/testing.md) for the assertion language and each mock.
+
+## Watching
+
+`omw::watch` exposes the filesystem watching that powers hot reload.
+`Watcher::watch(path, RecursiveMode, debounce)` is the general primitive: point
+it at one or more paths (add more with `Watcher::add`) and await the next
+debounced batch with `next_change()`. `scope` turns a file or directory into the
+directory `Watcher::watch` should watch. `Scripts` builds on `Watcher` to map
+each agent's brain script to the agents running it, so a supervisor can restart
+just the affected agents (`next_reload()` yields sorted agent names). All are
+re-exported from the prelude.
+
+The debounce window is the `watch_debounce_ms` tunable (see
+[tunables](./tunables.md)). `omw-test` reads its tunables from the `OMW_TEST__`
+environment overlay and holds one `Watcher` across reruns.
 
 ## Custom back ends
 
@@ -168,5 +211,6 @@ cap. See [tunables](./tunables.md).
 `ChatDelta`, `ChatResult`, `ToolCall`, `Tool`, `ResourceInfo`,
 `ResourceContent`, `ResourceNotification`), the `*Entry` handles, `RunOutcome`,
 `Event` / `EventEnvelope`, `AgentContext` (`name()` only), `Secret`, `Shutdown`,
-`run_agents` / `loop_agents`, plus the `register_*` macros. The macros are also
-`#[macro_export]` at the crate root (`omw::register_providers!`, …).
+`run_agents` / `loop_agents`, the `Watcher` / `Scripts` watcher types, plus the
+`register_*` macros. The macros are also `#[macro_export]` at the crate root
+(`omw::register_providers!`, …).

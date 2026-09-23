@@ -144,26 +144,30 @@ let
         ln -sf "${vendor}/config.toml" .cargo/config.toml
       '';
 
-      buildVariant =
-        variant:
+      buildPackage =
+        {
+          crate,
+          program,
+          variant,
+          format,
+        }:
         let
           features = if variant == null then "" else "runtime-${variant}";
 
-          depArgs =
-            staticDepArgs
-            // lib.optionalAttrs (variant != null) {
-              cargoExtraArgs = "-p omw-cli" + " --features ${features}" + " --target ${staticTarget}";
-            };
+          featureArgs = if variant == null then "" else "--features ${features}";
+
+          depArgs = staticDepArgs // {
+            cargoExtraArgs = "-p ${crate} ${featureArgs} --target ${staticTarget}";
+          };
 
           suffix = if variant == null then "" else "-${variant}";
-        in
-        rec {
+
           unwrapped = craneLib.buildPackage (
             depArgs
             // {
               cargoArtifacts = craneLib.buildDepsOnly depArgs;
-              pname = "omw";
-              meta.mainProgram = "omw";
+              pname = program;
+              meta.mainProgram = program;
             }
           );
 
@@ -175,11 +179,11 @@ let
                   omw-unwrapped,
                 }:
                 symlinkJoin {
-                  name = "omw";
+                  name = program;
                   paths = [
                     omw-unwrapped
                   ];
-                  meta.mainProgram = "omw";
+                  meta.mainProgram = program;
                 }
               )
               {
@@ -187,22 +191,112 @@ let
               };
 
           tarball =
-            pkgs.runCommand "omw${suffix}-${system}.tar.gz"
+            pkgs.runCommand "${program}${suffix}-${system}.tar.gz"
               {
                 nativeBuildInputs = [ pkgs.gnutar ];
               }
               ''
                 mkdir -p staging
-                cp -L "${unwrapped}/bin/omw" "staging/omw${suffix}-${system}"
-                tar -czf "$out" -C staging "omw${suffix}-${system}"
+                cp -L "${unwrapped}/bin/${program}" "staging/${program}${suffix}-${system}"
+                tar -czf "$out" -C staging "${program}${suffix}-${system}"
               '';
-        };
+        in
+        if format == "unwrapped" then
+          unwrapped
+        else if format == "wrapped" then
+          wrapped
+        else if format == "tarball" then
+          tarball
+        else
+          builtins.throw "unknown format ${format}";
 
-      default = buildVariant null;
+      binaries = [
+        {
+          crate = "omw-cli";
+          program = "omw";
+        }
+        {
+          crate = "omw-test";
+          program = "omw-test";
+        }
+      ];
 
-      rhai = buildVariant "rhai";
+      variants = [
+        {
+          key = null;
+          suffix = "";
+        }
+        {
+          key = "rhai";
+          suffix = "-rhai";
+        }
+        {
+          key = "js";
+          suffix = "-js";
+        }
+      ];
 
-      js = buildVariant "js";
+      formats = [
+        {
+          key = "unwrapped";
+          suffix = "-unwrapped";
+        }
+        {
+          key = "wrapped";
+          suffix = "";
+        }
+        {
+          key = "tarball";
+          suffix = "-tarball";
+        }
+      ];
+
+      buildMatrix =
+        {
+          filterPackages ? _: true,
+          mapPackages ?
+            {
+              package,
+              binary,
+              variant,
+              format,
+              ...
+            }:
+            {
+              name = "${binary.program}${variant.suffix}${format.suffix}";
+              value = package;
+            },
+        }:
+        builtins.listToAttrs (
+          builtins.map mapPackages (
+            builtins.filter filterPackages (
+              builtins.map
+                (
+                  {
+                    binary,
+                    variant,
+                    format,
+                  }:
+                  {
+                    inherit binary variant format;
+                    package = buildPackage {
+                      crate = binary.crate;
+                      program = binary.program;
+                      variant = variant.key;
+                      format = format.key;
+                    };
+                  }
+                )
+                (
+                  lib.cartesianProduct {
+                    binary = binaries;
+                    variant = variants;
+                    format = formats;
+                  }
+                )
+            )
+          )
+        );
     in
     {
       inherit
@@ -211,19 +305,12 @@ let
         nativeBuildInputs
         shellHook
         staticTarget
+        binaries
+        variants
+        formats
+        buildPackage
+        buildMatrix
         ;
-
-      unwrapped = default.unwrapped;
-      package = default.wrapped;
-      tarball = default.tarball;
-
-      rhai-unwrapped = rhai.unwrapped;
-      rhai-package = rhai.wrapped;
-      rhai-tarball = rhai.tarball;
-
-      js-unwrapped = js.unwrapped;
-      js-package = js.wrapped;
-      js-tarball = js.tarball;
     };
 in
 {
@@ -234,24 +321,7 @@ in
 
   flake.overlays =
     let
-      overlay =
-        final: prev:
-        let
-          packages = makePackages final;
-        in
-        {
-          omw = packages.package;
-          omw-unwrapped = packages.unwrapped;
-          omw-tarball = packages.tarball;
-
-          omw-rhai = packages.rhai-package;
-          omw-rhai-unwrapped = packages.rhai-unwrapped;
-          omw-rhai-tarball = packages.rhai-tarball;
-
-          omw-js = packages.js-package;
-          omw-js-unwrapped = packages.js-unwrapped;
-          omw-js-tarball = packages.js-tarball;
-        };
+      overlay = final: prev: (makePackages final).buildMatrix { };
     in
     {
       default = overlay;
@@ -312,180 +382,10 @@ in
             ]
             ++ packages.nativeBuildInputs;
 
-          devScriptText = pkgs.writeText "omw-dev.nu" ''
-            def "main" [] {
-              dev -h
-            }
-
-            def "main test" [] {
-              cd (flake-root)
-              cargo clippy --all-features -- -D warnings
-              cargo test --all-features
-            }
-
-            def "main test fast" [] {
-              cd (flake-root)
-              with-env {
-                OMW_TEST_WASM_ENGINE_NON_NATIVE: "0"
-                OMW_TEST_WASM_RUNTIME_NON_NATIVE: "0"
-                OMW_TEST_OPENAI_LLAMACPP: "0"
-                OMW_TEST_MCP_EVERYTHING: "0"
-              } {
-                cargo clippy --all-features -- -D warnings
-                cargo test --all-features
-              }
-            }
-
-            def --wrapped "main test nixos" [test: string, ...args: string] {
-              cd (flake-root)
-              (nix build
-                $".#checks.(uname | get machine)-linux.($test)"
-                ...($args))
-            }
-
-            def "main format" [] {
-              cd (flake-root)
-              for crate in (
-                (ls ./src/lib | get name)
-                ++ (ls ./src/wasm | get name)
-              ) {
-                mkdir $"($crate)/wit"
-                cp -f ./assets/omw.wit $"($crate)/wit"
-              }
-              open --raw (nix build --no-link --print-out-paths ".#options")
-                | prettier --parser markdown
-                | save -f "./docs/deployment/nixos/options.md"
-              open --raw (nix build --no-link --print-out-paths ".#schema")
-                | prettier --parser json
-                | save -f "./assets/schema.json"
-              prettier --write .
-              nixfmt ...(fd '.*\.nix$' . | lines)
-              cargo fmt --all
-              cargo clippy --all-features --fix --allow-dirty
-            }
-
-            def "main lint" [] {
-              cd (flake-root)
-              for crate in (
-                (ls ./src/lib | get name)
-                ++ (ls ./src/wasm | get name)
-              ) {
-                if ((open --raw ./assets/omw.wit)
-                  != (open --raw $"($crate)/wit/omw.wit")) {
-                  print -e $"($crate)/wit/omw.wit does not match assets/omw.wit"
-                  exit 1
-                }
-              }
-              if ((open --raw ./docs/deployment/nixos/options.md
-                | str trim)
-                != (open --raw (nix build --no-link --print-out-paths ".#options")
-                | prettier --parser markdown
-                | str trim)) {
-                print -e "options.md doesn't match generated"
-                exit 1
-              }
-              if ((open --raw ./assets/schema.json
-                | str trim)
-                != (open --raw (nix build --no-link --print-out-paths ".#schema")
-                | prettier --parser json
-                | str trim)) {
-                print -e "schema.json doesn't match generated"
-                exit 1
-              }
-              prettier --check .
-              cspell lint . --no-progress
-              nixfmt --check ...(fd '.*\.nix$' . | lines)
-              markdownlint --ignore-path .markdownignore .
-              if ($env.NIX_BUILD_TOP? | is-empty) {
-                (markdown-link-check
-                  --config .markdown-link-check.json
-                  --quiet
-                  ...(fd '.*.md' . | lines))
-                (taplo lint
-                  --schema ("https://raw.githubusercontent.com"
-                    + "/release-plz/release-plz"
-                    + "/refs/tags/release-plz-v0.3.148/.schema/latest.json")
-                  .release-plz.toml)
-              }
-              cargo fmt --all -- --check
-              cargo clippy --all-features -- -D warnings
-              cargo test --all-features
-              nix flake check --all-systems --show-trace
-            }
-
-            def "main update" [] {
-              cd (flake-root)
-              nix flake update
-              cargo update
-            }
-
-            def "main release-pr" [] {
-              cd (flake-root)
-              setup git credentials
-              let repo = $"($env.GITHUB_SERVER_URL)/($env.GITHUB_REPOSITORY)"
-              (release-plz release-pr
-                --git-token $env.GITHUB_TOKEN
-                --repo-url $repo
-                --forge github
-                -o json)
-            }
-
-            def "main release" [] {
-              cd (flake-root)
-              setup git credentials
-              (release-plz release
-                --git-token $env.GITHUB_TOKEN
-                --forge github
-                --token $env.CARGO_REGISTRY_TOKEN
-                -o json)
-            }
-
-            def "main build" [] {
-              cd (flake-root)
-              mkdir result
-              def "make tarball" [variant?: string] {
-                let package = if $variant == null {
-                  "omw-tarball"
-                } else {
-                  $"omw-($variant)-tarball"
-                }
-                let suffix = if $variant == null { "" } else { $"-($variant)" }
-                let build = (nix build
-                  --no-link
-                  --print-out-paths
-                  --show-trace
-                  $".#($package)") | str trim
-                let name = ("result/omw"
-                  + $suffix
-                  + "-${pkgs.stdenv.hostPlatform.system}"
-                  + ".tar.gz")
-                ln -sf $build $name
-                return $name
-              }
-              (gh release upload $env.GITHUB_REF_NAME
-                (make tarball)
-                (make tarball rhai)
-                (make tarball js)
-                --clobber)
-            }
-
-            def "setup git credentials" [] {
-              let json = (gh api graphql
-                -f query='query { viewer { name login databaseId } }'
-                --jq '.data.viewer')
-              let name = $json | jq --raw-output '.name // .login'
-              let email = $json
-                | jq --raw-output ('"\(.databaseId)+\(.login)'
-                    + '@users.noreply.github.com"')
-              git config --global user.name $name
-              git config --global user.email $email
-            }
-          '';
-
           devScript = pkgs.writeShellApplication {
             name = "dev";
             runtimeInputs = external;
-            text = ''nu ${devScriptText} "$@"'';
+            text = ''nu ${./dev.nu} "$@"'';
           };
         in
         {
@@ -502,39 +402,21 @@ in
           };
         };
 
-      apps =
-        let
-          makeApp = package: description: {
-            type = "app";
-            program = lib.getExe package;
-            meta.description = "OMW = OpenAI + MCP + WASM";
-          };
-
-          app = makeApp packages.package "OMW = OpenAI + MCP + WASM";
-          unwrapped = makeApp packages.unwrapped "OMW = OpenAI + MCP + WASM (unwrapped)";
-
-          rhai = makeApp packages.rhai-package "OMW = OpenAI + MCP + WASM (rhai)";
-          rhai-unwrapped = makeApp packages.rhai-unwrapped "OMW = OpenAI + MCP + WASM (rhai, unwrapped)";
-
-          js = makeApp packages.js-package "OMW = OpenAI + MCP + WASM (js)";
-          js-unwrapped = makeApp packages.js-unwrapped "OMW = OpenAI + MCP + WASM (js, unwrapped)";
-        in
-        {
-          default = app;
-          unwrapped = unwrapped;
-
-          omw = app;
-          omw-unwrapped = unwrapped;
-
-          omw-rhai = rhai;
-          omw-rhai-unwrapped = rhai-unwrapped;
-
-          omw-js = js;
-          omw-js-unwrapped = js-unwrapped;
-        };
-
       packages =
         let
+          matrix = packages.buildMatrix { };
+        in
+        matrix
+        // {
+          omw-config-schema =
+            pkgs.runCommand "omw-config-schema.json"
+              {
+                nativeBuildInputs = [ matrix.omw ];
+              }
+              ''
+                omw schema --output "$out"
+              '';
+
           docs =
             pkgs.runCommand "omw-docs"
               {
@@ -543,15 +425,6 @@ in
               }
               ''
                 mdbook build -d "$out" "$src/docs"
-              '';
-
-          schema =
-            pkgs.runCommand "omw-schema.json"
-              {
-                nativeBuildInputs = [ packages.package ];
-              }
-              ''
-                omw schema --output "$out"
               '';
 
           options =
@@ -566,7 +439,7 @@ in
                 ];
               };
             in
-            pkgs.nixosOptionsDoc {
+            (pkgs.nixosOptionsDoc {
               documentType = "mdbook";
               options = eval.options;
               transformOptions =
@@ -576,53 +449,56 @@ in
                   visible = opt.visible or true && (builtins.head opt.loc) != "_module";
                   declarations = [ ];
                 };
+            }).optionsCommonMark;
+        };
+
+      apps = packages.buildMatrix {
+        filterPackages = { format, ... }: format.key != "tarball";
+        mapPackages =
+          {
+            package,
+            binary,
+            variant,
+            format,
+            ...
+          }:
+          {
+            name = "${binary.program}${variant.suffix}${format.suffix}";
+            value = {
+              type = "app";
+              program = lib.getExe package;
+              meta.description = "OMW = OpenAI + MCP + WASM";
             };
-        in
-        {
-          inherit docs schema;
+          };
+      };
 
-          options = options.optionsCommonMark;
-
-          default = packages.package;
-          unwrapped = packages.unwrapped;
-          tarball = packages.tarball;
-
-          omw = packages.package;
-          omw-unwrapped = packages.unwrapped;
-          omw-tarball = packages.tarball;
-
-          omw-rhai = packages.rhai-package;
-          omw-rhai-unwrapped = packages.rhai-unwrapped;
-          omw-rhai-tarball = packages.rhai-tarball;
-
-          omw-js = packages.js-package;
-          omw-js-unwrapped = packages.js-unwrapped;
-          omw-js-tarball = packages.js-tarball;
-        };
-
-      checks =
-        let
-          staticCheck =
-            package:
-            pkgs.runCommand "omw-check-${lib.getName package}-static"
-              {
-                nativeBuildInputs = [ pkgs.file ];
-              }
-              ''
-                bin="${lib.getExe package}"
-                echo "checking $bin for static linkage"
-                file "$bin" | grep -E "static(-pie)? linked"
-                if "${pkgs.glibc}/bin/ldd" "$bin" >/dev/null 2>&1; then
-                  echo "$bin is dynamically linked" >&2
-                  exit 1
-                fi
-                touch "$out"
-              '';
-        in
-        {
-          static = staticCheck packages.unwrapped;
-          static-rhai = staticCheck packages.rhai-unwrapped;
-          static-js = staticCheck packages.js-unwrapped;
-        };
+      checks = packages.buildMatrix {
+        filterPackages = { format, ... }: format.key == "unwrapped";
+        mapPackages =
+          {
+            package,
+            binary,
+            variant,
+            ...
+          }:
+          rec {
+            name = "${binary.program}${variant.suffix}-static";
+            value =
+              pkgs.runCommand name
+                {
+                  nativeBuildInputs = [ pkgs.file ];
+                }
+                ''
+                  bin="${lib.getExe package}"
+                  echo "checking $bin for static linkage"
+                  file "$bin" | grep -E "static(-pie)? linked"
+                  if "${pkgs.glibc}/bin/ldd" "$bin" >/dev/null 2>&1; then
+                    echo "$bin is dynamically linked" >&2
+                    exit 1
+                  fi
+                  touch "$out"
+                '';
+          };
+      };
     };
 }

@@ -13,29 +13,45 @@ A Cargo workspace with six crates plus a single WIT contract.
   script (`build.rs`) plus the vendored WIT contract under `wit/`.
   - `agent.rs` — bootstrap: turns a parsed config into provider + tooling +
     bus + `AgentContext`, then runs the agent's runtime for one iteration or
-    loops it.
+    loops it. `run_agents`/`loop_agents` also have `_traced` twins that attach
+    an optional `host/trace.rs` channel and, for `run`, return the collected
+    trace stream. A `pub(crate)` controlled path (`run_agents_controlled` +
+    `StopRegistry`) lets `omw::testing` seed memory and stop an
+    `outcome = "asserted"` agent on settle via a per-agent stop flag on the
+    context.
 
   - `config.rs` — the TOML config (default `omw.toml`, overridable with the
     `--config` flag or layered from `OMW__`-prefixed environment variables):
     global provider/tooling/runtime maps (each an impl-agnostic `kind` + opaque
     params), an optional singular `[endpoint]` entry of the same shape, plus
-    per-agent wiring.
+    per-agent wiring and per-agent seeded `[memory.<agent>]` values (inserted
+    into the agent's memory before its brain runs, so they persist across hot
+    reloads like any other memory).
 
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
 
-  - `watch.rs` — hot-reload file watching (`ScriptWatcher`): maps each agent's
-    brain script to the agents using it and reports agent names to restart on
-    change. Enabled per invocation with `--watch` on `run` / `loop`; the
-    supervisor in `agent.rs` keeps the shared bus alive across reloads.
+  - `watch.rs` — the public file-watching module: the generalized `Watcher`
+    (`watch` / `add` / `next_change`, `RecursiveMode`) plus `Scripts`, which
+    maps each agent's brain script to the agents using it and reports agent
+    names to restart on change, and `scope` (the directory a path implies).
+    Enabled per invocation with `--watch` on `run` / `loop`; the supervisor in
+    `agent.rs` keeps the shared bus alive across reloads.
 
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
-    implemented for OpenAI in `openai.rs` (behind the `provider-openai`
-    feature). The `build` factory dispatches on the configured `kind`.
+    implemented for OpenAI in `openai.rs` (behind the `provider-openai` feature)
+    and as a scripted in-memory double in `mock.rs` (behind
+    `any(test, feature = "mock")`; sequenced `turns` plus `models`). The `build`
+    factory dispatches on the configured `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
     implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature)
-    with a `transport`-tagged config enum (`stdio` / `http`). The `build`
+    with a `transport`-tagged config enum (`stdio` / `http`), and as a scripted
+    in-memory double in `mock.rs` (behind `any(test, feature = "mock")`: static
+    `tools`, an ordered name-verified `tool_calls` list, `initial_resource_*`
+    plus ordered `resource_*_updates`, each step gated by a shared `after` and
+    paced by `delay_ms`; it learns the trace through `Tooling::attach_trace`, a
+    default no-op the supervisor calls after building entries). The `build`
     factory dispatches on the configured `kind`.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
@@ -61,7 +77,15 @@ A Cargo workspace with six crates plus a single WIT contract.
     streaming the agent's `stream-endpoint` deltas back as SSE or a buffered
     JSON completion. The `build` factory dispatches on the configured `kind`;
     transport-agnostic state lives in `host/bus.rs` (`endpoint_subscribe` /
-    `endpoint_route`) and `host/endpoint.rs` (`EndpointRegistry`).
+    `endpoint_route`) and `host/endpoint.rs` (`EndpointRegistry`), and a
+    scripted `mock.rs` client double (behind `any(test, feature = "mock")`)
+    drives sessions for `omw-test`: its `requests` entries fire once the model
+    is subscribed, or — when gated by an `after` pattern — once a matching trace
+    event has been observed (order-only, via a shared append-only trace log
+    built from `MessageBus::trace_sender`). The agent's `stream-endpoint` call
+    detail carries the delta (`session`, `content`, `tool_call`,
+    `finish_reason`), so the reply is observable as the brain's own calls and no
+    separate endpoint trace event exists.
 
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
@@ -71,6 +95,16 @@ A Cargo workspace with six crates plus a single WIT contract.
     components with `wasm-tools`, and embeds them via `include_bytes!`. A
     `runtime-wasm`-less build runs no wasm tooling (so crates.io `cargo publish`
     of `omw` with `--no-default-features` verifies standalone).
+
+  - `testing/` — the deterministic brain-testing substrate. `assert.rs` holds
+    the `[assertions]` model, parser, and ordered-subsequence pattern matcher
+    (`Matcher`); `harness.rs` drives a run through the controlled path, consumes
+    the trace live, stops `outcome = "asserted"` agents as their assertions
+    settle, force-stops stragglers, and returns a `Report`. `assert.rs` also
+    holds the `pub(crate)` `TraceLog` (an append-only trace log with independent
+    per-gate scanning) that the endpoint and tooling mocks gate `after` on.
+    Exposed as `omw::testing` and re-exported from `prelude`; the `omw-test`
+    binary is a thin CLI over it.
 
   - `host/` — the host side of the actor model.
     - `bus.rs` is the per-agent inbox + subscription registry that fans messages
@@ -99,10 +133,34 @@ A Cargo workspace with six crates plus a single WIT contract.
 
     - `ctx.rs` is `AgentContext`.
 
+    - `trace.rs` is the optional broadcast trace channel (`TraceEvent` = inbound
+      / call / outcome, `TraceSender`, `AgentTrace`, `group`) that `omw-test`
+      and embedders use to observe what agents saw and did. Both `MessageBus`
+      and `AgentContext` hold an `Option<TraceSender>`, so it is zero-overhead
+      when unset; `MessageBus::trace_sender` lets the endpoint and tooling mocks
+      build a shared append-only `TraceLog` for `after` gating (one gate path,
+      safe across subscriptions and agents).
+
 - `src/bin/omw-cli` — the OMW CLI binary crate. It contains a basic run
   function, argument/config parsing and initialization for `tracing` and
   `rustls`.
 
+- `src/bin/omw-test` — the deterministic brain-testing binary crate. Mirrors
+  `omw-cli` (`cli`, `log`, `tls`) plus `collect.rs` (recursive `omw.test.toml`
+  discovery + root-relative include/exclude filtering + config/assertion
+  loading), `run.rs` (traced run + assertion check via `omw::testing`) and
+  `wasm.rs` (the hidden `compile-wasm` subcommand that cross-builds a
+  caller-supplied rust brain file or tree for `wasm32-wasip2` into components,
+  gated behind the non-default `compile-wasm` feature that only the dev shell
+  enables). The `[assertions]` model/parser/matcher and the `--watch` debounced
+  watcher live in the `omw` library (`omw::testing`); the binary only discovers,
+  filters, prints and sets the exit code. `omw-test run [path]` (default `.`)
+  recursively runs every discovered `omw.test.toml` through `run_agents_traced`
+  against the in-config `kind = "mock"` doubles, printing `PASS`/`FAIL` per test
+  and exiting non-zero with a diff when an assertion mismatches;
+  `--include`/`--exclude` filter the root-relative test directories and
+  `--watch` re-runs on change. Depends on `omw` with
+  `default-features = false, features = ["mock"]` (plus the script runtimes).
 - `src/wasm/omw-wasm-rhai-interpreter` — the Rhai guest component
   (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
@@ -126,7 +184,35 @@ A Cargo workspace with six crates plus a single WIT contract.
 - `src/lib/omw/wit/omw.wit` — the single WIT contract, used by host (`bindgen!`)
   and guests (`wit-bindgen::generate!`). Changes here ripple into both crates.
 
-- `docs/` — mdbook documentation, published to GitHub Pages.
+- `src/lib/omw/examples/` — runnable _library_ examples (the `omw` package's
+  `examples/`, built with `--all-features`), each a self-contained `main` that
+  embeds the library: the custom back ends and `embed_with_defaults`, plus
+  `testing_harness` (the testing harness), `watching_scripts` (the watcher), and
+  `observability` (streaming the trace channel live). `dev test` runs them all.
+
+- `examples/` — runnable brain examples (not a workspace member): `01-hello`,
+  `02-tool-agent`, `03-endpoint`, `04-ping-pong`, `05-patterns`, `06-memory`,
+  `07-asserted`, `08-endpoint-order` and `09-resources`, each one shared
+  `omw.test.template.toml` (`{{RUNTIME}}` / `{{SCRIPT}}` placeholders),
+  per-variant `rhai/`, `js/` and `wasm/` dirs (`brain.rhai` / `brain.js` /
+  `brain.rs`), a committed generated `<variant>/omw.test.toml` per variant, and
+  a `README.md`. `dev format` regenerates the per-variant configs and `dev lint`
+  regenerates-and-compares them. `dev test example brain <case> <variant>`
+  builds that cell's `brain.rs` to `brain.wasm` (scaffolding a throwaway crate
+  in the system temp dir) and runs one dir; `dev test brain examples` runs every
+  cell, gating the `wasm` cells on `OMW_TEST_WASM_RUNTIME_NON_NATIVE`, and
+  `dev test` runs it alongside the library examples and unit tests. The
+  templated TOMLs drive the in-config `kind = "mock"` doubles and carry an
+  `[assertions.<agent>]` section.
+
+- `docs/` — mdbook documentation, published to GitHub Pages. `docs/testing/`
+  (the binary plus per-mock pages) and `docs/examples.md` cover the test and
+  example features.
+
+- `src/nix/dev.nix` / `src/nix/dev.nu` — the flake's `dev` wrapper: `dev.nix`
+  builds the dev shells and points the wrapper at `dev.nu`, which defines the
+  `dev` subcommands (`format` / `lint` / `test` / `build` / `release*` /
+  `update`) and the `omw` helpers they share.
 
 - `src/nix/nixos.nix` — the NixOS module exposing `services.omw` — a systemd
   unit that runs `omw <mode> --config <file>` directly (secrets layer over the
@@ -134,7 +220,7 @@ A Cargo workspace with six crates plus a single WIT contract.
   `extraArgs`, `user`/`group` (or dynamic user), `stateDir`, default-on
   `hardening` (+ `readOnlyPaths`/`readWritePaths` path allow-lists and a
   `serviceConfig` escape hatch) and a `variant` option selecting the `default`,
-  `rhai` or `js` package flavor. Its option reference is generated by the
+  `rhai` or `js` package variant. Its option reference is generated by the
   `omw-options` flake package.
 
 - `assets/` — deployment examples included verbatim in the docs (`omw.service`,
@@ -194,37 +280,45 @@ The `omw` library exposes a small embedding contract; everything else is host
 plumbing (`pub(crate)`) or per-module private. The `omw-cli` binary crate
 (`cli`, `log`, `tls`) is a separate crate and is not part of the library at all.
 
-| Module               | `pub` (embedding contract)                                                                                                                       | `pub(crate)` / private                                                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | `Registries`, `run_agents`, `loop_agents`                                                                                                        | supervisor internals (`Shared`, `run_agent`) private                                                                                        |
-| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                | default fns private                                                                                                                         |
-| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`   | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                       |
-| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!` | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                    |
-| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                             | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                          |
-| `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                        | `openai` still `pub mod` (impl detail)                                                                                                      |
-| `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`)                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`           |
-| `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                           | `shutdown_signal` `pub(crate)`                                                                                                              |
-| `prelude`            | re-exports the embedding subset plus the `register_*` macros (also `#[macro_export]` at the crate root)                                          | —                                                                                                                                           |
-| binary-only          | —                                                                                                                                                | `cli` (`Cli`, `Command`, `RunArgs`, `generate_schema`), `log::init`, `tls::init` owned by the `omw-cli` crate; `watch` is a private lib mod |
+| Module               | `pub` (embedding contract)                                                                                                                                                                               | `pub(crate)` / private                                                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`              | `Registries`, `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced`                                                                                                                     | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                          |
+| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                                                                        | default fns private                                                                                                                                                                           |
+| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`                                                           | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                         |
+| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!`                                                         | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                      |
+| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                     | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                                                                            |
+| `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                                                                                | `openai` still `pub mod` (impl detail)                                                                                                                                                        |
+| `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`, `trace` types (`TraceEvent`, `TraceSender`, `AgentTrace`, `group`))                | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `trace` is a `pub` mod (`memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`)                                    |
+| `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                                                                                   | `shutdown_signal` `pub(crate)`                                                                                                                                                                |
+| `testing`            | `Assertions` / `AgentAssertion` / `EventAssertion` / `OutcomeAssertion` / `Pattern` / `ArrayStep` / `After` / `Matcher`, `Harness` / `Report` / `AgentReport`, `parse`, `collect`, `check`, `event_kind` | —                                                                                                                                                                                             |
+| `watch`              | `Watcher` (`new` / `watch` / `add` / `next_change`), `Scripts` (`with_tunables` / `next_reload`), `scope`, `RecursiveMode`                                                                               | —                                                                                                                                                                                             |
+| `prelude`            | re-exports the embedding subset plus the `register_*` macros (also `#[macro_export]` at the crate root)                                                                                                  | —                                                                                                                                                                                             |
+| binary-only          | —                                                                                                                                                                                                        | `cli` (`Cli`, `Command`, `RunArgs`, `generate_schema`), `log::init`, `tls::init` owned by the `omw-cli` crate; `omw-test` owns its own `cli`/`collect`/`run`/`wasm` plus mirrored `log`/`tls` |
 
 ## Development
 
 Assume you are in the default development shell. Commands go through the `dev`
-wrapper (written in `flake.nix`):
+wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
 
-- `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`
-- `dev test` — `cargo clippy --all-features -- -D warnings` and
-  `cargo test --all-features`
+- `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`; also
+  regenerates the per-variant test configs, `options.md` and `schema.json`
+- `dev test` — `omw test lib examples` (each library example), `omw test units`
+  (`cargo clippy --all-features -- -D warnings` plus
+  `cargo test --all-features`) and `omw test brain examples` (cross-builds the
+  example brains when the gate is on, then `omw-test run examples`)
 - `dev test fast` — like `dev test` but with extra environment that tells tests
-  to ignore heavier tests (tests that require `testcontainers` or WASM
-  compilation)
+  to ignore heavier tests (tests that require `testcontainers`, WASM
+  compilation, MCP servers or the OpenAI API)
+- `dev test example lib <example>` — run one library example
+- `dev test example brain <case> <variant>` — build that cell's `brain.wasm`
+  when needed and run one example dir
 - `dev update` — `nix flake update` plus `cargo update`
 - `dev release-pr` — `release-plz release-pr` (opens the release PR)
 - `dev release` — `release-plz release` (tags + publishes on release PR merge)
 - `dev build` — `nix build`s the
-  `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball` packages (per-arch
-  `omw[-rhai,-js]-<arch>.tar.gz` via `runCommand`) and uploads them to the tag
-  release (`GITHUB_REF_NAME`) with `gh`
+  `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball`/`omw-test-tarball` packages
+  (per-arch `omw[-rhai,-js,-test]-<arch>.tar.gz` via `runCommand`) and uploads
+  them to the tag release (`GITHUB_REF_NAME`) with `gh`
 - `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then
   `dev test`, then `nix flake check` — CI (`check.yaml`) runs `dev lint`
 
@@ -232,7 +326,8 @@ Do not use any shell commands other than the ones provided by `dev`. Please
 prefer `dev test fast` over `dev test` if you don't need to test stuff that
 touches WASM compilation, MCP servers or OpenAI API servers. Even in those cases
 you should try to use `dev test fast` as much as possible for fast iteration
-until you need to do a final pass on all tests.
+until you need to do a final pass on all tests. Do not use anything other than
+`dev test fast` unless the user specifically demands for it.
 
 Because `build.rs` cross-compiles the bundled guests (for the
 `runtime-rhai`/`mock`/`runtime-js` features) for `wasm32-wasip2`, building with

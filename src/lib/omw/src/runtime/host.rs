@@ -82,6 +82,10 @@ impl provider_bindings::HostProvider for Host {
     let entry_name = entry.name().to_string();
     let agent = self.ctx.name().to_owned();
     let provider = Arc::clone(entry.inner());
+    self.ctx.trace_call(
+      "list_models",
+      serde_json::json!({ "provider": entry_name.clone() }),
+    );
     let list = async move { provider.list_models().await };
     match self.ctx.block_on_reload(list) {
       Ok(models) => models,
@@ -110,6 +114,15 @@ impl provider_bindings::HostProvider for Host {
       provider = %entry_name,
       "running a blocking chat"
     );
+    self.ctx.trace_call(
+      "chat",
+      serde_json::json!({
+        "provider": entry_name,
+        "model": model.clone(),
+        "messages": &msgs,
+        "tools": &tools,
+      }),
+    );
     let chat = async move { provider.chat(&model, msgs, tools).await };
     let result = self.ctx.block_on_reload(chat)?.map_err(|e| e.to_string())?;
     Ok(out_chat_result(result))
@@ -136,6 +149,15 @@ impl provider_bindings::HostProvider for Host {
       provider = %entry.name(),
       uuid = %uuid,
       "opening a chat stream"
+    );
+    self.ctx.trace_call(
+      "chat_stream",
+      serde_json::json!({
+        "provider": entry.name(),
+        "model": model.clone(),
+        "messages": &msgs,
+        "tools": &tools,
+      }),
     );
     crate::host::streams::spawn_pump(
       provider,
@@ -205,6 +227,9 @@ impl tooling_bindings::HostTooling for Host {
     let tooling_name = entry.name().to_string();
     let agent = self.ctx.name().to_owned();
     tracing::debug!(agent = %agent, tooling = %tooling_name, "listing tools");
+    self
+      .ctx
+      .trace_call("list_tools", serde_json::json!({ "tooling": tooling_name }));
     let list = async move { tooling.list_tools().await };
     let tools = self.ctx.block_on_reload(list)?.map_err(|e| e.to_string())?;
     tracing::debug!(agent = %agent, tooling = %tooling_name, count = tools.len(), "listed tools");
@@ -229,6 +254,10 @@ impl tooling_bindings::HostTooling for Host {
       tool = %name,
       arg_bytes = arguments.len(),
       "queuing a tool call"
+    );
+    self.ctx.trace_call(
+      "call_tool",
+      serde_json::json!({ "tooling": tooling_name, "tool": name.clone() }),
     );
     let uuid = crate::host::bus::new_uuid();
     crate::host::tool_calls::spawn_pump(
@@ -272,6 +301,13 @@ impl tooling_bindings::HostTooling for Host {
       arg_bytes = arguments.len(),
       "calling a tool"
     );
+    self.ctx.trace_call(
+      "call_tool_blocking",
+      serde_json::json!({
+        "tooling": tooling_name.clone(),
+        "tool": tool.clone(),
+      }),
+    );
     let tool_for_call = tool.clone();
     let call = async move { tooling.call_tool(&tool_for_call, args).await };
     let result = self.ctx.block_on_reload(call)?.map_err(|e| e.to_string())?;
@@ -294,6 +330,7 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<Vec<tooling_bindings::ResourceInfo>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
+    self.ctx.trace_call("list_resources", serde_json::json!({}));
     let list = async move { tooling.list_resources().await };
     self
       .ctx
@@ -309,6 +346,9 @@ impl tooling_bindings::HostTooling for Host {
   ) -> Result<tooling_bindings::ResourceContent, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
+    self
+      .ctx
+      .trace_call("read_resource", serde_json::json!({ "uri": uri.clone() }));
     let read = async move { tooling.read_resource(&uri).await };
     self
       .ctx
@@ -339,6 +379,9 @@ impl tooling_bindings::HostTooling for Host {
       uuid = %uuid,
       "subscribing to the resource list"
     );
+    self
+      .ctx
+      .trace_call("subscribe_resource_list", serde_json::json!({}));
     crate::host::resources::spawn_pump(
       Arc::clone(self.ctx.resources()),
       self.ctx.rt(),
@@ -376,6 +419,10 @@ impl tooling_bindings::HostTooling for Host {
       uuid = %uuid,
       "subscribing to a resource"
     );
+    self.ctx.trace_call(
+      "subscribe_resource",
+      serde_json::json!({ "uri": uri.clone() }),
+    );
     crate::host::resources::spawn_pump(
       Arc::clone(self.ctx.resources()),
       self.ctx.rt(),
@@ -395,6 +442,10 @@ impl tooling_bindings::HostTooling for Host {
   ) {
     let _ = self_;
     self.ctx.resources().cancel(&uuid);
+    self.ctx.trace_call(
+      "unsubscribe_resource_list",
+      serde_json::json!({ "uuid": uuid.clone() }),
+    );
     tracing::debug!(
       agent = %self.ctx.name(),
       uuid = %uuid,
@@ -409,6 +460,10 @@ impl tooling_bindings::HostTooling for Host {
   ) {
     let _ = self_;
     self.ctx.resources().cancel(&uuid);
+    self.ctx.trace_call(
+      "unsubscribe_resource",
+      serde_json::json!({ "uuid": uuid.clone() }),
+    );
     tracing::debug!(
       agent = %self.ctx.name(),
       uuid = %uuid,
@@ -444,6 +499,9 @@ impl host_bindings::Host for Host {
 
   fn wait_until(&mut self, ts: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
+    self
+      .ctx
+      .trace_call("wait_until", serde_json::json!({ "ts": ts }));
     crate::host::time::wait_until(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -457,6 +515,9 @@ impl host_bindings::Host for Host {
 
   fn wait_for(&mut self, ms: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
+    self
+      .ctx
+      .trace_call("wait_for", serde_json::json!({ "ms": ms }));
     crate::host::time::wait_for(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -470,6 +531,9 @@ impl host_bindings::Host for Host {
 
   fn wait_cron(&mut self, spec: String) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
+    self
+      .ctx
+      .trace_call("wait_cron", serde_json::json!({ "spec": spec.clone() }));
     crate::host::time::wait_cron(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -484,16 +548,26 @@ impl host_bindings::Host for Host {
   fn send_agent(&mut self, agent: String, payload: String) {
     let caller = self.ctx.name().to_owned();
     tracing::debug!(caller = %caller, dest = %agent, "host send-agent");
+    self
+      .ctx
+      .trace_call("send_agent", serde_json::json!({ "agent": agent.clone() }));
     self.ctx.bus().send(&caller, &agent, payload);
   }
 
   fn subscribe_agent(&mut self, agent: String) -> Result<String, String> {
+    self.ctx.trace_call(
+      "subscribe_agent",
+      serde_json::json!({ "agent": agent.clone() }),
+    );
     let uuid = self.ctx.bus().subscribe(self.ctx.name(), &agent);
     tracing::info!(agent = %self.ctx.name(), source = %agent, uuid = %uuid, "host subscribe-agent");
     Ok(uuid)
   }
 
   fn subscribe_lifecycle(&mut self) -> Result<String, String> {
+    self
+      .ctx
+      .trace_call("subscribe_lifecycle", serde_json::json!({}));
     let result = self.ctx.bus().lifecycle_subscribe(self.ctx.name());
     match &result {
       Ok(uuid) => {
@@ -507,6 +581,10 @@ impl host_bindings::Host for Host {
   }
 
   fn unsubscribe_lifecycle(&mut self, uuid: String) {
+    self.ctx.trace_call(
+      "unsubscribe_lifecycle",
+      serde_json::json!({ "uuid": uuid.clone() }),
+    );
     let removed = self.ctx.bus().lifecycle_unsubscribe(self.ctx.name(), &uuid);
     tracing::debug!(
       agent = %self.ctx.name(),
@@ -517,6 +595,10 @@ impl host_bindings::Host for Host {
   }
 
   fn unsubscribe_agent(&mut self, uuid: String) {
+    self.ctx.trace_call(
+      "unsubscribe_agent",
+      serde_json::json!({ "uuid": uuid.clone() }),
+    );
     let removed = self.ctx.bus().unsubscribe(self.ctx.name(), &uuid);
     tracing::debug!(
       agent = %self.ctx.name(),
@@ -534,6 +616,10 @@ impl host_bindings::Host for Host {
       );
       return Err("the endpoint is not configured".to_string());
     }
+    self.ctx.trace_call(
+      "subscribe_endpoint",
+      serde_json::json!({ "model": model.clone() }),
+    );
     let result = self.ctx.bus().endpoint_subscribe(self.ctx.name(), model);
     match &result {
       Ok(uuid) => tracing::info!(
@@ -551,6 +637,10 @@ impl host_bindings::Host for Host {
   }
 
   fn unsubscribe_endpoint(&mut self, uuid: String) {
+    self.ctx.trace_call(
+      "unsubscribe_endpoint",
+      serde_json::json!({ "uuid": uuid.clone() }),
+    );
     let model = self.ctx.bus().endpoint_unsubscribe(self.ctx.name(), &uuid);
     tracing::info!(
       agent = %self.ctx.name(),
@@ -578,16 +668,32 @@ impl host_bindings::Host for Host {
       session = %session,
       "host stream-endpoint"
     );
-    registry.push(self.ctx.name(), &session, in_delta(delta))
+    let delta = in_delta(delta);
+    let mut detail =
+      serde_json::to_value(&delta).unwrap_or(serde_json::Value::Null);
+    if let serde_json::Value::Object(map) = &mut detail {
+      map.insert(
+        "session".to_string(),
+        serde_json::Value::String(session.clone()),
+      );
+    }
+    self.ctx.trace_call("stream_endpoint", detail);
+    registry.push(self.ctx.name(), &session, delta)
   }
 
   fn cancel_timer(&mut self, uuid: String) {
+    self
+      .ctx
+      .trace_call("cancel_timer", serde_json::json!({ "uuid": uuid.clone() }));
     self.ctx.timers().cancel(&uuid);
     tracing::debug!(agent = %self.ctx.name(),uuid = %uuid,"host cancel-timer");
   }
 
   fn sleep_for(&mut self, ms: u64) {
     tracing::debug!(agent = %self.ctx.name(),ms,"host sleep-for");
+    self
+      .ctx
+      .trace_call("sleep_for", serde_json::json!({ "ms": ms }));
     if let Err(error) = self
       .ctx
       .block_on_reload(crate::host::time::sleep_future(ms))
@@ -597,6 +703,9 @@ impl host_bindings::Host for Host {
   }
 
   fn sleep_until(&mut self, ts: u64) -> Result<(), String> {
+    self
+      .ctx
+      .trace_call("sleep_until", serde_json::json!({ "ts": ts }));
     let delay = crate::host::time::delay_until(ts).map_err(|error| {
       tracing::warn!(agent = %self.ctx.name(),error,ts,"host sleep-until rejected");
       error
@@ -611,6 +720,9 @@ impl host_bindings::Host for Host {
   }
 
   fn sleep_cron(&mut self, spec: String) -> Result<(), String> {
+    self
+      .ctx
+      .trace_call("sleep_cron", serde_json::json!({ "spec": spec.clone() }));
     let delay = crate::host::time::delay_cron(&spec).map_err(|error| {
       tracing::warn!(agent = %self.ctx.name(),error,spec = %spec,"host sleep-cron rejected");
       error
@@ -633,12 +745,17 @@ impl host_bindings::Host for Host {
       .ctx
       .bus()
       .recv_while(&name, self.ctx.tunables().recv_timeout(), move || {
-        flag.reload_requested() || flag.shutdown_requested()
+        flag.reload_requested()
+          || flag.shutdown_requested()
+          || flag.stop_requested()
       })
       .map_err(|error| {
         if error.to_string() == "stop requested" {
           if check.shutdown_requested() {
             return "agent shutting down".to_string();
+          }
+          if check.stop_requested() {
+            return "agent stopped".to_string();
           }
           return "agent reloaded".to_string();
         }
@@ -697,16 +814,25 @@ impl host_bindings::Host for Host {
 
   fn memory_get(&mut self, key: String) -> Option<String> {
     tracing::trace!(agent = %self.ctx.name(), key = %key, "host memory-get");
+    self
+      .ctx
+      .trace_call("memory_get", serde_json::json!({ "key": key.clone() }));
     self.ctx.memory().get(&key)
   }
 
   fn memory_set(&mut self, key: String, value: String) {
     tracing::debug!(agent = %self.ctx.name(), key = %key, "host memory-set");
+    self
+      .ctx
+      .trace_call("memory_set", serde_json::json!({ "key": key.clone() }));
     self.ctx.memory().set(key, value);
   }
 
   fn memory_remove(&mut self, key: String) -> bool {
     tracing::debug!(agent = %self.ctx.name(), key = %key, "host memory-remove");
+    self
+      .ctx
+      .trace_call("memory_remove", serde_json::json!({ "key": key.clone() }));
     self.ctx.memory().remove(&key)
   }
 }

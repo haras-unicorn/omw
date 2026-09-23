@@ -54,6 +54,8 @@ wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wat = { workspace = true, optional = true }
 zeroize = { version = "1.9.0", features = ["derive", "serde"] }
+regex = "1.13.1"
+toml = "1.1.6"
 
 [build-dependencies]
 wasmtime.workspace = true
