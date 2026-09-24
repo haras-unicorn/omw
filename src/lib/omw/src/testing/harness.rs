@@ -311,6 +311,9 @@ mod tests {
   enum Mode {
     /// Emit one `start` call, then finish.
     Complete,
+    /// Emit `start`, a couple of `delta` calls, then `end`, then loop until
+    /// stopped/shut down.
+    Stream,
     /// Emit `start`, then loop until stopped/shut down.
     Loop,
     /// Emit `start`, then loop forever ignoring every flag.
@@ -331,6 +334,17 @@ mod tests {
       ctx.trace_call("start", json!({}));
       match self.mode {
         Mode::Complete => {}
+        Mode::Stream => {
+          ctx.trace_call("delta", json!({}));
+          ctx.trace_call("delta", json!({}));
+          ctx.trace_call("end", json!({}));
+          while !(ctx.stop_requested()
+            || ctx.shutdown_requested()
+            || ctx.reload_requested())
+          {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+          }
+        }
         Mode::Loop => {
           while !(ctx.stop_requested()
             || ctx.shutdown_requested()
@@ -355,6 +369,7 @@ mod tests {
     let mut registries = Registries::new();
     for (kind, mode) in [
       ("complete", Mode::Complete),
+      ("stream", Mode::Stream),
       ("loop", Mode::Loop),
       ("stubborn", Mode::Stubborn),
     ] {
@@ -489,6 +504,42 @@ mod tests {
     .await
     .map_err(|_| anyhow::anyhow!("harness hung on a stubborn brain"))?;
     assert!(report.agents["alice"].passed);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn asserted_agent_settles_when_a_while_run_reaches_its_anchor()
+  -> anyhow::Result<()> {
+    let registries = registries()?;
+    let config = config(&[("alice", "stream")]);
+    let assertions = assertions(
+      "[assertions.alice]\noutcome = \"asserted\"\nevents = [\
+       { \"$while\" = { kind = \"call\", op = \"delta\" } }, \
+       { kind = \"call\", op = \"end\" }]\n",
+    );
+    let report = tokio::time::timeout(
+      Duration::from_secs(10),
+      Harness::new(&config, &registries, &assertions).run(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("harness hung on a `$while` anchor"))?;
+    assert!(report.passed(), "{report:?}");
+    assert!(report.agents["alice"].asserted);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn asserted_agent_with_a_trailing_while_settles_before_the_run()
+  -> anyhow::Result<()> {
+    let registries = registries()?;
+    let config = config(&[("alice", "loop")]);
+    let assertions = assertions(
+      "[assertions.alice]\noutcome = \"asserted\"\nevents = [\
+       { \"$while\" = { kind = \"call\", op = \"delta\" } }]\n",
+    );
+    let report = Harness::new(&config, &registries, &assertions).run().await;
+    assert!(report.passed(), "{report:?}");
+    assert!(report.agents["alice"].asserted);
     Ok(())
   }
 

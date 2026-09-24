@@ -56,8 +56,10 @@ events = [
     `event` is the kebab-case kind (`chat-delta`, `chat-end`, `tool-result`,
     `endpoint-message`, `message`, `timer`, `reload`, `shutdown`, `error`, …);
     `payload` is a partial pattern over the serialized event.
-  - `{ "$any" = true }` — consume exactly one trace event, whatever it is.
-  - `{ "$skip" = N }` — consume `N` trace events.
+  - `{ "$while" = { kind = "call", ... } }` — greedily consume a run of matching
+    trace events, stopping at the first non-match.
+  - `{ "$until" = { kind = "call", ... } }` — skip trace events until one
+    matches, consuming it.
 
 The list is matched as an **ordered subsequence** over **partial patterns**:
 
@@ -74,26 +76,31 @@ The list is matched as an **ordered subsequence** over **partial patterns**:
   are ignored, so `[ "a", "b" ]` matches `[ "x", "a", "b", "y" ]`. An empty
   pattern array matches any array.
 - Use `detail`/`payload` to pin only the fields you care about, and the
-  `$any`/`$skip` sentinels to step over look-alikes or force the cursor forward.
+  `$while`/`$until` sentinels to step over look-alikes or force the cursor
+  forward.
 
-### `$any` / `$skip` sentinels
+### `$while` / `$until` sentinels
 
-The `events` list and every array inside a pattern share one vocabulary:
-`{ "$any" = true }` consumes exactly one event or element, and `{ "$skip" = N }`
-consumes exactly `N`, so the two behave identically. `$`-prefixed keys are
-reserved and never mean a partial-match field.
+The `events` list and every array inside a pattern share one vocabulary.
+`{ "$while" = P }` greedily consumes a run of consecutive elements matching the
+inner `P`, stopping at the first non-match (zero-or-more). `{ "$until" = P }`
+skips ahead to the first element matching `P` and consumes it. Under `events`,
+`P` is a `call`/`inbound` assertion; inside a pattern array it is an ordinary
+pattern. `$`-prefixed keys are reserved and never mean a partial-match field.
 
 ```toml
 [assertions.alice]
 events = [
   { kind = "call", op = "chat" },
-  { "$any" = true },
-  { "$skip" = 1 },
-  { kind = "call", op = "chat" },
+  { "$while" = { kind = "inbound", event = "chat-delta" } },
+  { "$until" = { kind = "call", op = "chat" } },
 ]
 ```
 
-An invalid regex fails at parse time with the offending pattern.
+An empty object under either sentinel is an ordinary pattern that matches any
+object, so `{ "$until" = {} }` consumes the next object and `{ "$while" = {} }`
+consumes a run of objects (objects only: `{}` does not match a primitive). An
+invalid regex fails at parse time with the offending pattern.
 
 ### Chat detail
 
@@ -104,7 +111,7 @@ matching this expresses "many messages, only the tail matters":
 ```toml
 detail = { messages = [
   { role = "system" },
-  { "$skip" = 3 },
+  { "$while" = { role = "assistant" } },
   { role = "user", content = "final" },
 ] }
 ```
@@ -138,6 +145,21 @@ result.
 Stopping is per-agent, so one agent can be checked in isolation while others run
 normally. When every asserted agent has a verdict the harness forces the whole
 run down, so a brain that loops or blocks can never hang a test.
+
+Because a `$while` is zero-or-more, a **trailing** `$while` settles as soon as
+its prefix does (immediately for an assertion that is only a `$while`, exactly
+like an empty `events` list), so it asserts nothing on its own. Bound a run you
+care about with a following anchor — `$until` or a plain assertion — which is
+also what makes the run meaningful under `outcome = "asserted"`:
+
+```toml
+[assertions.alice]
+outcome = "asserted"
+events = [
+  { "$while" = { kind = "inbound", event = "chat-delta" } },
+  { kind = "inbound", event = "chat-end" },
+]
+```
 
 ## Mock back ends
 

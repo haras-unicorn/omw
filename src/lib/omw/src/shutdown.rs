@@ -23,8 +23,13 @@ impl Shutdown {
   }
 
   /// Request shutdown. Idempotent and never blocks.
+  ///
+  /// Uses `send_replace` rather than `send`: a `watch` channel with no live
+  /// receivers drops `send`, so a shutdown requested before any agent (or the
+  /// endpoint) subscribed would be lost. `send_replace` stores the value
+  /// regardless, so a later [`wait`](Self::wait) still observes it.
   pub fn request(&self) {
-    let _ = self.tx.send(true);
+    self.tx.send_replace(true);
   }
 
   pub fn is_requested(&self) -> bool {

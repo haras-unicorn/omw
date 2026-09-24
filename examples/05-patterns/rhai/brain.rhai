@@ -1,6 +1,6 @@
 // Four blocking chats with different model names. The provider script has
 // three turns, so the fourth chat repeats the last turn. Only the calls matter
-// here: 05-patterns asserts them with regex leaves, `$any`, and `$skip`.
+// here: 05-patterns asserts them with regex leaves, `$while`, and `$until`.
 let provider = omw::provider::get("openai");
 let models = ["gpt-alpha", "gpt-beta", "gpt-gamma", "gpt-alpha"];
 let last = "";

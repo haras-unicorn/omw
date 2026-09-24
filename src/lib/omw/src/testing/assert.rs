@@ -9,10 +9,11 @@
 //! other leaves are compared for equality.
 //!
 //! The same ordered-subsequence rules apply to arrays inside a pattern and to
-//! the `events` list itself, with the shared `$any` / `$skip` sentinels: within
-//! an array, `{ "$any" = true }` consumes exactly one element and
-//! `{ "$skip" = N }` consumes exactly `N`, while unlisted elements between
-//! matches are skipped and leading/trailing elements are ignored.
+//! the `events` list itself, with the shared `$while` / `$until` sentinels:
+//! `{ "$while" = P }` greedily consumes a run of elements matching `P`, and
+//! `{ "$until" = P }` skips ahead to the first element matching `P`, while
+//! unlisted elements between matches are skipped and leading/trailing elements
+//! are ignored.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -97,8 +98,8 @@ impl OutcomeAssertion {
 
 /// Reserved pattern keys. `$`-prefixed keys inside an array element (or an
 /// `events` entry) are the sequence sentinels, never partial-match fields.
-const ANY_KEY: &str = "$any";
-const SKIP_KEY: &str = "$skip";
+const WHILE_KEY: &str = "$while";
+const UNTIL_KEY: &str = "$until";
 
 /// One expected observation, matched against the agent's ordered trace.
 #[derive(Debug, Clone)]
@@ -116,12 +117,13 @@ pub enum EventAssertion {
     event: Option<String>,
     payload: Option<Pattern>,
   },
-  /// Consume exactly one trace event, whatever it is. Written as
-  /// `{ "$any" = true }`.
-  Any,
-  /// Consume `count` trace events, whatever they are. Written as
-  /// `{ "$skip" = count }`.
-  Skip { count: usize },
+  /// Greedily consume a run of events matching the wrapped `call`/`inbound`
+  /// assertion, stopping at the first non-match. Written as
+  /// `{ "$while" = { kind = "call", ... } }`.
+  While(Box<EventAssertion>),
+  /// Skip events until one matches the wrapped assertion, consuming it.
+  /// Written as `{ "$until" = { kind = "call", ... } }`.
+  Until(Box<EventAssertion>),
 }
 
 impl<'de> Deserialize<'de> for EventAssertion {
@@ -131,12 +133,12 @@ impl<'de> Deserialize<'de> for EventAssertion {
   {
     let value = Value::deserialize(deserializer)?;
     if let Value::Object(map) = &value {
-      if map.contains_key(ANY_KEY) {
-        return Ok(Self::Any);
+      if let Some(inner) = map.get(WHILE_KEY) {
+        return event_sentinel(inner, Self::While)
+          .map_err(serde::de::Error::custom);
       }
-      if let Some(count) = map.get(SKIP_KEY) {
-        return skip_count(Some(count))
-          .map(|count| Self::Skip { count })
+      if let Some(inner) = map.get(UNTIL_KEY) {
+        return event_sentinel(inner, Self::Until)
           .map_err(serde::de::Error::custom);
       }
     }
@@ -167,13 +169,22 @@ impl<'de> Deserialize<'de> for EventAssertion {
   }
 }
 
-/// Read the count out of a `{ "$skip" = N }` sentinel.
-fn skip_count(value: Option<&Value>) -> anyhow::Result<usize> {
-  let count = value
-    .and_then(Value::as_u64)
-    .with_context(|| format!("`{SKIP_KEY}` must be a non-negative integer"))?;
-  usize::try_from(count)
-    .with_context(|| format!("`{SKIP_KEY}` is too large: {count}"))
+/// Wrap a `$while` / `$until` inner condition, rejecting anything that is not
+/// a plain `call` / `inbound` assertion.
+fn event_sentinel(
+  inner: &Value,
+  wrap: fn(Box<EventAssertion>) -> EventAssertion,
+) -> anyhow::Result<EventAssertion> {
+  let assertion = serde_json::from_value::<EventAssertion>(inner.clone())
+    .context("invalid nested `$while` / `$until` assertion")?;
+  match assertion {
+    EventAssertion::Call { .. } | EventAssertion::Inbound { .. } => {
+      Ok(wrap(Box::new(assertion)))
+    }
+    _ => bail!(
+      "`{WHILE_KEY}` / `{UNTIL_KEY}` must wrap a `call` or `inbound` assertion"
+    ),
+  }
 }
 
 /// When a scripted step fires, shared by the mocks that accept an `after` gate.
@@ -266,21 +277,14 @@ impl TraceLog {
 
   /// Wait until a trace event matching `after` has been observed.
   ///
-  /// `"start"` (and a missing gate) returns immediately. A pattern that can
-  /// never match a single event (`$any` / `$skip`) warns and fires
-  /// immediately so a misconfiguration cannot hang. Because the log is
-  /// append-only, gates never consume each other's events and may match an
-  /// event that was observed before the gate was created.
+  /// `"start"` (and a missing gate) returns immediately. A `$while` / `$until`
+  /// gate resolves against its inner `call` / `inbound` condition. Because the
+  /// log is append-only, gates never consume each other's events and may match
+  /// an event that was observed before the gate was created.
   pub(crate) async fn wait_for(&self, after: &After) {
     let After::Pattern(condition) = after else {
       return;
     };
-    if matches!(condition, EventAssertion::Any | EventAssertion::Skip { .. }) {
-      tracing::warn!(
-        "`after` must be a `call`/`inbound` pattern; firing immediately"
-      );
-      return;
-    }
     let mut generation = self.generation.subscribe();
     loop {
       if self.is_observed(condition) {
@@ -323,10 +327,10 @@ pub enum Pattern {
 pub enum ArrayStep {
   /// Scan forward to the first element matching the inner pattern.
   Match(Pattern),
-  /// `{ "$any" = true }`: consume exactly one element.
-  Any,
-  /// `{ "$skip" = N }`: consume exactly `N` elements.
-  Skip(usize),
+  /// `{ "$while" = P }`: greedily consume a run of elements matching `P`.
+  While(Pattern),
+  /// `{ "$until" = P }`: scan forward to the first element matching `P`.
+  Until(Pattern),
 }
 
 impl Pattern {
@@ -376,14 +380,14 @@ impl Pattern {
   }
 }
 
-/// Build one [`ArrayStep`], honoring the `$any` / `$skip` sentinels.
+/// Build one [`ArrayStep`], honoring the `$while` / `$until` sentinels.
 fn array_step_from_value(value: Value) -> anyhow::Result<ArrayStep> {
   if let Value::Object(map) = &value {
-    if map.contains_key(ANY_KEY) {
-      return Ok(ArrayStep::Any);
+    if let Some(inner) = map.get(WHILE_KEY) {
+      return Ok(ArrayStep::While(Pattern::from_value(inner.clone())?));
     }
-    if let Some(count) = map.get(SKIP_KEY) {
-      return Ok(ArrayStep::Skip(skip_count(Some(count))?));
+    if let Some(inner) = map.get(UNTIL_KEY) {
+      return Ok(ArrayStep::Until(Pattern::from_value(inner.clone())?));
     }
   }
   Ok(ArrayStep::Match(Pattern::from_value(value)?))
@@ -400,8 +404,9 @@ impl<'de> Deserialize<'de> for Pattern {
 }
 
 impl EventAssertion {
-  /// Whether this assertion matches a single trace event. `Any`/`Skip` are
-  /// handled by the matcher and never match a specific event.
+  /// Whether this assertion matches a single trace event. `While`/`Until`
+  /// delegate to their inner `call`/`inbound` condition, so they also resolve
+  /// against a single event for `after` gates.
   pub fn matches(&self, event: &TraceEvent) -> bool {
     match (self, event) {
       (
@@ -429,6 +434,7 @@ impl EventAssertion {
             .as_ref()
             .is_none_or(|pattern| pattern.matches(&to_payload(event)))
       }
+      (Self::While(inner) | Self::Until(inner), event) => inner.matches(event),
       _ => false,
     }
   }
@@ -502,77 +508,69 @@ pub fn check(
 enum StepKind {
   /// Scan forward to the first matching element.
   Match,
-  /// Consume exactly one element.
-  Any,
-  /// Consume exactly `N` elements.
-  Skip(usize),
+  /// Greedily consume a run of matching elements.
+  While,
+  /// Scan forward to the first matching element (explicit form of `Match`).
+  Until,
 }
 
 /// A step the shared incremental [`Sequence`] cursor knows how to advance over.
 trait SequenceStep<Item> {
   /// This step's advancement rule.
   fn kind(&self) -> StepKind;
-  /// Whether a `Match` step matches `item`.
+  /// Whether a `Match` / `While` / `Until` step matches `item`.
   fn matches(&self, item: &Item) -> bool;
 }
 
 /// The single incremental ordered-subsequence cursor shared by the events
 /// [`Matcher`] and array [`Pattern`] matching, so the two can never drift.
 ///
-/// Feed elements one at a time with [`observe`](Self::observe); a `Match` step
-/// scans forward, an `Any` consumes exactly one element, and a `Skip(N)`
-/// consumes exactly `N`. Call [`is_done`](Self::is_done) afterwards to learn
-/// whether every step was satisfied.
+/// Feed elements one at a time with [`observe`](Self::observe); a `Match` /
+/// `Until` step scans forward, while a `While` step greedily consumes a run
+/// and stops at the first non-match. Call [`is_done`](Self::is_done) afterwards
+/// to learn whether every step was satisfied.
 #[derive(Debug, Clone, Default)]
 struct Sequence {
   /// Index of the next step to satisfy.
   next: usize,
-  /// Elements still owed to the current `Skip` step.
-  skip_remaining: usize,
 }
 
 impl Sequence {
-  /// Whether every step has been satisfied. Trailing elements are ignored.
-  fn is_done<S>(&self, steps: &[S]) -> bool {
-    self.next >= steps.len()
+  /// Whether every step has been satisfied. Trailing elements are ignored, and
+  /// a pending `While` step is satisfied by zero elements (`$while` is
+  /// zero-or-more).
+  fn is_done<Item, S: SequenceStep<Item>>(&self, steps: &[S]) -> bool {
+    let mut next = self.next;
+    while steps
+      .get(next)
+      .is_some_and(|step| step.kind() == StepKind::While)
+    {
+      next = next.saturating_add(1);
+    }
+    next >= steps.len()
   }
 
   /// Consume one element, advancing the cursor if it satisfies the next
   /// pending step.
   fn observe<Item, S: SequenceStep<Item>>(&mut self, steps: &[S], item: &Item) {
-    if self.is_done(steps) {
-      return;
-    }
-    if self.skip_remaining > 0 {
-      self.skip_remaining = self.skip_remaining.saturating_sub(1);
-      if self.skip_remaining == 0 {
-        self.next = self.next.saturating_add(1);
+    loop {
+      if self.is_done(steps) {
+        return;
       }
-      return;
-    }
-    // Advance past any zero-count skips without consuming this element.
-    while matches!(
-      steps.get(self.next).map(SequenceStep::kind),
-      Some(StepKind::Skip(0))
-    ) {
-      self.next = self.next.saturating_add(1);
-    }
-    if self.is_done(steps) {
-      return;
-    }
-    let Some(step) = steps.get(self.next) else {
-      return;
-    };
-    match step.kind() {
-      StepKind::Any => self.next = self.next.saturating_add(1),
-      StepKind::Skip(count) => {
-        self.skip_remaining = count.saturating_sub(1);
-        if self.skip_remaining == 0 {
-          self.next = self.next.saturating_add(1);
+      let Some(step) = steps.get(self.next) else {
+        return;
+      };
+      match step.kind() {
+        StepKind::Match | StepKind::Until => {
+          if step.matches(item) {
+            self.next = self.next.saturating_add(1);
+          }
+          return;
         }
-      }
-      StepKind::Match => {
-        if step.matches(item) {
+        StepKind::While => {
+          if step.matches(item) {
+            return;
+          }
           self.next = self.next.saturating_add(1);
         }
       }
@@ -583,9 +581,9 @@ impl Sequence {
 impl SequenceStep<TraceEvent> for EventAssertion {
   fn kind(&self) -> StepKind {
     match self {
-      Self::Any => StepKind::Any,
-      Self::Skip { count } => StepKind::Skip(*count),
       Self::Call { .. } | Self::Inbound { .. } => StepKind::Match,
+      Self::While(_) => StepKind::While,
+      Self::Until(_) => StepKind::Until,
     }
   }
 
@@ -598,15 +596,16 @@ impl SequenceStep<Value> for ArrayStep {
   fn kind(&self) -> StepKind {
     match self {
       Self::Match(_) => StepKind::Match,
-      Self::Any => StepKind::Any,
-      Self::Skip(count) => StepKind::Skip(*count),
+      Self::While(_) => StepKind::While,
+      Self::Until(_) => StepKind::Until,
     }
   }
 
   fn matches(&self, item: &Value) -> bool {
     match self {
-      Self::Match(pattern) => pattern.matches(item),
-      Self::Any | Self::Skip(_) => false,
+      Self::Match(pattern) | Self::While(pattern) | Self::Until(pattern) => {
+        pattern.matches(item)
+      }
     }
   }
 }
@@ -694,8 +693,12 @@ fn render_assertion(assertion: &EventAssertion) -> String {
       "inbound(event={event:?}, payload={})",
       render_optional_pattern(payload)
     ),
-    EventAssertion::Any => format!("{{{ANY_KEY} = true}}"),
-    EventAssertion::Skip { count } => format!("{{{SKIP_KEY} = {count}}}"),
+    EventAssertion::While(inner) => {
+      format!("{{{WHILE_KEY} = {}}}", render_assertion(inner))
+    }
+    EventAssertion::Until(inner) => {
+      format!("{{{UNTIL_KEY} = {}}}", render_assertion(inner))
+    }
   }
 }
 
@@ -727,8 +730,12 @@ fn render_pattern(pattern: &Pattern) -> String {
 fn render_array_step(step: &ArrayStep) -> String {
   match step {
     ArrayStep::Match(pattern) => render_pattern(pattern),
-    ArrayStep::Any => format!("{{{ANY_KEY} = true}}"),
-    ArrayStep::Skip(count) => format!("{{{SKIP_KEY} = {count}}}"),
+    ArrayStep::While(pattern) => {
+      format!("{{{WHILE_KEY} = {}}}", render_pattern(pattern))
+    }
+    ArrayStep::Until(pattern) => {
+      format!("{{{UNTIL_KEY} = {}}}", render_pattern(pattern))
+    }
   }
 }
 
@@ -893,39 +900,77 @@ mod tests {
   }
 
   #[test]
-  fn array_sentinels_are_shared_with_events() {
-    // `$any` consumes exactly one element, `$skip` exactly N.
+  fn while_consumes_runs_and_until_scans_ahead() {
+    // `$while` consumes a greedy run, `$until` skips to the first match.
     let pattern = Pattern::from_value(json!({
-      "ids": [{ "$any": true }, { "$skip": 1 }, "d"]
+      "ids": [{ "$while": "a" }, { "$until": "d" }, { "$while": "e" }]
     }))
     .expect("pattern");
-    assert!(pattern.matches(&json!({ "ids": ["a", "x", "b", "c", "d"] })));
-    assert!(!pattern.matches(&json!({ "ids": ["a", "b"] })));
+    assert!(pattern.matches(&json!({
+      "ids": ["a", "a", "b", "d", "e", "e", "f"]
+    })));
+
+    // `$while` is zero-or-more: an immediately non-matching element is fine,
+    // and a trailing run is satisfied by the remaining elements.
+    let zero = Pattern::from_value(json!({ "ids": [{ "$while": "a" }] }))
+      .expect("pattern");
+    assert!(zero.matches(&json!({ "ids": [] })));
+    assert!(zero.matches(&json!({ "ids": ["b"] })));
+    assert!(zero.matches(&json!({ "ids": ["a", "a"] })));
 
     // The same sentinel shapes drive the events matcher.
     assert_check(
       "alice",
-      r#"events = [{ "$any" = true }, { "$skip" = 1 }, { kind = "call", op = "d" }]"#,
+      r#"events = [{ "$while" = { kind = "call", op = "a" } }, { kind = "call", op = "d" }]"#,
       vec![
         call("a", json!({})),
-        call("x", json!({})),
-        call("b", json!({})),
-        call("c", json!({})),
+        call("a", json!({})),
         call("d", json!({})),
       ],
     );
+    assert_check(
+      "alice",
+      r#"events = [{ "$until" = { kind = "call", op = "d" } }]"#,
+      vec![call("a", json!({})), call("d", json!({}))],
+    );
+  }
+
+  #[test]
+  fn empty_object_under_while_or_until_matches_any_object() {
+    let until = Pattern::from_value(json!({ "ids": [{ "$until": {} }] }))
+      .expect("pattern");
+    assert!(until.matches(&json!({ "ids": [{ "n": 1 }, { "n": 2 }] })));
+    // Objects only: a string element cannot satisfy the wildcard.
+    assert!(!until.matches(&json!({ "ids": ["x"] })));
+
+    let while_run = Pattern::from_value(json!({ "ids": [{ "$while": {} }] }))
+      .expect("pattern");
+    assert!(while_run.matches(&json!({ "ids": [] })));
+    assert!(while_run.matches(&json!({ "ids": [{ "n": 1 }, { "n": 2 }] })));
   }
 
   #[test]
   fn pattern_array_step_render_uses_the_sentinels() {
     let pattern = Pattern::from_value(json!({
-      "ids": [{ "$any": true }, { "$skip": 2 }, "z"]
+      "ids": [{ "$while": "a" }, { "$until": "z" }]
     }))
     .expect("pattern");
     assert_eq!(
       render_pattern(&pattern),
-      "{ids: [{$any = true}, {$skip = 2}, /z/]}"
+      "{ids: [{$while = /a/}, {$until = /z/}]}"
     );
+  }
+
+  #[test]
+  fn nested_while_and_until_are_rejected() {
+    parse(
+      "[assertions.alice]\nevents = [{ \"$while\" = { \"$until\" = { kind = \"call\" } } }]\n",
+    )
+    .expect_err("`$while` may not wrap another sentinel");
+    parse(
+      "[assertions.alice]\nevents = [{ \"$until\" = { \"$while\" = { kind = \"call\" } } }]\n",
+    )
+    .expect_err("`$until` may not wrap another sentinel");
   }
 
   #[test]
@@ -1002,27 +1047,27 @@ mod tests {
   }
 
   #[test]
-  fn any_consumes_exactly_one_event() {
+  fn while_consumes_a_run_of_events() {
     let events = vec![
-      call("a", json!({})),
-      call("b", json!({})),
-      call("c", json!({})),
+      call("delta", json!({})),
+      call("delta", json!({})),
+      call("final", json!({})),
     ];
     assert_check(
       "alice",
-      r#"events = [{ "$any" = true }, { kind = "call", op = "c" }]"#,
+      r#"events = [{ "$while" = { kind = "call", op = "delta" } }, { kind = "call", op = "final" }]"#,
       events,
     );
     let error = assert_failure(
       "alice",
-      r#"events = [{ "$any" = true }, { "$any" = true }]"#,
-      vec![call("a", json!({}))],
+      r#"events = [{ "$while" = { kind = "call", op = "delta" } }, { kind = "call", op = "final" }]"#,
+      vec![call("delta", json!({})), call("other", json!({}))],
     );
     assert!(error.contains("not satisfied"));
   }
 
   #[test]
-  fn skip_consumes_count_events() {
+  fn until_consumes_the_first_matching_event() {
     let events = vec![
       call("a", json!({})),
       call("b", json!({})),
@@ -1030,9 +1075,19 @@ mod tests {
     ];
     assert_check(
       "alice",
-      r#"events = [{ "$skip" = 2 }, { kind = "call", op = "c" }]"#,
+      r#"events = [{ "$until" = { kind = "call", op = "c" } }]"#,
       events,
     );
+  }
+
+  #[test]
+  fn a_trailing_while_is_satisfied_before_any_event() {
+    let expected = assertions(
+      "alice",
+      r#"events = [{ "$while" = { kind = "call", op = "delta" } }]"#,
+    );
+    let matcher = Matcher::new(&expected.assertions["alice"].events);
+    assert!(matcher.matched(), "a trailing `$while` is zero-or-more");
   }
 
   #[test]
@@ -1088,7 +1143,7 @@ mod tests {
             detail = {
               messages = [
                 { role = "system" },
-                { "$skip" = 2 },
+                { "$while" = { role = "assistant" } },
                 { role = "user", content = "final" },
               ],
               tools = [ { name = "echo" } ],
