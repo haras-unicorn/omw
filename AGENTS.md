@@ -169,7 +169,9 @@ A Cargo workspace with six crates plus a single WIT contract.
 - `src/wasm/omw-wasm-js-interpreter` — the JS guest component (`#![no_main]`),
   compiled to `wasm32-wasip2`. Exports the `runtime` interface (`kind` +
   `run(script)`) and registers the `omw` global (Boa) whose
-  `provider`/`tooling`/`host` namespaces route to the host (camelCase).
+  `provider`/`tooling`/`host` namespaces route to the host (camelCase). Ships an
+  `omw.d.ts` describing that global (meant to be vendored next to a `brain.js`;
+  see `docs/runtime/js.md`).
 
 - `src/lib/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
   (published to crates.io): re-exports the generated `omw` world bindings plus
