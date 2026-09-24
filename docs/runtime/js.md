@@ -72,6 +72,25 @@ names are camelCase only. The time functions take plain numbers: the interpreter
 converts JavaScript's `f64` numbers to the WIT `u64` tick type at the boundary
 (rejecting negatives, fractions truncate).
 
+## TypeScript declarations
+
+The interpreter crate ships an `omw.d.ts` declaration describing the `omw`
+global. TypeScript only resolves local files, so vendor a copy next to your
+`brain.js` and reference it:
+
+```sh
+curl -L -o omw.d.ts \
+  https://raw.githubusercontent.com/haras-unicorn/omw/main/src/wasm/omw-wasm-js-interpreter/omw.d.ts
+```
+
+```js
+/// <reference path="./omw.d.ts" />
+```
+
+That gives `brain.js` completion and checking for every provider / tooling /
+host method and the `{ id, kind, payload }` event union. The declarations are
+ambient (`declare const omw`), so they need no import.
+
 ## Values in js
 
 Events come back as objects shaped `{ id, kind, payload }`:
