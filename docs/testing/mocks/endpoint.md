@@ -54,6 +54,6 @@ So `after = { kind = "call", op = "chat" }` routes the request only once the
 agent has made its first `chat`, letting a test assert that the brain handles
 the request at a particular point relative to its other work.
 
-`$any` / `$skip` entries cannot match a single event, so a gate that names one
-warns and fires immediately rather than hanging; likewise, an embedder that runs
-without a trace channel fires immediately with a warning.
+A `$while` / `$until` gate resolves against its inner `call` / `inbound`
+condition; an embedder that runs without a trace channel fires immediately with
+a warning.

@@ -66,7 +66,7 @@ language.
   an inbound `endpoint-message`, a reply streamed back with `stream_endpoint`.
 - `04-ping-pong` — two agents on one shared brain, `subscribe_agent` /
   `send_agent` plus per-agent memory.
-- `05-patterns` — assertion patterns: regex `detail` leaves, `$any`, `$skip`,
+- `05-patterns` — assertion patterns: regex `detail` leaves, `$while`, `$until`,
   and a subsequence over a multi-turn provider script.
 - `06-memory` — `[memory.alice]` seeds a value the brain reads and branches on.
 - `07-asserted` — `outcome = "asserted"` stops a brain that would otherwise loop

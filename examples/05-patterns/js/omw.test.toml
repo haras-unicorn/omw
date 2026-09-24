@@ -20,14 +20,13 @@ name = "alice"
 runtime = "runtime"
 script = "brain.js"
 
-# Four chats, but only four assertions and none of them has to name every
-# event: string leaves are regexes, `$any` consumes one event, `$skip` consumes
-# the ones in between, and unlisted events are ignored.
+# Four chats, but only three assertions and none of them has to name every
+# event: string leaves are regexes, `$while` consumes the middle run, `$until`
+# skips to the final match, and unlisted events are ignored.
 [assertions.alice]
 outcome = "completed"
 events = [
   { kind = "call", op = "chat", detail = { model = "^gpt-a.*" } },
-  { "$any" = true },
-  { "$skip" = 1 },
-  { kind = "call", op = "chat", detail = { model = "^gpt-a.*" } },
+  { "$while" = { kind = "call", op = "chat", detail = { model = "^gpt-[bg].*" } } },
+  { "$until" = { kind = "call", op = "chat", detail = { model = "^gpt-a.*" } } },
 ]
