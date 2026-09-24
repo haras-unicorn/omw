@@ -159,6 +159,7 @@ def "main release-pr" [] {
 def "main release" [] {
   cd (flake-root)
   omw setup git credentials
+  rm -rf .cargo
   (release-plz release
     --git-token $env.GITHUB_TOKEN
     --forge github
