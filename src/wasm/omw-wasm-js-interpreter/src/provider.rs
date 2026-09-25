@@ -106,7 +106,7 @@ fn provider_list_models(
 ) -> JsResult<JsValue> {
   let name = handle_name(this, ctx)?;
   let p = crate::omw::omw::provider::get(&name).map_err(js_err)?;
-  let models = p.list_models();
+  let models = p.list_models().map_err(js_err)?;
   let json = serde_json::Value::Array(
     models.into_iter().map(serde_json::Value::String).collect(),
   );

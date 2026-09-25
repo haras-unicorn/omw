@@ -8,27 +8,35 @@ use glob::Pattern;
 use omw::config::Config;
 use omw::testing::{Assertions, parse};
 
-/// The exact file name `omw-test` discovers. `omw.test.template.toml` is
-/// never collected.
+/// A config file is collected when its name is `omw.test.toml` or ends with
+/// `.omw.test.toml`, so several test configs can live side by side in one
+/// directory. `omw.test.template.toml` never matches.
 const CONFIG_NAME: &str = "omw.test.toml";
+const CONFIG_SUFFIX: &str = ".omw.test.toml";
 
-/// One discovered test: its config file and its directory relative to the
-/// discovery root (used by `--include` / `--exclude`).
+/// Whether `name` names a discoverable test config.
+fn is_test_config(name: &str) -> bool {
+  name == CONFIG_NAME || name.ends_with(CONFIG_SUFFIX)
+}
+
+/// One discovered test: its config file and its path relative to the discovery
+/// root (used as the label and by `--include` / `--exclude`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Test {
   pub config: PathBuf,
-  pub relative_directory: String,
+  pub relative: String,
 }
 
 impl Test {
-  /// The label printed by `run`: the root-relative directory.
+  /// The label printed by `run`: the root-relative path of the config file.
   pub fn label(&self) -> &str {
-    &self.relative_directory
+    &self.relative
   }
 }
 
 /// Discover tests under `path`: a file is a single test, a directory is a
-/// recursive walk for `omw.test.toml` (hidden directories are skipped).
+/// recursive walk for `omw.test.toml` / `*.omw.test.toml` (hidden directories
+/// are skipped).
 pub fn discover(path: &Path) -> Result<Vec<Test>> {
   if !path.exists() {
     anyhow::bail!("path {} does not exist", path.display());
@@ -45,7 +53,7 @@ pub fn discover(path: &Path) -> Result<Vec<Test>> {
     configs
       .into_iter()
       .map(|config| Test {
-        relative_directory: relative_dir(&config, base),
+        relative: relative_path(&config, base),
         config,
       })
       .collect(),
@@ -64,8 +72,8 @@ pub fn root(path: &Path) -> &Path {
   }
 }
 
-/// Keep tests whose root-relative directory matches an `--include` glob (or
-/// any include when none are given) and no `--exclude` glob.
+/// Keep tests whose root-relative path matches an `--include` glob (or any
+/// include when none are given) and no `--exclude` glob.
 pub fn filter(
   tests: Vec<Test>,
   include: &[String],
@@ -76,7 +84,7 @@ pub fn filter(
   Ok(
     tests
       .into_iter()
-      .filter(|test| keep(&test.relative_directory, &include, &exclude))
+      .filter(|test| keep(&test.relative, &include, &exclude))
       .collect(),
   )
 }
@@ -157,7 +165,11 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
       if !is_hidden(&path) {
         walk(&path, out)?;
       }
-    } else if path.file_name().is_some_and(|name| name == CONFIG_NAME) {
+    } else if path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .is_some_and(is_test_config)
+    {
       out.push(path);
     }
   }
@@ -171,12 +183,14 @@ fn is_hidden(path: &Path) -> bool {
     .is_some_and(|name| name.starts_with('.'))
 }
 
-fn relative_dir(config: &Path, root: &Path) -> String {
-  let dir = config.parent().unwrap_or(Path::new("."));
-  match dir.strip_prefix(root) {
+fn relative_path(config: &Path, root: &Path) -> String {
+  match config.strip_prefix(root) {
     Ok(rel) if rel.as_os_str().is_empty() => ".".to_owned(),
     Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
-    Err(_) => ".".to_owned(),
+    Err(_) => config
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_else(|| ".".to_owned()),
   }
 }
 
@@ -211,11 +225,8 @@ mod tests {
     Ok(path)
   }
 
-  fn relative_directories(tests: &[Test]) -> Vec<&str> {
-    tests
-      .iter()
-      .map(|test| test.relative_directory.as_str())
-      .collect()
+  fn relative_paths(tests: &[Test]) -> Vec<&str> {
+    tests.iter().map(|test| test.relative.as_str()).collect()
   }
 
   #[test]
@@ -230,8 +241,33 @@ mod tests {
 
     let tests = discover(dir.path())?;
     assert_eq!(
-      relative_directories(&tests),
-      vec!["01-hello/rhai", "01-hello/wasm", "02-tool-agent/rhai"]
+      relative_paths(&tests),
+      vec![
+        "01-hello/rhai/omw.test.toml",
+        "01-hello/wasm/omw.test.toml",
+        "02-tool-agent/rhai/omw.test.toml",
+      ]
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn discover_matches_any_name_ending_in_the_suffix() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    write(dir.path(), "omw.test.toml", "")?;
+    write(dir.path(), "first.omw.test.toml", "")?;
+    write(dir.path(), "second.omw.test.toml", "")?;
+    // Not a test config: it ends in `template.toml`.
+    write(dir.path(), "case.omw.test.template.toml", "")?;
+
+    let tests = discover(dir.path())?;
+    assert_eq!(
+      relative_paths(&tests),
+      vec![
+        "first.omw.test.toml",
+        "omw.test.toml",
+        "second.omw.test.toml"
+      ]
     );
     Ok(())
   }
@@ -242,7 +278,7 @@ mod tests {
     write(dir.path(), ".git/omw.test.toml", "")?;
     write(dir.path(), "case/omw.test.toml", "")?;
     let tests = discover(dir.path())?;
-    assert_eq!(relative_directories(&tests), vec!["case"]);
+    assert_eq!(relative_paths(&tests), vec!["case/omw.test.toml"]);
     Ok(())
   }
 
@@ -253,7 +289,7 @@ mod tests {
     let tests = discover(&config)?;
     assert_eq!(tests.len(), 1);
     assert_eq!(tests[0].config, config);
-    assert_eq!(tests[0].relative_directory, ".");
+    assert_eq!(tests[0].relative, "omw.test.toml");
     Ok(())
   }
 
@@ -275,15 +311,22 @@ mod tests {
 
     let selected = filter(
       tests.clone(),
-      &["**/rhai".to_owned()],
+      &["**/rhai/**".to_owned()],
       &["01-hello/**".to_owned()],
     )?;
-    assert_eq!(relative_directories(&selected), vec!["02-tool-agent/rhai"]);
-
-    let selected = filter(tests, &[], &["**/wasm".to_owned()])?;
     assert_eq!(
-      relative_directories(&selected),
-      vec!["01-hello/js", "01-hello/rhai", "02-tool-agent/rhai"]
+      relative_paths(&selected),
+      vec!["02-tool-agent/rhai/omw.test.toml"]
+    );
+
+    let selected = filter(tests, &[], &["**/wasm/**".to_owned()])?;
+    assert_eq!(
+      relative_paths(&selected),
+      vec![
+        "01-hello/js/omw.test.toml",
+        "01-hello/rhai/omw.test.toml",
+        "02-tool-agent/rhai/omw.test.toml",
+      ]
     );
     Ok(())
   }

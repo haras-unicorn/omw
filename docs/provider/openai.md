@@ -7,15 +7,20 @@ services.
 
 ## Configuration
 
-| key        | type   | default                     | meaning                               |
-| ---------- | ------ | --------------------------- | ------------------------------------- |
-| `base_url` | string | `https://api.openai.com/v1` | API base, before `/chat/completions`  |
-| `api_key`  | string | unset (no auth)             | sent as a `Bearer` token              |
-| `model`    | string | unset                       | the model reported by `list-models()` |
+| key        | type   | default                     | meaning                                                     |
+| ---------- | ------ | --------------------------- | ----------------------------------------------------------- |
+| `base_url` | string | `https://api.openai.com/v1` | API base, before `/chat/completions` and `/models`          |
+| `api_key`  | string | unset (no auth)             | sent as a `Bearer` token                                    |
+| `model`    | string | unset                       | model returned when the endpoint's `list-models()` is empty |
 
 All keys are optional. The `api_key` is never logged: it is a `Secret` (locked
 with `mlock`, zeroized on drop) that redacts on `Debug` and serialize, and `omw`
 fails at startup if the lock cannot be taken.
+
+`list-models()` asks `GET {base_url}/models` and **errors** if the request fails
+(unreachable endpoint or non-2xx), so a brain calling it sees the failure. When
+the endpoint answers with an empty list it falls back to the configured `model`.
+The `omw scaffold` command treats a failure as an empty list.
 
 ```toml
 [providers.openai]

@@ -31,7 +31,7 @@ pub use crate::shutdown::Shutdown;
 pub use crate::testing::{
   AgentAssertion, AgentReport, ArrayStep, Assertions, EventAssertion, Harness,
   Matcher, OutcomeAssertion, Pattern, Report, check, collect, event_kind,
-  parse,
+  parse, scaffold,
 };
 pub use crate::tooling::{
   Factory as ToolingFactory, ResourceContent, ResourceInfo,

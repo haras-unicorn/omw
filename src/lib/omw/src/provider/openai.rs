@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::stream::{BoxStream, Stream, StreamExt};
@@ -51,6 +52,38 @@ impl OpenAIProvider {
       .context("failed to build http client")?;
     Ok(Self { config, client })
   }
+
+  /// Fetch the model list from `GET /models`, erroring if the endpoint cannot
+  /// be reached or does not answer with a success status.
+  async fn fetch_models(&self) -> anyhow::Result<Vec<String>> {
+    let url = format!(
+      "{}/models",
+      self
+        .config
+        .base_url
+        .as_deref()
+        .unwrap_or("https://api.openai.com/v1")
+        .trim_end_matches('/')
+    );
+    let mut request = self.client.get(&url).timeout(Duration::from_secs(5));
+    if let Some(api_key) = &self.config.api_key {
+      request = request.bearer_auth(api_key.expose());
+    }
+    let resp = request
+      .send()
+      .await
+      .context("failed to send models request")?;
+    if !resp.status().is_success() {
+      let status = resp.status();
+      let text = resp.text().await.unwrap_or_default();
+      anyhow::bail!("models request failed with status {status}: {text}");
+    }
+    let body: WireModels = resp
+      .json()
+      .await
+      .context("failed to decode models response")?;
+    Ok(body.data.into_iter().map(|model| model.id).collect())
+  }
 }
 
 #[async_trait::async_trait]
@@ -59,13 +92,16 @@ impl Provider for OpenAIProvider {
     "openai"
   }
 
-  async fn list_models(&self) -> Vec<String> {
-    self
-      .config
-      .model
-      .as_ref()
-      .map(|m| vec![m.clone()])
-      .unwrap_or_default()
+  async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+    let mut models = self.fetch_models().await?;
+    // A reachable endpoint that reports no models falls back to the configured
+    // `model`; a failed request is an error the caller sees.
+    if models.is_empty()
+      && let Some(model) = &self.config.model
+    {
+      models.push(model.clone());
+    }
+    Ok(models)
   }
 
   async fn chat_stream(
@@ -127,6 +163,18 @@ impl Provider for OpenAIProvider {
     });
     Ok(Box::pin(SseDeltas::new(byte_stream)))
   }
+}
+
+/// The `GET /models` response, with only the fields we consume.
+#[derive(Debug, Deserialize)]
+struct WireModels {
+  #[serde(default)]
+  data: Vec<WireModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireModel {
+  id: String,
 }
 
 fn to_wire_tool(tool: &Tool) -> serde_json::Value {

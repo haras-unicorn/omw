@@ -166,6 +166,61 @@ async fn sends_bearer_token_and_expected_payload() -> anyhow::Result<()> {
   Ok(())
 }
 
+#[tokio::test]
+async fn list_models_returns_the_endpoint_catalog() -> anyhow::Result<()> {
+  let server = MockServer::start().await;
+  Mock::given(method("GET"))
+    .and(path("/v1/models"))
+    .and(bearer_token("sk-test"))
+    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+      "data": [{ "id": "gpt-a" }, { "id": "gpt-b" }],
+    })))
+    .mount(&server)
+    .await;
+
+  let entry = build_provider(&server.uri())?;
+  let models = entry.inner().list_models().await?;
+  assert_eq!(models, vec!["gpt-a", "gpt-b"]);
+  Ok(())
+}
+
+#[tokio::test]
+async fn list_models_errors_when_the_endpoint_fails() -> anyhow::Result<()> {
+  let server = MockServer::start().await;
+  Mock::given(method("GET"))
+    .and(path("/v1/models"))
+    .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+    .mount(&server)
+    .await;
+
+  let entry = build_provider(&server.uri())?;
+  let error = entry
+    .inner()
+    .list_models()
+    .await
+    .expect_err("a failed model request should error");
+  assert!(error.to_string().contains("status 500"), "{error}");
+  Ok(())
+}
+
+#[tokio::test]
+async fn list_models_falls_back_to_the_configured_model_when_empty()
+-> anyhow::Result<()> {
+  let server = MockServer::start().await;
+  Mock::given(method("GET"))
+    .and(path("/v1/models"))
+    .respond_with(
+      ResponseTemplate::new(200).set_body_json(json!({ "data": [] })),
+    )
+    .mount(&server)
+    .await;
+
+  let entry = build_provider(&server.uri())?;
+  let models = entry.inner().list_models().await?;
+  assert_eq!(models, vec!["gpt-test"]);
+  Ok(())
+}
+
 /// Serve a fragmented SSE body over real HTTP using chunked transfer-encoding,
 /// delivering each chunk as its own network write with a flush + delay so
 /// reqwest's `bytes_stream` yields them separately. This deterministically

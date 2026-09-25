@@ -60,8 +60,8 @@ impl Provider for EchoProvider {
     "echo"
   }
 
-  async fn list_models(&self) -> Vec<String> {
-    vec!["echo-model".to_string()]
+  async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+    Ok(vec!["echo-model".to_string()])
   }
 
   async fn chat_stream(

@@ -12,7 +12,8 @@ A provider exposes, through the WIT `provider` interface:
 - `kind()` — which implementation this is (e.g. `openai`), letting a guest break
   the abstraction when it chooses to.
 - `name()` — the configured name of the instance.
-- `list-models()` — the model names this provider exposes.
+- `list-models()` — the model names this provider exposes; errors if they cannot
+  be enumerated.
 - `chat(model, messages, tools)` — run a chat conversation to completion, and
   return the full [`chat-result`] in-band: the concatenated content, the
   reassembled tool calls, and the terminal finish reason. No events are

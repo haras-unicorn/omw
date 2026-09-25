@@ -1,10 +1,10 @@
 # The host interface
 
 The `host` interface (`host` in `src/lib/omw/wit/omw.wit`) exposes the static,
-baked-in capabilities of the runtime to an agent brain: logging, timer helpers,
-inter-agent messaging, event receipt, and UUID generation. It is imported by
-every brain (wasm components and the bundled rhai / js interpreters alike) and
-implemented 1:1 by the runtime's `runtime::host` module.
+baked-in capabilities of the runtime to an agent brain: logging, agent identity,
+timer helpers, inter-agent messaging, event receipt, and UUID generation. It is
+imported by every brain (wasm components and the bundled rhai / js interpreters
+alike) and implemented 1:1 by the runtime's `runtime::host` module.
 
 This page describes the WIT surface from the guest's point of view. The actor
 mechanics that back it are covered in [actor](./actor.md).
@@ -123,6 +123,12 @@ pending wait can be cancelled at any time with `cancel-timer(uuid)`. The
 `sleep-*` variants are the blocking mirror — they hold the brain until the wait
 finishes and return directly (no `timer` event, no cancel handle, and an error
 is reported in-band).
+
+## Identity
+
+- `whoami()` — the calling agent's configured name. It lets a brain shared by
+  several agents tell which one it is running as, for example to subscribe to
+  its own name or pick a role.
 
 ## Logging
 

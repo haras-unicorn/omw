@@ -20,31 +20,25 @@ script = "brain.js"
 [assertions.alice]
 outcome = "completed"
 events = [
-  { kind = "call", op = "subscribe_agent" },
+  { kind = "call", op = "whoami" },
   { kind = "call", op = "subscribe_agent" },
   { kind = "call", op = "memory_set" },
-  { kind = "call", op = "memory_set" },
-  { kind = "call", op = "send_agent" },
   { kind = "call", op = "send_agent" },
   { kind = "inbound", event = "message" },
   { kind = "call", op = "send_agent" },
-  { kind = "call", op = "send_agent" },
-  { kind = "call", op = "unsubscribe_agent" },
+  { kind = "inbound", event = "message" },
   { kind = "call", op = "unsubscribe_agent" },
 ]
 
 [assertions.bob]
 outcome = "completed"
 events = [
-  { kind = "call", op = "subscribe_agent" },
+  { kind = "call", op = "whoami" },
   { kind = "call", op = "subscribe_agent" },
   { kind = "call", op = "memory_set" },
-  { kind = "call", op = "memory_set" },
-  { kind = "call", op = "send_agent" },
   { kind = "call", op = "send_agent" },
   { kind = "inbound", event = "message" },
   { kind = "call", op = "send_agent" },
-  { kind = "call", op = "send_agent" },
-  { kind = "call", op = "unsubscribe_agent" },
+  { kind = "inbound", event = "message" },
   { kind = "call", op = "unsubscribe_agent" },
 ]

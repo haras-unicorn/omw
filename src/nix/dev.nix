@@ -385,7 +385,7 @@ in
           devScript = pkgs.writeShellApplication {
             name = "dev";
             runtimeInputs = external;
-            text = ''nu ${./dev.nu} "$@"'';
+            text = ''nu "$(flake-root)/src/nix/dev.nu" "$@"'';
           };
         in
         {

@@ -75,10 +75,11 @@ impl provider_bindings::HostProvider for Host {
       .unwrap_or_default()
   }
 
-  fn list_models(&mut self, self_: Resource<ProviderEntry>) -> Vec<String> {
-    let Some(entry) = self.table.get(&self_).ok() else {
-      return Vec::new();
-    };
+  fn list_models(
+    &mut self,
+    self_: Resource<ProviderEntry>,
+  ) -> Result<Vec<String>, String> {
+    let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let entry_name = entry.name().to_string();
     let agent = self.ctx.name().to_owned();
     let provider = Arc::clone(entry.inner());
@@ -87,11 +88,15 @@ impl provider_bindings::HostProvider for Host {
       serde_json::json!({ "provider": entry_name.clone() }),
     );
     let list = async move { provider.list_models().await };
-    match self.ctx.block_on_reload(list) {
-      Ok(models) => models,
+    let result = match self.ctx.block_on_reload(list) {
+      Ok(inner) => inner.map_err(|error| error.to_string()),
+      Err(error) => Err(error),
+    };
+    match result {
+      Ok(models) => Ok(models),
       Err(error) => {
-        tracing::warn!(agent = %agent, provider = %entry_name, error = %error, "provider models aborted");
-        Vec::new()
+        tracing::warn!(agent = %agent, provider = %entry_name, error = %error, "provider models failed");
+        Err(error)
       }
     }
   }
@@ -487,6 +492,12 @@ impl host_bindings::Host for Host {
       "error" => tracing::error!(agent = %agent, message),
       _ => tracing::info!(agent = %agent, message),
     }
+  }
+
+  fn whoami(&mut self) -> String {
+    let agent = self.ctx.name().to_owned();
+    self.ctx.trace_call("whoami", serde_json::json!({}));
+    agent
   }
 
   fn time_now(&mut self) -> u64 {

@@ -27,8 +27,9 @@ impl Provider {
     self.inner.kind()
   }
 
-  /// Model names this provider exposes.
-  pub fn list_models(&self) -> Vec<String> {
+  /// Model names this provider exposes; errors when they cannot be
+  /// enumerated.
+  pub fn list_models(&self) -> Result<Vec<String>, String> {
     self.inner.list_models()
   }
 
