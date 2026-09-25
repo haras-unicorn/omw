@@ -18,6 +18,16 @@ pub(crate) fn host_log(
   Ok(JsValue::undefined())
 }
 
+pub(crate) fn host_whoami(
+  _this: &JsValue,
+  _args: &[JsValue],
+  _: &mut Context,
+) -> JsResult<JsValue> {
+  Ok(JsValue::from(js_string!(
+    crate::omw::omw::host::whoami().as_str()
+  )))
+}
+
 pub(crate) fn host_time_now(
   _this: &JsValue,
   _args: &[JsValue],
@@ -300,6 +310,7 @@ pub(crate) fn register_host(
     Ok(())
   }
   set(host, ctx, "log", host_log)?;
+  set(host, ctx, "whoami", host_whoami)?;
   set(host, ctx, "timeNow", host_time_now)?;
   set(host, ctx, "timeFormat", host_time_format)?;
   set(host, ctx, "waitUntil", host_wait_until)?;

@@ -255,6 +255,9 @@ interface Host {
     message: string,
   ): void;
 
+  /** The calling agent's configured name. */
+  whoami(): string;
+
   /** Current wall clock as ticks (milliseconds since the Unix epoch). */
   timeNow(): number;
 

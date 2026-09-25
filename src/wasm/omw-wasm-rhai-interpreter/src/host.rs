@@ -14,6 +14,10 @@ pub(crate) fn host_log(
   Ok(())
 }
 
+pub(crate) fn host_whoami() -> Result<String, Box<EvalAltResult>> {
+  Ok(host::whoami())
+}
+
 // The time helpers take/return rhai `i64` (rhai's default integer type) and
 // convert at the boundary to the WIT `u64`/`s64`, so scripts can pass plain
 // integer literals.

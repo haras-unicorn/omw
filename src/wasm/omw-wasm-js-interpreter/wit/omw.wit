@@ -224,8 +224,9 @@ interface provider {
     /// the abstraction when it chooses to.
     kind: func() -> string;
 
-    /// Model names this provider exposes.
-    list-models: func() -> list<string>;
+    /// Model names this provider exposes. Errors when the provider cannot
+    /// enumerate them (for example, the endpoint model list is unreachable).
+    list-models: func() -> result<list<string>, string>;
 
     /// Run a chat conversation to completion and return the full result in-band.
     /// Unlike `chat-stream`, no events are delivered; the call only returns
@@ -321,6 +322,9 @@ interface host {
 
   /// level is one of "trace" | "debug" | "info" | "warn" | "error".
   log: func(level: string, message: string);
+
+  /// The calling agent's configured name.
+  whoami: func() -> string;
 
   /// Current wall clock as ticks (milliseconds since epoch).
   time-now: func() -> u64;

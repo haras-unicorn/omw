@@ -12,12 +12,14 @@
 
 pub mod assert;
 pub mod harness;
+pub mod scaffold;
 
 pub use assert::{
   After, AgentAssertion, ArrayStep, Assertions, EventAssertion, Matcher,
   OutcomeAssertion, Pattern, check, collect, event_kind, parse,
 };
 pub use harness::{AgentReport, Harness, Report};
+pub use scaffold::scaffold;
 
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use assert::TraceLog;

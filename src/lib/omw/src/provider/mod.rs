@@ -123,8 +123,9 @@ pub trait Provider: Send + Sync {
   where
     Self: Sized;
 
-  /// The model names this provider exposes to agents at runtime.
-  async fn list_models(&self) -> Vec<String>;
+  /// The model names this provider exposes to agents at runtime. Errors when
+  /// they cannot be enumerated.
+  async fn list_models(&self) -> anyhow::Result<Vec<String>>;
 
   async fn chat(
     &self,

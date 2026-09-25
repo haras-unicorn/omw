@@ -2,19 +2,20 @@
 
 Two agents (`alice` and `bob`) run one shared brain script and no provider or
 tooling, proving the actor model: explicit `subscribe_agent` subscriptions,
-tagged inbox messages, and per-agent memory.
+tagged inbox messages, per-agent memory, and `whoami`.
 
-Because the script cannot tell which name is its own, each agent subscribes to
-both names and pings both. The self-addressed ping is always delivered — the
-agent subscribed to its own name first — so exactly one `recv` succeeds. The
-subscription handles go to memory so a hot reload could reuse them.
+`whoami` tells each agent its own name, so it subscribes only to itself and
+plays a deterministic ping-pong with its own inbox: send `ping`, receive it,
+send `pong`, receive it. The subscription handle goes to memory so a hot reload
+could reuse it.
 
 ```sh
 omw-test run examples/04-ping-pong
 ```
 
-It asserts the same stream for both agents: two `subscribe_agent` calls, two
-`memory_set` calls, two `send_agent` calls, one inbound `message`, two more
-`send_agent` calls, two `unsubscribe_agent` calls, and a `completed` outcome.
-See the [examples guide](../../docs/examples.md) for how the variants and
-assertions work.
+It asserts the same stream for both agents: a `whoami` call, one
+`subscribe_agent` call, one `memory_set` call, then a `send_agent` / inbound
+`message` pair, another `send_agent` / inbound `message` pair, and an
+`unsubscribe_agent` call, all with a `completed` outcome. See the
+[examples guide](../../docs/examples.md) for how the variants and assertions
+work.

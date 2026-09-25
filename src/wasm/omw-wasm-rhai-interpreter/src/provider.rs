@@ -87,7 +87,10 @@ pub(crate) fn provider_list_models(
   handle: Map,
 ) -> Result<Array, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
-  let models = provider::get(&name).map_err(to_error)?.list_models();
+  let models = provider::get(&name)
+    .map_err(to_error)?
+    .list_models()
+    .map_err(to_error)?;
   Ok(models.into_iter().map(|m| m.into()).collect())
 }
 

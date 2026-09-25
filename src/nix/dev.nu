@@ -16,6 +16,7 @@ def "main test fast" [] {
     OMW_TEST_WASM_RUNTIME_NON_NATIVE: "0"
     OMW_TEST_OPENAI_LLAMACPP: "0"
     OMW_TEST_MCP_EVERYTHING: "0"
+    OMW_TEST_EXAMPLE_WASM: "0"
   } {
     omw test lib examples
     omw test units
@@ -198,9 +199,9 @@ def "omw test lib examples" [] {
 def "omw test brain examples" [] {
   cd (flake-root)
   let wasm = (
-    ($env.OMW_TEST_WASM_RUNTIME_NON_NATIVE? | default "0") != "0"
+    ($env.OMW_TEST_EXAMPLE_WASM? | default "0") != "0"
   )
-  let exclude = if $wasm { [] } else { [--exclude "**/wasm"] }
+  let exclude = if $wasm { [] } else { [--exclude "**/wasm/**"] }
   if $wasm {
     cargo run --quiet -p omw-test --features compile-wasm -- compile-wasm examples
   }

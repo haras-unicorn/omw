@@ -19,20 +19,49 @@ omw-test run examples            # every discovered config
 ```
 
 - `<path>` is a **file** → run that config once.
-- `<path>` is a **directory** → recursively find every `omw.test.toml` and run
-  each, printing `PASS` / `FAIL <root-relative dir>` and a tally. It exits
-  non-zero if any failed.
+- `<path>` is a **directory** → recursively find every test config and run each,
+  printing `PASS` / `FAIL <root-relative path>` and a tally. It exits non-zero
+  if any failed.
 - `--include <glob>` / `--exclude <glob>` (repeatable, OR within each) match the
-  test's root-relative directory path (`*` does not cross `/`, `**` does);
-  include is applied first, then exclude. A missing `script` is always a
-  failure, never a skip; narrow the set with the globs instead.
+  test's root-relative path including its file name (`*` does not cross `/`,
+  `**` does); include is applied first, then exclude. A missing `script` is
+  always a failure, never a skip; narrow the set with the globs instead.
 - `--watch` re-runs on change instead of exiting: after each pass it waits for a
   debounced filesystem event and runs again (file mode watches the config's
   parent directory; directory mode watches the root recursively). The library
   hot-reload watch is always off.
 
-Discovery skips hidden directories and never collects `omw.test.template.toml`
-(the shared templates the examples generate their configs from).
+Discovery skips hidden directories and collects any file whose name is
+`omw.test.toml` or ends with `.omw.test.toml`, so several test configs can live
+side by side in one directory. The shared templates (`omw.test.template.toml`)
+never match, since they end in `template.toml`.
+
+## Scaffolding
+
+`omw scaffold` (in the `omw` binary) turns a deployment config into a starter
+test config: it introspects the real back ends and writes an `omw.test.toml`
+whose provider, tooling and endpoint are the in-config mocks, pre-populated
+where possible.
+
+```sh
+omw scaffold omw.toml                 # writes ./omw.test.toml
+omw scaffold omw.toml --output t.toml # explicit output
+omw scaffold omw.toml --no-resources  # skip listing/reading tooling resources
+omw scaffold omw.toml --force         # overwrite an existing output
+```
+
+- the **provider** mock gets the models the endpoint reported (`GET /models`,
+  empty if the request fails), with an empty `turns` script;
+- the **tooling** mock gets the server's `tools` (with their input schemas),
+  `initial_resource_list`, and `initial_resource_contents` (unless
+  `--no-resources`), with an empty `tool_calls` script;
+- the **endpoint** mock gets an empty `requests` list;
+- `runtime`, `agents`, `[memory]` and `[tunables]` are copied through verbatim.
+
+Everything is best-effort: a back end that cannot be built or enumerated yields
+an empty mock and a warning instead of failing the conversion. The original
+params are never carried over, so secrets do not end up in the output. Fill in
+the `turns`, `tool_calls` and `requests` to script the run.
 
 ## Assertions
 

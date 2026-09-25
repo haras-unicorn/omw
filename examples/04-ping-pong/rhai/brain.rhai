@@ -1,18 +1,13 @@
-// Two agents share this script. Without a `whoami` host call it cannot tell
-// which name is its own, so it subscribes to both, pings both, and receives
-// exactly one message: its self-addressed ping is always delivered because it
-// subscribed to its own name first. The handles go to memory so a hot reload
-// can reuse them, and are dropped explicitly to mirror the rust brain's RAII
-// guards.
-let sub_alice = omw::host::subscribe_agent("alice");
-let sub_bob = omw::host::subscribe_agent("bob");
-omw::host::memory_set("sub-alice", sub_alice);
-omw::host::memory_set("sub-bob", sub_bob);
-omw::host::send_agent("alice", "ping");
-omw::host::send_agent("bob", "ping");
-let event = omw::host::recv();
-omw::host::send_agent("alice", "pong");
-omw::host::send_agent("bob", "pong");
-omw::host::unsubscribe_agent(sub_alice);
-omw::host::unsubscribe_agent(sub_bob);
-omw::host::log("info", event.kind);
+// Two agents share this script. `whoami` tells each agent its own name, so it
+// subscribes only to itself and plays a deterministic ping-pong with its own
+// inbox. The handle goes to memory so a hot reload can reuse it, and is dropped
+// explicitly to mirror the rust brain's RAII guard.
+let me = omw::host::whoami();
+let sub = omw::host::subscribe_agent(me);
+omw::host::memory_set("sub", sub);
+omw::host::send_agent(me, "ping");
+let ping = omw::host::recv();
+omw::host::send_agent(me, "pong");
+let pong = omw::host::recv();
+omw::host::unsubscribe_agent(sub);
+omw::host::log("info", ping.kind + "|" + pong.kind);

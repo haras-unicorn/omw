@@ -32,6 +32,11 @@ pub fn error(message: &str) {
   raw::log("error", message);
 }
 
+/// The calling agent's configured name.
+pub fn whoami() -> String {
+  raw::whoami()
+}
+
 /// Current wall clock (milliseconds since epoch).
 pub fn now() -> u64 {
   raw::time_now()

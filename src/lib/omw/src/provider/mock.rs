@@ -158,12 +158,12 @@ impl Provider for MockProvider {
     "mock"
   }
 
-  async fn list_models(&self) -> Vec<String> {
-    if self.models.is_empty() {
+  async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+    Ok(if self.models.is_empty() {
       vec!["mock-model".to_string()]
     } else {
       self.models.clone()
-    }
+    })
   }
 
   async fn chat_stream(
@@ -262,10 +262,10 @@ mod tests {
   #[tokio::test]
   async fn models_default_and_override() -> anyhow::Result<()> {
     let default = MockProvider::noop();
-    assert_eq!(default.list_models().await, vec!["mock-model"]);
+    assert_eq!(default.list_models().await?, vec!["mock-model"]);
     let configured =
       MockProvider::build("m", &serde_json::json!({ "models": ["a", "b"] }))?;
-    assert_eq!(configured.list_models().await, vec!["a", "b"]);
+    assert_eq!(configured.list_models().await?, vec!["a", "b"]);
     Ok(())
   }
 }

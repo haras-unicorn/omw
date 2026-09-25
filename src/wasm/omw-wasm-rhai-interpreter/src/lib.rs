@@ -114,6 +114,7 @@ fn install_omw(engine: &mut Engine) {
 
   let mut host = Module::new();
   host.set_native_fn("log", host_log);
+  host.set_native_fn("whoami", host_whoami);
   host.set_native_fn("time_now", host_time_now);
   host.set_native_fn("time_format", host_time_format);
   host.set_native_fn("wait_until", host_wait_until);
