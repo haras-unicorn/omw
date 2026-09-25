@@ -149,6 +149,7 @@ def "main update" [] {
 def "main release-pr" [] {
   cd (flake-root)
   omw setup git credentials
+  rm -rf .cargo
   let repo = $"($env.GITHUB_SERVER_URL)/($env.GITHUB_REPOSITORY)"
   (release-plz release-pr
     --git-token $env.GITHUB_TOKEN
