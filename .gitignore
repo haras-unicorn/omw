@@ -42,3 +42,4 @@ docs/book
 .env
 .cargo/config.toml
 *.wasm
+!src/lib/omw/wasm/*.wasm

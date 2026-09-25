@@ -4,6 +4,9 @@ version: "0.2"
 language: en
 ignoreWords:
   - wasmtime
+  - wasmprinter
+  - prebuild
+  - wasms
   - kanal
   - reqwest
   - chrono

@@ -161,6 +161,19 @@ def "main release-pr" [] {
 def "main release" [] {
   cd (flake-root)
   omw setup git credentials
+  rm -rf ./src/lib/omw/wasm
+  touch ./src/lib/omw/build.rs
+  with-env { OMW_WASM_BUILD_VENDORED: "1" } {
+    cargo build --release -p omw --features runtime-rhai,runtime-js,mock
+  }
+  let dir = "./src/lib/omw/wasm"
+  for guest in (omw guests) {
+    let file = ($dir | path join $"($guest).component.wasm")
+    if not ($file | path exists) {
+      print -e $"prebuild did not produce ($file)"
+      exit 1
+    }
+  }
   rm -rf .cargo
   (release-plz release
     --git-token $env.GITHUB_TOKEN
@@ -227,6 +240,14 @@ def "omw brain example variants" [] {
     { variant: "rhai", source: "brain.rhai", script: "brain.rhai" }
     { variant: "js", source: "brain.js", script: "brain.js" }
     { variant: "wasm", source: "brain.rs", script: "brain.wasm" }
+  ]
+}
+
+def "omw guests" [] {
+  [
+    omw-wasm-rhai-interpreter
+    omw-wasm-js-interpreter
+    omw-wasm-mock
   ]
 }
 

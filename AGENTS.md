@@ -91,10 +91,17 @@ A Cargo workspace with six crates plus a single WIT contract.
     types.
 
   - `build.rs` — for the `runtime-rhai`/`runtime-js` and `mock` features,
-    cross-compiles the bundled guests for `wasm32-wasip2`, wraps them into
-    components with `wasm-tools`, and embeds them via `include_bytes!`. A
-    `runtime-wasm`-less build runs no wasm tooling (so crates.io `cargo publish`
-    of `omw` with `--no-default-features` verifies standalone).
+    cross-compiles the bundled guests for `wasm32-wasip2`, wraps a core module
+    into a component with `wasm-tools component new` when needed, prints it to
+    WAT with the `wasmprinter` build-dep, AOT-serializes it with `wasmtime`, and
+    embeds all three via `include_bytes!`. The guest sources live outside the
+    `omw` package (`src/wasm/*`), so setting `OMW_WASM_BUILD_VENDORED` (only the
+    release prebuild) also copies each component into the package's `wasm/`.
+    When the sources are absent (a registry checkout), `build.rs` embeds the
+    vendored components instead of cross-building, so the published crate is
+    self-contained. A `runtime-wasm`-less build runs no wasm tooling.
+    `.release-plz.toml` sets `publish_allow_dirty = true` for `omw` because the
+    vendored components are untracked (but un-ignored) at release time.
 
   - `testing/` — the deterministic brain-testing substrate. `assert.rs` holds
     the `[assertions]` model, parser, and ordered-subsequence pattern matcher
@@ -323,7 +330,9 @@ wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
   when needed and run one example dir
 - `dev update` — `nix flake update` plus `cargo update`
 - `dev release-pr` — `release-plz release-pr` (opens the release PR)
-- `dev release` — `release-plz release` (tags + publishes on release PR merge)
+- `dev release` — vendors the wasm guests first
+  (`OMW_WASM_BUILD_VENDORED=1 cargo build --release -p omw --features runtime-rhai,runtime-js,mock`),
+  then `release-plz release` (tags + publishes on release PR merge)
 - `dev build` — `nix build`s the
   `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball`/`omw-test-tarball` packages
   (per-arch `omw[-rhai,-js,-test]-<arch>.tar.gz` via `runCommand`) and uploads
@@ -339,6 +348,8 @@ until you need to do a final pass on all tests. Do not use anything other than
 `dev test fast` unless the user specifically demands for it.
 
 Because `build.rs` cross-compiles the bundled guests (for the
-`runtime-rhai`/`mock`/`runtime-js` features) for `wasm32-wasip2`, building with
-those features needs that target and `wasm-tools` on PATH (both provided by the
-dev shell).
+`runtime-rhai`/`mock`/`runtime-js` features) for `wasm32-wasip2`, building those
+features **from source** needs that target and `wasm-tools` on PATH (both
+provided by the dev shell). The published crate embeds the vendored components
+instead, so consumers need neither (the WAT comes from the `wasmprinter`
+build-dep and the AOT from the `wasmtime` build-dep).

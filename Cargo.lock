@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "omw"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2961,6 +2961,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "uuid",
+ "wasmprinter 0.258.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
@@ -2970,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "omw-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2988,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "omw-test"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -5388,6 +5389,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmprinter"
+version = "0.258.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a65e30fb2cd3cc5cb7761a6064787b2abf017e6566d8d0dedf2bb7f55ad5383"
+dependencies = [
+ "anyhow",
+ "termcolor",
+ "wasmparser 0.258.0",
+]
+
+[[package]]
 name = "wasmtime"
 version = "48.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5465,7 +5477,7 @@ dependencies = [
  "target-lexicon",
  "wasm-encoder 0.254.0",
  "wasmparser 0.254.0",
- "wasmprinter",
+ "wasmprinter 0.254.0",
  "wasmtime-internal-component-util",
  "wasmtime-internal-core",
 ]

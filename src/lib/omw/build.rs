@@ -1,17 +1,25 @@
-//! Build script: for the `runtime-rhai` and `mock` features, cross-compiles the bundled
-//! guests for `wasm32-wasip2`, wraps the resulting core module into a WASM
-//! component with `wasm-tools`, and embeds it into the `omw` library (linked
-//! into the `omw` binary built by the `omw-cli` crate).
+//! Build script: for the `runtime-rhai`, `runtime-js` and `mock` features,
+//! cross-compiles the bundled guests for `wasm32-wasip2`, wraps the resulting
+//! core module into a WASM component when necessary, and embeds it into the
+//! `omw` library (linked into the `omw` binary built by the `omw-cli` crate).
 //!
-//! The guests are intentionally *not* a `[dependencies]` of `omw`: their `export!`
-//! ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the host
-//! target. Instead we build it as part of `omw`'s own build, only when the
-//! `runtime-rhai` (the embedded rhai interpreter), `runtime-js` (the embedded js
-//! interpreter)
-//! or `mock` (a test-only wasm mock
-//! brain) feature is enabled. A featureless build runs no wasm tooling at all,
-//! so `cargo publish` (the default crate) verifies without `wasm-tools` or a
-//! `wasm32-wasip2` target.
+//! The guests are intentionally *not* a `[dependencies]` of `omw`: their
+//! `export!` ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the
+//! host target. Instead we build them as part of `omw`'s own build, only when
+//! the `runtime-rhai` (the embedded rhai interpreter), `runtime-js` (the
+//! embedded js interpreter) or `mock` (a test-only wasm mock brain) feature is
+//! enabled. A featureless build runs no wasm tooling at all, so `cargo publish`
+//! (the default crate) verifies without `wasm-tools` or a `wasm32-wasip2`
+//! target.
+//!
+//! The guest sources live outside the `omw` package (`<root>/src/wasm/*`), so a
+//! published `omw` cannot cross-build them. To make the published crate
+//! self-contained, setting `OMW_WASM_BUILD_VENDORED` makes this script also copy
+//! each produced component into `wasm/` *inside* the package. A registry
+//! checkout - where the guest sources are absent but the vendored components are
+//! shipped - embeds those components instead of cross-compiling. Only the
+//! release prebuild sets that variable, so normal development never writes into
+//! the package.
 //!
 //! The nested `cargo` build uses a dedicated `--target-dir` (under `OUT_DIR`)
 //! so that it does not contend for the global build lock held by the outer
@@ -65,15 +73,104 @@ fn compile_guest(guest: &str) {
   let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
   let release = profile == "release";
 
-  let guest_wasm = format!("{}.wasm", guest.replace("-", "_"));
-  let core_wasm = wasm_target
-    .join("wasm32-wasip2")
-    .join(profile)
-    .join(guest_wasm);
   let component_wasm = out_dir.join(format!("{guest}.component.wasm"));
   let component_native = out_dir.join(format!("{guest}.component.cwasm"));
   let component_wat = out_dir.join(format!("{guest}.component.wat"));
 
+  // Components vendored inside the package for a published `omw`. Only written
+  // when `OMW_WASM_BUILD_VENDORED` is set (the release prebuild).
+  let vendored_dir = manifest_dir.join("wasm");
+  let vendored_component = vendored_dir.join(format!("{guest}.component.wasm"));
+  let vendoring = env::var_os("OMW_WASM_BUILD_VENDORED").is_some();
+
+  if guest_dir.exists() {
+    compile_from_source(
+      guest_name,
+      &guest_dir,
+      &manifest_dir,
+      &wasm_target,
+      release,
+      &component_wasm,
+    );
+
+    if vendoring {
+      std::fs::create_dir_all(&vendored_dir).unwrap_or_else(|e| {
+        panic!(
+          "failed to create vendored dir {}: {e}",
+          vendored_dir.display()
+        )
+      });
+      std::fs::copy(&component_wasm, &vendored_component).unwrap_or_else(|e| {
+        panic!(
+          "failed to vendor {} to {}: {e}",
+          component_wasm.display(),
+          vendored_component.display()
+        )
+      });
+    }
+  } else {
+    assert!(
+      vendored_component.is_file(),
+      "guest sources are absent (published crate) and the vendored \
+       component is missing at {}; set OMW_WASM_BUILD_VENDORED=1 during the \
+       release prebuild",
+      vendored_component.display()
+    );
+    println!("cargo:rerun-if-changed={}", vendored_component.display());
+    std::fs::copy(&vendored_component, &component_wasm).unwrap_or_else(|e| {
+      panic!(
+        "failed to copy vendored component {} to {}: {e}",
+        vendored_component.display(),
+        component_wasm.display()
+      )
+    });
+  }
+
+  let wat = wasmprinter::print_bytes(
+    std::fs::read(&component_wasm).unwrap_or_else(|e| {
+      panic!("failed to read {}: {e}", component_wasm.display())
+    }),
+  )
+  .unwrap_or_else(|e| panic!("failed to print {guest} component to wat: {e}"));
+  std::fs::write(&component_wat, wat).unwrap_or_else(|e| {
+    panic!("failed to write {}: {e}", component_wat.display())
+  });
+
+  // Compile the component AOT with the same epoch-interruption config
+  // as the runtime engine, so the cached native loads under it.
+  let mut config = wasmtime::Config::new();
+  config.wasm_component_model(true);
+  config.epoch_interruption(true);
+  let engine = wasmtime::Engine::new(&config)
+    .unwrap_or_else(|_| panic!("failed building {guest} engine"));
+  let component =
+    wasmtime::component::Component::from_file(&engine, &component_wasm)
+      .unwrap_or_else(|_| panic!("failed compiling {guest} guest component"));
+  let native = component
+    .serialize()
+    .unwrap_or_else(|_| panic!("failed serializing {guest} guest component"));
+  std::fs::write(&component_native, native)
+    .unwrap_or_else(|_| panic!("failed writing {guest} guest"));
+
+  println!("cargo:rustc-env={}={}", wat_env, component_wat.display());
+  println!("cargo:rustc-env={}={}", wasm_env, component_wasm.display());
+  println!(
+    "cargo:rustc-env={}={}",
+    native_env,
+    component_native.display()
+  );
+}
+
+/// Cross-builds `guest_name` from its in-repo source at `guest_dir` into a
+/// component at `component_wasm`.
+fn compile_from_source(
+  guest_name: &str,
+  guest_dir: &Path,
+  manifest_dir: &Path,
+  wasm_target: &Path,
+  release: bool,
+  component_wasm: &Path,
+) {
   println!(
     "cargo:rerun-if-changed={}",
     guest_dir.join("Cargo.toml").display()
@@ -83,6 +180,13 @@ fn compile_guest(guest: &str) {
     "cargo:rerun-if-changed={}",
     manifest_dir.join("wit").display()
   );
+
+  let profile = if release { "release" } else { "debug" };
+  let guest_wasm = format!("{}.wasm", guest_name.replace("-", "_"));
+  let core_wasm = wasm_target
+    .join("wasm32-wasip2")
+    .join(profile)
+    .join(guest_wasm);
 
   let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
   let mut cmd = Command::new(&cargo);
@@ -106,7 +210,7 @@ fn compile_guest(guest: &str) {
       guest_name,
       "--target-dir",
     ])
-    .arg(&wasm_target);
+    .arg(wasm_target);
   if release {
     cmd.arg("--release");
   }
@@ -133,7 +237,7 @@ fn compile_guest(guest: &str) {
       .args(["component", "new"])
       .arg(&core_wasm)
       .args(["-o"])
-      .arg(&component_wasm)
+      .arg(component_wasm)
       .status()
       .unwrap_or_else(|e| panic!("failed to run wasm-tools: {e}"));
     assert!(
@@ -141,41 +245,8 @@ fn compile_guest(guest: &str) {
       "wasm-tools component new failed (is 'wasm-tools' on PATH?)"
     );
   } else {
-    std::fs::copy(&core_wasm, &component_wasm).unwrap_or_else(|e| {
+    std::fs::copy(&core_wasm, component_wasm).unwrap_or_else(|e| {
       panic!("failed to copy component to {:?}: {e}", component_wasm)
     });
   }
-
-  let status = Command::new("wasm-tools")
-    .args(["print"])
-    .arg(&component_wasm)
-    .arg("-o")
-    .arg(&component_wat)
-    .status()
-    .unwrap_or_else(|e| panic!("failed to run wasm-tools print: {e}"));
-  assert!(status.success(), "wasm-tools print failed");
-
-  // Compile the component AOT with the same epoch-interruption config
-  // as the runtime engine, so the cached native loads under it.
-  let mut config = wasmtime::Config::new();
-  config.wasm_component_model(true);
-  config.epoch_interruption(true);
-  let engine = wasmtime::Engine::new(&config)
-    .unwrap_or_else(|_| panic!("failed building {guest} engine"));
-  let component =
-    wasmtime::component::Component::from_file(&engine, &component_wasm)
-      .unwrap_or_else(|_| panic!("failed compiling {guest} guest component"));
-  let native = component
-    .serialize()
-    .unwrap_or_else(|_| panic!("failed serializing {guest} guest component"));
-  std::fs::write(&component_native, native)
-    .unwrap_or_else(|_| panic!("failed writing {guest} guest"));
-
-  println!("cargo:rustc-env={}={}", wat_env, component_wat.display());
-  println!("cargo:rustc-env={}={}", wasm_env, component_wasm.display());
-  println!(
-    "cargo:rustc-env={}={}",
-    native_env,
-    component_native.display()
-  );
 }

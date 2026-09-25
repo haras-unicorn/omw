@@ -24,3 +24,5 @@ ignoreWords:
   - memlock
   - unsloth
   - gnutar
+  - prebuild
+  - wasms
