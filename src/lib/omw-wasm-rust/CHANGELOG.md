@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/haras-unicorn/omw/compare/omw-wasm-rust-v0.1.0...omw-wasm-rust-v0.1.1) - 2026-09-25
+
+### Added
+
+- omw.test.toml from omw.toml scaffolding ([#61](https://github.com/haras-unicorn/omw/pull/61))
+
 ## [0.1.0](https://github.com/haras-unicorn/omw/releases/tag/omw-wasm-rust-v0.1.0) - 2026-09-23
 
 ### Added
