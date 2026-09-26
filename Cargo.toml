@@ -16,6 +16,7 @@ wit-bindgen = "0.61.1"
 wasmtime = { version = "48.0.1", features = ["component-model"] }
 wasmtime-wasi = "48.0.1"
 wat = { version = "1.258.0", features = ["component-model"] }
+wasmprinter = "0.258.0"
 anyhow = "1.0.104"
 tokio = { version = "1.53.1", features = [
   "fs",

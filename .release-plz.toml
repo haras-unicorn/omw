@@ -5,6 +5,7 @@ release = false
 name = "omw"
 release = true
 version_group = "omw"
+publish_allow_dirty = true
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 changelog_include = ["omw-cli", "omw-test"]

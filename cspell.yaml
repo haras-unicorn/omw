@@ -22,6 +22,9 @@ ignoreWords:
   - clippy
   - taplo
   - wasmtime
+  - wasmprinter
+  - prebuild
+  - wasms
   - wasi
   - strftime
   - envsubst

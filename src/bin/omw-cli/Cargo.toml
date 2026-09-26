@@ -1,6 +1,6 @@
 [package]
 name = "omw-cli"
-version = "0.1.1"
+version = "0.1.2"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -31,7 +31,7 @@ rustls.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 config.workspace = true
-omw = { version = "0.1.1", path = "../../lib/omw", default-features = false }
+omw = { version = "0.1.2", path = "../../lib/omw", default-features = false }
 
 [dev-dependencies]
 serial_test = "4.0.1"

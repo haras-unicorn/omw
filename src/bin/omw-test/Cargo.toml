@@ -1,6 +1,6 @@
 [package]
 name = "omw-test"
-version = "0.1.1"
+version = "0.1.2"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -26,7 +26,7 @@ tracing-subscriber.workspace = true
 rustls.workspace = true
 clap.workspace = true
 config.workspace = true
-omw = { version = "0.1.1", path = "../../lib/omw", default-features = false, features = [
+omw = { version = "0.1.2", path = "../../lib/omw", default-features = false, features = [
   "mock",
 ] }
 glob = "0.3.4"
