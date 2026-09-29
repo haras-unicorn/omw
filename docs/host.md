@@ -17,23 +17,24 @@ with two fields:
 - `id` — the UUID handle of the subscribed source the event came from, and
 - `event` — one of the following variant payloads:
 
-| variant                                      | payload                        | meaning                                                           |
-| -------------------------------------------- | ------------------------------ | ----------------------------------------------------------------- |
-| `message(string)`                            | the text                       | a message from a subscribed agent                                 |
-| `error(string)`                              | the error text                 | a failed I/O surfaced to the guest                                |
-| `timer`                                      | —                              | a timestamp / duration / cron timer fired                         |
-| `reload`                                     | —                              | the brain script changed; exit so the run restarts                |
-| `shutdown`                                   | —                              | the process is shutting down; exit terminally                     |
-| `chat-delta(chat-delta)`                     | a stream chunk                 | a chat-stream delta                                               |
-| `chat-end`                                   | —                              | an open chat stream finished                                      |
-| `tool-result(tool-result)`                   | `{ name, arguments, value }`   | a queued tool invocation returned                                 |
-| `resource-list-updated`                      | `list<resource-info>`          | a subscribed resource _list_ changed, with the new list           |
-| `resource-updated`                           | `resource-content`             | a subscribed resource updated in place, with freshly read content |
-| `endpoint-message(endpoint-message)`         | `{ session, messages, tools }` | an inbound endpoint chat request routed to a subscribed agent     |
-| `endpoint-session-end(endpoint-session-end)` | `{ session, error? }`          | an endpoint session ended: normal or abrupt                       |
+| variant                                      | payload                                 | meaning                                                           |
+| -------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
+| `message(string)`                            | the text                                | a message from a subscribed agent                                 |
+| `error(string)`                              | the error text                          | a failed I/O surfaced to the guest                                |
+| `timer`                                      | —                                       | a timestamp / duration / cron timer fired                         |
+| `reload`                                     | —                                       | the brain script changed; exit so the run restarts                |
+| `shutdown`                                   | —                                       | the process is shutting down; exit terminally                     |
+| `chat-delta(chat-delta)`                     | a stream chunk                          | a chat-stream delta                                               |
+| `chat-end`                                   | —                                       | an open chat stream finished                                      |
+| `tool-result(tool-result)`                   | `{ name, arguments, value }`            | a queued tool invocation returned                                 |
+| `resource-list-updated`                      | `list<resource-info>`                   | a subscribed resource _list_ changed, with the new list           |
+| `resource-updated`                           | `resource-content`                      | a subscribed resource updated in place, with freshly read content |
+| `endpoint-message(endpoint-message)`         | `{ session, messages, tools, params? }` | an inbound endpoint chat request routed to a subscribed agent     |
+| `endpoint-session-end(endpoint-session-end)` | `{ session, error? }`                   | an endpoint session ended: normal or abrupt                       |
 
-A `chat-delta` carries `content`, a `tool-call`, and a `finish-reason`, all
-optional, so a chunk may carry text, a partial tool call, or a terminal reason.
+A `chat-delta` carries `content`, `reasoning`, a `tool-call`, a `finish-reason`,
+and a `usage` block, all optional, so a chunk may carry text, reasoning, a
+partial tool call, token counts, or a terminal reason.
 
 A `tool-result` event's payload carries the tool's `name`, its `arguments`, and
 its `value` — the text result queued `call-tool` returned.
@@ -43,9 +44,11 @@ optional `mime-type`, and the `content` itself — actual text for textual
 formats, base64 for anything else (match on `mime-type` to tell which).
 
 An `endpoint-message` event payload carries the endpoint session's `session` id,
-the chat history as `messages` (a `chat-message` per entry), and `tools` the
-tools the client advertised. An `endpoint-session-end` payload carries the
-`session` id and an optional `error` when the session was interrupted.
+the chat history as `messages` (a `chat-message` per entry), `tools` the tools
+the client advertised, and `params` — the opaque JSON string of any extra
+generation settings the client submitted. An `endpoint-session-end` payload
+carries the `session` id and an optional `error` when the session was
+interrupted.
 
 The guest correlates an envelope with a specific source by matching `id` against
 the UUID the opening call returned — for example the UUID from

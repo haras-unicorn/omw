@@ -28,6 +28,9 @@ pub(crate) fn msg_from_dynamic(
   let content = map
     .get("content")
     .and_then(|c| c.clone().try_cast::<String>());
+  let reasoning = map
+    .get("reasoning")
+    .and_then(|r| r.clone().try_cast::<String>());
   let role_enum = match role.as_str() {
     "system" => provider::Role::System,
     "assistant" => provider::Role::Assistant,
@@ -63,6 +66,7 @@ pub(crate) fn msg_from_dynamic(
   Ok(provider::ChatMessage {
     role: role_enum,
     content,
+    reasoning,
     tool_call,
   })
 }

@@ -23,7 +23,9 @@ use super::bindings::omw::omw::tooling as tooling_bindings;
 use super::bindings::omw::omw::types as types_bindings;
 use crate::host::ctx::AgentContext;
 use crate::host::events::Event;
-use crate::provider::{ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall};
+use crate::provider::{
+  ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall, Usage,
+};
 use crate::tooling::{ResourceContent, ResourceInfo, Tool, ToolingEntry};
 
 /// The store-side host that satisfies all three import interfaces. It also
@@ -107,12 +109,14 @@ impl provider_bindings::HostProvider for Host {
     model: String,
     messages: Vec<provider_bindings::ChatMessage>,
     tools: Vec<tooling_bindings::Tool>,
+    params: Option<String>,
   ) -> Result<types_bindings::ChatResult, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let entry_name = entry.name().to_string();
     let agent = self.ctx.name().to_owned();
     let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
     let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
+    let params = in_params(params)?;
     let provider = Arc::clone(entry.inner());
     tracing::debug!(
       agent = %agent,
@@ -126,9 +130,10 @@ impl provider_bindings::HostProvider for Host {
         "model": model.clone(),
         "messages": &msgs,
         "tools": &tools,
+        "params": &params,
       }),
     );
-    let chat = async move { provider.chat(&model, msgs, tools).await };
+    let chat = async move { provider.chat(&model, msgs, tools, params).await };
     let result = self.ctx.block_on_reload(chat)?.map_err(|e| e.to_string())?;
     Ok(out_chat_result(result))
   }
@@ -139,10 +144,12 @@ impl provider_bindings::HostProvider for Host {
     model: String,
     messages: Vec<provider_bindings::ChatMessage>,
     tools: Vec<tooling_bindings::Tool>,
+    params: Option<String>,
   ) -> Result<String, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let msgs: Vec<ChatMessage> = messages.into_iter().map(in_msg).collect();
     let tools: Vec<Tool> = tools.into_iter().map(in_tool).collect();
+    let params = in_params(params)?;
     let provider = Arc::clone(entry.inner());
     let rt = Arc::clone(&self.ctx.rt());
     let bus = Arc::clone(self.ctx.bus());
@@ -162,6 +169,7 @@ impl provider_bindings::HostProvider for Host {
         "model": model.clone(),
         "messages": &msgs,
         "tools": &tools,
+        "params": &params,
       }),
     );
     crate::host::streams::spawn_pump(
@@ -174,6 +182,7 @@ impl provider_bindings::HostProvider for Host {
       model,
       msgs,
       tools,
+      params,
     );
     Ok(uuid)
   }
@@ -879,6 +888,7 @@ fn out_event(event: Event) -> types_bindings::Event {
         session: m.session,
         messages: m.messages.into_iter().map(out_chat_msg).collect(),
         tools: m.tools.into_iter().map(Tool::into).collect(),
+        params: out_params(m.params),
       })
     }
     Event::EndpointSessionEnd(e) => types_bindings::Event::EndpointSessionEnd(
@@ -899,6 +909,7 @@ fn in_msg(m: provider_bindings::ChatMessage) -> ChatMessage {
       provider_bindings::Role::Tool => Role::Tool,
     },
     content: m.content,
+    reasoning: m.reasoning,
     tool_call: m.tool_call.map(|tc| ToolCall {
       id: tc.id,
       name: tc.name,
@@ -918,6 +929,7 @@ fn out_chat_msg(m: ChatMessage) -> provider_bindings::ChatMessage {
       Role::Tool => provider_bindings::Role::Tool,
     },
     content: m.content,
+    reasoning: m.reasoning,
     tool_call: m.tool_call.map(|tc| provider_bindings::ToolCall {
       id: tc.id,
       name: tc.name,
@@ -931,12 +943,14 @@ fn out_chat_msg(m: ChatMessage) -> provider_bindings::ChatMessage {
 fn in_delta(d: types_bindings::ChatDelta) -> ChatDelta {
   ChatDelta {
     content: d.content,
+    reasoning: d.reasoning,
     tool_call: d.tool_call.map(|tc| ToolCall {
       id: tc.id,
       name: tc.name,
       arguments: tc.arguments,
     }),
     finish_reason: d.finish_reason,
+    usage: d.usage.map(in_usage),
   }
 }
 
@@ -952,12 +966,14 @@ fn in_tool(t: tooling_bindings::Tool) -> Tool {
 fn out_msg(d: ChatDelta) -> types_bindings::ChatDelta {
   types_bindings::ChatDelta {
     content: d.content,
+    reasoning: d.reasoning,
     tool_call: d.tool_call.map(|tc| types_bindings::ToolCall {
       id: tc.id,
       name: tc.name,
       arguments: tc.arguments,
     }),
     finish_reason: d.finish_reason,
+    usage: d.usage.map(out_usage),
   }
 }
 
@@ -966,8 +982,47 @@ fn out_chat_result(
 ) -> types_bindings::ChatResult {
   types_bindings::ChatResult {
     content: r.content,
+    reasoning: r.reasoning,
     tool_calls: r.tool_calls.into_iter().map(out_tool_call).collect(),
     finish_reason: r.finish_reason,
+    usage: r.usage.map(out_usage),
+  }
+}
+
+/// Parse the opaque per-call params JSON. `None`/empty is no params; malformed
+/// JSON is an error the guest sees.
+fn in_params(
+  params: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+  match params {
+    None => Ok(None),
+    Some(raw) if raw.trim().is_empty() => Ok(None),
+    Some(raw) => serde_json::from_str(&raw)
+      .map(Some)
+      .map_err(|error| format!("invalid chat params JSON: {error}")),
+  }
+}
+
+/// Serialize host-side endpoint params back onto the wire's opaque JSON string.
+fn out_params(params: Option<serde_json::Value>) -> Option<String> {
+  params.map(|params| {
+    serde_json::to_string(&params).unwrap_or_else(|_| "null".to_string())
+  })
+}
+
+fn in_usage(u: types_bindings::Usage) -> Usage {
+  Usage {
+    prompt_tokens: u.prompt_tokens,
+    completion_tokens: u.completion_tokens,
+    total_tokens: u.total_tokens,
+  }
+}
+
+fn out_usage(u: Usage) -> types_bindings::Usage {
+  types_bindings::Usage {
+    prompt_tokens: u.prompt_tokens,
+    completion_tokens: u.completion_tokens,
+    total_tokens: u.total_tokens,
   }
 }
 
@@ -1075,8 +1130,10 @@ mod tests {
     let mut host = test_host()?;
     let delta = out_msg(ChatDelta {
       content: Some("hi".to_string()),
+      reasoning: None,
       tool_call: None,
       finish_reason: None,
+      usage: None,
     });
     let err = host
       .stream_endpoint("session-1".to_string(), delta)
@@ -1109,8 +1166,10 @@ mod tests {
         open.session.clone(),
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
+          reasoning: None,
           tool_call: None,
           finish_reason: None,
+          usage: None,
         }),
       )
       .unwrap_err();
@@ -1133,8 +1192,10 @@ mod tests {
         open.session.clone(),
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
+          reasoning: None,
           tool_call: None,
           finish_reason: None,
+          usage: None,
         }),
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -1149,8 +1210,10 @@ mod tests {
         open.session.clone(),
         out_msg(ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: Some("stop".to_string()),
+          usage: None,
         }),
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -1169,8 +1232,10 @@ mod tests {
         open.session.clone(),
         out_msg(ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: None,
+          usage: None,
         }),
       )
       .unwrap_err();
@@ -1182,6 +1247,7 @@ mod tests {
     in_msg(provider_bindings::ChatMessage {
       role,
       content: Some("hi".to_string()),
+      reasoning: None,
       tool_call: None,
     })
   }
@@ -1291,6 +1357,7 @@ mod tests {
     let out = in_msg(provider_bindings::ChatMessage {
       role: provider_bindings::Role::Assistant,
       content: None,
+      reasoning: None,
       tool_call: Some(wire_tc),
     });
     let tc = out
@@ -1306,13 +1373,21 @@ mod tests {
   fn out_msg_roundtrips_delta() {
     let delta = ChatDelta {
       content: Some("x".to_string()),
+      reasoning: Some("because".to_string()),
       tool_call: None,
       finish_reason: Some("stop".to_string()),
+      usage: Some(Usage {
+        prompt_tokens: Some(1),
+        completion_tokens: Some(2),
+        total_tokens: Some(3),
+      }),
     };
     let wire = out_msg(delta);
     assert_eq!(wire.content.as_deref(), Some("x"));
+    assert_eq!(wire.reasoning.as_deref(), Some("because"));
     assert_eq!(wire.finish_reason.as_deref(), Some("stop"));
     assert!(wire.tool_call.is_none());
+    assert_eq!(wire.usage.as_ref().and_then(|u| u.total_tokens), Some(3));
   }
 
   #[test]

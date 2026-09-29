@@ -5,6 +5,7 @@
 
 use crate::omw::omw::types::{
   ChatDelta, ChatMessage, ChatResult, Event, EventEnvelope, Tool, ToolCall,
+  Usage,
 };
 
 impl crate::omw::omw::types::Role {
@@ -41,6 +42,7 @@ impl ChatMessage {
     Self {
       role: crate::omw::omw::types::Role::User,
       content: Some(content.into()),
+      reasoning: None,
       tool_call: None,
     }
   }
@@ -50,6 +52,7 @@ impl ChatMessage {
     Self {
       role: crate::omw::omw::types::Role::System,
       content: Some(content.into()),
+      reasoning: None,
       tool_call: None,
     }
   }
@@ -59,6 +62,7 @@ impl ChatMessage {
     Self {
       role: crate::omw::omw::types::Role::Assistant,
       content: Some(content.into()),
+      reasoning: None,
       tool_call: None,
     }
   }
@@ -66,6 +70,13 @@ impl ChatMessage {
   /// Attach a tool call to this message.
   pub fn with_tool_call(mut self, call: ToolCall) -> Self {
     self.tool_call = Some(call);
+    self
+  }
+
+  /// Attach reasoning/thinking content to this message (sent back to the
+  /// provider on assistant messages).
+  pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
+    self.reasoning = Some(reasoning.into());
     self
   }
 
@@ -81,8 +92,21 @@ impl ChatDelta {
   pub fn text(content: impl Into<String>) -> Self {
     Self {
       content: Some(content.into()),
+      reasoning: None,
       tool_call: None,
       finish_reason: None,
+      usage: None,
+    }
+  }
+
+  /// A delta carrying a reasoning/thinking chunk.
+  pub fn reasoning(content: impl Into<String>) -> Self {
+    Self {
+      content: None,
+      reasoning: Some(content.into()),
+      tool_call: None,
+      finish_reason: None,
+      usage: None,
     }
   }
 
@@ -90,8 +114,10 @@ impl ChatDelta {
   pub fn finish(reason: impl Into<String>) -> Self {
     Self {
       content: None,
+      reasoning: None,
       tool_call: None,
       finish_reason: Some(reason.into()),
+      usage: None,
     }
   }
 
@@ -103,6 +129,11 @@ impl ChatDelta {
   /// The text chunk, if any.
   pub fn text_content(&self) -> Option<&str> {
     self.content.as_deref()
+  }
+
+  /// The reasoning/thinking chunk, if any.
+  pub fn reasoning_content(&self) -> Option<&str> {
+    self.reasoning.as_deref()
   }
 }
 
@@ -127,6 +158,22 @@ impl ChatResult {
   /// The concatenated text, absent on tool-call-only responses.
   pub fn text(&self) -> Option<&str> {
     self.content.as_deref()
+  }
+
+  /// The concatenated reasoning/thinking content, when the provider produced
+  /// any.
+  pub fn reasoning(&self) -> Option<&str> {
+    self.reasoning.as_deref()
+  }
+}
+
+impl Usage {
+  /// The total tokens, falling back to prompt + completion when the provider
+  /// did not report a total.
+  pub fn total(&self) -> Option<u64> {
+    self
+      .total_tokens
+      .or_else(|| self.prompt_tokens?.checked_add(self.completion_tokens?))
   }
 }
 
@@ -192,6 +239,10 @@ mod tests {
     assert!(!delta.is_terminal());
     assert_eq!(delta.text_content(), Some("chunk"));
 
+    let delta = ChatDelta::reasoning("thinking");
+    assert!(!delta.is_terminal());
+    assert_eq!(delta.reasoning_content(), Some("thinking"));
+
     let delta = ChatDelta::finish("stop");
     assert!(delta.is_terminal());
     assert_eq!(delta.finish_reason.as_deref(), Some("stop"));
@@ -208,10 +259,24 @@ mod tests {
   fn chat_result_text_passthrough() {
     let result = ChatResult {
       content: Some("answer".to_string()),
+      reasoning: Some("why".to_string()),
       tool_calls: Vec::new(),
       finish_reason: Some("stop".to_string()),
+      usage: Some(Usage {
+        prompt_tokens: Some(2),
+        completion_tokens: Some(3),
+        total_tokens: None,
+      }),
     };
     assert_eq!(result.text(), Some("answer"));
+    assert_eq!(result.reasoning(), Some("why"));
+    assert_eq!(result.usage.as_ref().and_then(Usage::total), Some(5));
+  }
+
+  #[test]
+  fn message_with_reasoning_sets_it() {
+    let msg = ChatMessage::assistant("hi").with_reasoning("thought");
+    assert_eq!(msg.reasoning.as_deref(), Some("thought"));
   }
 
   #[test]

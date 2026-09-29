@@ -1,8 +1,9 @@
-use rhai_rt::{Array, EvalAltResult, Map};
+use rhai_rt::{Array, Dynamic, EvalAltResult, Map};
 
 use crate::{
   convert::{
-    handle_name, method, msg_from_dynamic, to_error, tool_from_dynamic,
+    handle_name, json_from_map, method, msg_from_dynamic, to_error,
+    tool_from_dynamic,
   },
   omw::omw::provider,
   tooling::chat_result_to_map,
@@ -22,11 +23,47 @@ pub(crate) fn provider_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
   Ok(m)
 }
 
+/// Serialize optional rhai params into the opaque JSON string the host
+/// expects. Accepts a map (serialized to JSON) or an already-JSON string
+/// (passed through, e.g. an `endpoint-message`'s `params`). Unit/empty is
+/// `None`.
+pub(crate) fn params_to_json(
+  params: &Dynamic,
+) -> Result<Option<String>, Box<EvalAltResult>> {
+  if params.is_unit() {
+    return Ok(None);
+  }
+  if let Some(text) = params.clone().try_cast::<String>() {
+    return Ok(if text.trim().is_empty() {
+      None
+    } else {
+      Some(text)
+    });
+  }
+  if let Some(map) = params.clone().try_cast::<Map>() {
+    if map.is_empty() {
+      return Ok(None);
+    }
+    return json_from_map(&map).map(Some).map_err(to_error);
+  }
+  Err(to_error("params must be a map or a JSON string"))
+}
+
 pub(crate) fn provider_chat_stream(
   handle: Map,
   model: &str,
   messages: Array,
   tools: Array,
+) -> Result<String, Box<EvalAltResult>> {
+  provider_chat_stream_with_params(handle, model, messages, tools, ().into())
+}
+
+pub(crate) fn provider_chat_stream_with_params(
+  handle: Map,
+  model: &str,
+  messages: Array,
+  tools: Array,
+  params: Dynamic,
 ) -> Result<String, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
   let p = provider::get(&name).map_err(to_error)?;
@@ -40,8 +77,9 @@ pub(crate) fn provider_chat_stream(
     .map(tool_from_dynamic)
     .collect::<Result<Vec<_>, _>>()
     .map_err(to_error)?;
-  let result = p.chat_stream(model, &msgs, &tls);
-  result.map_err(to_error)
+  let params = params_to_json(&params)?;
+  p.chat_stream(model, &msgs, &tls, params.as_deref())
+    .map_err(to_error)
 }
 
 pub(crate) fn provider_chat(
@@ -49,6 +87,16 @@ pub(crate) fn provider_chat(
   model: &str,
   messages: Array,
   tools: Array,
+) -> Result<Map, Box<EvalAltResult>> {
+  provider_chat_with_params(handle, model, messages, tools, ().into())
+}
+
+pub(crate) fn provider_chat_with_params(
+  handle: Map,
+  model: &str,
+  messages: Array,
+  tools: Array,
+  params: Dynamic,
 ) -> Result<Map, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
   let p = provider::get(&name).map_err(to_error)?;
@@ -62,7 +110,8 @@ pub(crate) fn provider_chat(
     .map(tool_from_dynamic)
     .collect::<Result<Vec<_>, _>>()
     .map_err(to_error)?;
-  let result = p.chat(model, &msgs, &tls)?;
+  let params = params_to_json(&params)?;
+  let result = p.chat(model, &msgs, &tls, params.as_deref())?;
   Ok(chat_result_to_map(result))
 }
 

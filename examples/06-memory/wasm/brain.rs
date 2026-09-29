@@ -9,7 +9,7 @@ omw_wasm_rust::brain!(|| {
   let provider = Provider::get("openai")?;
   let model =
     host::memory_get("handle").unwrap_or_else(|| "fallback".to_string());
-  let reply = provider.chat(&model, &[ChatMessage::user("hi")], &[])?;
+  let reply = provider.chat(&model, &[ChatMessage::user("hi")], &[], None)?;
   host::info(reply.text().unwrap_or_default());
   Ok(())
 });

@@ -13,7 +13,7 @@ omw_wasm_rust::brain!(|| {
     let Event::EndpointMessage(message) = event.event else {
       return Err("expected an endpoint-message event".to_string());
     };
-    let reply = provider.chat("gpt-test", &message.messages, &[])?;
+    let reply = provider.chat("gpt-test", &message.messages, &[], None)?;
     host::stream_endpoint(
       &message.session,
       &ChatDelta::text(reply.content.unwrap_or_default()),

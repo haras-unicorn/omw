@@ -14,7 +14,7 @@ use futures_util::stream::{BoxStream, Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{ChatDelta, ChatMessage, Provider, Role, ToolCall};
+use super::{ChatDelta, ChatMessage, Provider, Role, ToolCall, Usage};
 use crate::secret::Secret;
 use crate::tooling::Tool;
 
@@ -27,6 +27,10 @@ struct Config {
   pub api_key: Option<Secret>,
   #[serde(default)]
   pub model: Option<String>,
+  /// Default generation params merged into every request body (temperature,
+  /// max_tokens, reasoning_effort, …). Per-call params override these.
+  #[serde(default)]
+  pub params: Option<serde_json::Map<String, Value>>,
 }
 
 /// An OpenAI-compatible chat provider backed by `reqwest`.
@@ -109,6 +113,7 @@ impl Provider for OpenAIProvider {
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>> {
     tracing::debug!(
       model,
@@ -125,15 +130,36 @@ impl Provider for OpenAIProvider {
         .unwrap_or("https://api.openai.com/v1")
         .trim_end_matches('/')
     );
-    let mut body = serde_json::json!({
-        "model": model,
-        "stream": true,
-        "messages": messages.iter().map(to_wire_message).collect::<Vec<_>>(),
-    });
-    if !tools.is_empty() {
-      body["tools"] =
-        serde_json::json!(tools.iter().map(to_wire_tool).collect::<Vec<_>>());
+    // Start from the configured defaults, overlay the per-call params, then
+    // pin the mandatory fields so neither layer can break the request shape.
+    let mut body = serde_json::Map::new();
+    if let Some(defaults) = &self.config.params {
+      for (key, value) in defaults {
+        body.insert(key.clone(), value.clone());
+      }
     }
+    if let Some(Value::Object(params)) = &params {
+      for (key, value) in params {
+        body.insert(key.clone(), value.clone());
+      }
+    }
+    body.insert("model".into(), Value::String(model.to_string()));
+    body.insert("stream".into(), Value::Bool(true));
+    body.insert(
+      "messages".into(),
+      serde_json::json!(
+        messages.iter().map(to_wire_message).collect::<Vec<_>>()
+      ),
+    );
+    if tools.is_empty() {
+      body.remove("tools");
+    } else {
+      body.insert(
+        "tools".into(),
+        serde_json::json!(tools.iter().map(to_wire_tool).collect::<Vec<_>>()),
+      );
+    }
+    let body = Value::Object(body);
 
     let mut request = self.client.post(&url);
     if let Some(api_key) = &self.config.api_key {
@@ -202,6 +228,9 @@ fn to_wire_message(msg: &ChatMessage) -> serde_json::Value {
   if let Some(content) = &msg.content {
     m["content"] = serde_json::Value::String(content.clone());
   }
+  if let Some(reasoning) = &msg.reasoning {
+    m["reasoning"] = serde_json::Value::String(reasoning.clone());
+  }
   if let Some(tool_call) = &msg.tool_call {
     let tc = serde_json::json!({
         "id": tool_call.id,
@@ -219,7 +248,21 @@ fn to_wire_message(msg: &ChatMessage) -> serde_json::Value {
 /// A single SSE data payload from the wire, with only the fields we consume.
 #[derive(Debug, Deserialize)]
 struct WireChunk {
+  #[serde(default)]
   choices: Vec<WireChoice>,
+  #[serde(default)]
+  usage: Option<WireUsage>,
+}
+
+/// Token accounting as the wire reports it.
+#[derive(Debug, Deserialize)]
+struct WireUsage {
+  #[serde(default)]
+  prompt_tokens: Option<u64>,
+  #[serde(default)]
+  completion_tokens: Option<u64>,
+  #[serde(default)]
+  total_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,6 +276,9 @@ struct WireChoice {
 struct WireDelta {
   #[serde(default)]
   content: Option<String>,
+  /// Some providers spell it `reasoning`, others `reasoning_content`.
+  #[serde(default, alias = "reasoning_content")]
+  reasoning: Option<String>,
   #[serde(default)]
   tool_calls: Vec<WireToolCall>,
 }
@@ -282,8 +328,19 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
   }
 
   fn decode_chunk(&mut self, chunk: &WireChunk) -> Option<ChatDelta> {
-    let choice = chunk.choices.first()?;
+    let usage = chunk.usage.as_ref().map(to_usage);
+    let Some(choice) = chunk.choices.first() else {
+      // A usage-only trailing chunk carries no choices.
+      return usage.map(|usage| ChatDelta {
+        content: None,
+        reasoning: None,
+        tool_call: None,
+        finish_reason: None,
+        usage: Some(usage),
+      });
+    };
     let content = choice.delta.content.clone();
+    let reasoning = choice.delta.reasoning.clone();
     let mut tool_call = None;
 
     for tc in &choice.delta.tool_calls {
@@ -324,14 +381,17 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
 
     tracing::trace!(
       content_len = content.as_ref().map_or(0, String::len),
+      reasoning_len = reasoning.as_ref().map_or(0, String::len),
       tool_call = tool_call.as_ref().map(|t| t.name.as_str()),
       finish_reason = choice.finish_reason.as_deref(),
       "openai chat delta"
     );
     Some(ChatDelta {
       content,
+      reasoning,
       tool_call,
       finish_reason: choice.finish_reason.clone(),
+      usage,
     })
   }
 
@@ -343,13 +403,24 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
     }
     Some(ChatDelta {
       content: None,
+      reasoning: None,
       tool_call: Some(ToolCall {
         id,
         name,
         arguments: args,
       }),
       finish_reason: None,
+      usage: None,
     })
+  }
+}
+
+/// Map a wire usage block onto the host [`Usage`].
+fn to_usage(usage: &WireUsage) -> Usage {
+  Usage {
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens,
   }
 }
 
@@ -468,6 +539,7 @@ mod tests {
       let msg = ChatMessage {
         role,
         content: Some("hi".to_string()),
+        reasoning: None,
         tool_call: None,
       };
       let wire = to_wire_message(&msg);
@@ -482,6 +554,7 @@ mod tests {
     let msg = ChatMessage {
       role: Role::User,
       content: None,
+      reasoning: None,
       tool_call: None,
     };
     let wire = to_wire_message(&msg);
@@ -493,6 +566,7 @@ mod tests {
     let msg = ChatMessage {
       role: Role::Assistant,
       content: None,
+      reasoning: None,
       tool_call: Some(ToolCall {
         id: "call_1".to_string(),
         name: "get_weather".to_string(),
@@ -652,20 +726,54 @@ mod tests {
   }
 
   #[test]
+  fn sse_reasoning_and_usage_are_decoded() -> anyhow::Result<()> {
+    let body = format!(
+      "{}data: [DONE]\n\n",
+      [
+        data(r#"{"choices":[{"delta":{"reasoning_content":"think "},"finish_reason":null}]}"#),
+        data(r#"{"choices":[{"delta":{"reasoning":"harder","content":"answer"},"finish_reason":"stop"}]}"#),
+        data(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8}}"#),
+      ]
+      .concat()
+    );
+    let deltas = collect_deltas(&body)?;
+    assert_eq!(deltas.len(), 3);
+    assert_eq!(deltas[0].reasoning.as_deref(), Some("think "));
+    assert_eq!(deltas[1].reasoning.as_deref(), Some("harder"));
+    assert_eq!(deltas[1].content.as_deref(), Some("answer"));
+    let usage = deltas[2]
+      .usage
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("missing usage"))?;
+    assert_eq!(usage.prompt_tokens, Some(3));
+    assert_eq!(usage.completion_tokens, Some(5));
+    assert_eq!(usage.total_tokens, Some(8));
+    Ok(())
+  }
+
+  #[test]
   fn config_defaults_are_none() -> anyhow::Result<()> {
     let cfg = Config::deserialize(&serde_json::json!({}))?;
     assert_eq!(cfg.base_url, None);
     assert_eq!(cfg.api_key, None);
     assert_eq!(cfg.model, None);
+    assert!(cfg.params.is_none());
 
     let cfg = Config::deserialize(&serde_json::json!({
         "base_url": "https://example.com/v1",
         "api_key": "sk-test",
         "model": "gpt-test",
+        "params": { "temperature": 0.2, "reasoning_effort": "high" },
     }))?;
     assert_eq!(cfg.base_url.as_deref(), Some("https://example.com/v1"));
     assert_eq!(cfg.api_key.as_ref().map(|k| k.expose()), Some("sk-test"));
     assert_eq!(cfg.model.as_deref(), Some("gpt-test"));
+    let params = cfg
+      .params
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("missing params"))?;
+    assert_eq!(params["temperature"], serde_json::json!(0.2));
+    assert_eq!(params["reasoning_effort"], serde_json::json!("high"));
     Ok(())
   }
 }

@@ -287,8 +287,10 @@ A Cargo workspace with six crates plus a single WIT contract.
   for the per-agent `MessageBus` inboxes.
 
 - Keep the `omw` WIT world(s) in sync with `runtime/bindings.rs` (host),
-  `install_omw` (Rhai guest), the `omw` global (JS guest), and
-  `src/lib/omw-wasm-rust/wit/` (Rust SDK).
+  `install_omw` (Rhai guest), the `omw` global (JS guest), and the vendored
+  copies under `src/lib/omw-wasm-rust/wit/`,
+  `src/wasm/omw-wasm-rhai-interpreter/wit/`,
+  `src/wasm/omw-wasm-js-interpreter/wit/` and `src/wasm/omw-wasm-mock/wit/`.
 
 ## Library surface
 
@@ -300,7 +302,7 @@ plumbing (`pub(crate)`) or per-module private. The `omw-cli` binary crate
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`              | `Registries`, `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced`                                                                                                                                 | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                                          |
 | `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`                                                                                                                                                                    | default fns private                                                                                                                                                                                           |
-| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`), `register_providers!`                                                                       | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                         |
+| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `Usage`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                         |
 | `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!`                                                                     | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                      |
 | `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                                                                                            |
 | `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                                                                                            | `openai` still `pub mod` (impl detail)                                                                                                                                                                        |

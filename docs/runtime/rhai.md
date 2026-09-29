@@ -53,7 +53,11 @@ sub-modules that expose the WIT interfaces to the script:
 
 - `omw::provider::get(name)` — returns a provider handle map whose blocking
   `chat`, streaming `chat_stream`, `is-open`, `cancel`, `list_models`, and
-  `kind` entries are methods.
+  `kind` entries are methods. `chat`/`chat_stream` take an optional trailing
+  `params` argument: either a map of generation settings
+  (`#{ temperature: 0.2, reasoning_effort: "high" }`) or an already-JSON string
+  (e.g. an `endpoint-message`'s `params`), merged over the provider's configured
+  defaults.
 - `omw::tooling::get(name)` — returns a tooling handle map whose `list-tools`,
   `call-tool`, `is-open`, `cancel`, `call-tool-blocking`, `list-resources`,
   `read-resource`, `subscribe-resource-list`, `subscribe-resource`,
@@ -81,13 +85,16 @@ Events come back as maps shaped `#{ id, kind, payload }`:
   `tool-result`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, a map for `chat-delta` (with
-  `content`, `tool_call` `{ id, name, arguments }`, and `finish_reason`), a map
-  for `tool-result` (`{ name, arguments, value }`), a list of resource maps
+  `content`, `reasoning`, `tool_call` `{ id, name, arguments }`,
+  `finish_reason`, and `usage`
+  `{ prompt_tokens?, completion_tokens?, total_tokens? }`), a map for
+  `tool-result` (`{ name, arguments, value }`), a list of resource maps
   (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
   resource-content map (`{ uri, mime_type?, content }`) for `resource-updated`,
-  a map for `endpoint-message` (`{ session, messages, tools }`, with `messages`
-  a list of `{ role, content?, tool_call? }` maps, and `tools` a list of
-  `{ name, description?, input_schema }`), a map for `endpoint-session-end`
+  a map for `endpoint-message` (`{ session, messages, tools, params? }`, with
+  `messages` a list of `{ role, content?, reasoning?, tool_call? }` maps,
+  `tools` a list of `{ name, description?, input_schema }`, and `params` the
+  opaque JSON string the client submitted), a map for `endpoint-session-end`
   (`{ session, error? }`), and unit otherwise. The `content` field holds actual
   text for textual formats and base64 for anything else — match on `mime_type`
   to tell which. Decode binary payloads with `omw::host::base64_decode` (which

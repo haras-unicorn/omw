@@ -276,6 +276,7 @@ impl MessageBus {
     session: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<serde_json::Value>,
   ) -> Result<(String, String), String> {
     let mut inner = lock(&self.inner);
     let Some((agent, uuid)) = inner.endpoint_by_model.get(model).cloned()
@@ -289,6 +290,7 @@ impl MessageBus {
         session: session.to_string(),
         messages,
         tools,
+        params,
       }),
     };
     let (tx, _) = self.channels_locked(&mut inner, &agent);
@@ -678,9 +680,11 @@ mod tests {
         vec![ChatMessage {
           role: crate::provider::Role::User,
           content: Some("hi".to_string()),
+          reasoning: None,
           tool_call: None,
         }],
         Vec::new(),
+        None,
       )
       .map_err(|e| anyhow::anyhow!(e))?;
     assert_eq!(agent, "alice");

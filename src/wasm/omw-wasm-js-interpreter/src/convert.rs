@@ -94,6 +94,7 @@ pub(crate) fn msg_from_json(
   Ok(provider::ChatMessage {
     role,
     content: opt_str(obj, "content")?,
+    reasoning: opt_str(obj, "reasoning")?,
     tool_call: match obj.get("tool_call") {
       None | Some(serde_json::Value::Null) => None,
       Some(tc) => Some(tool_call_from_json(tc)?),
@@ -148,6 +149,32 @@ pub(crate) fn tools_from_js(
     .as_array()
     .ok_or_else(|| js_err("tools must be an array"))?;
   items.iter().map(tool_from_json).collect()
+}
+
+/// Serialize optional JS params into the opaque JSON string the host expects.
+/// Accepts an object (serialized to JSON) or an already-JSON string (passed
+/// through, e.g. an `endpoint-message`'s `params`). `undefined`/`null`/empty
+/// is `None`.
+pub(crate) fn params_from_js(
+  value: &JsValue,
+  ctx: &mut Context,
+) -> Result<Option<String>, JsError> {
+  if value.is_undefined() || value.is_null() {
+    return Ok(None);
+  }
+  if let Some(text) = string_of(value) {
+    return Ok(if text.trim().is_empty() {
+      None
+    } else {
+      Some(text)
+    });
+  }
+  let json = value
+    .to_json(ctx)?
+    .ok_or_else(|| js_err("params must be an object or JSON string"))?;
+  serde_json::to_string(&json)
+    .map(Some)
+    .map_err(|e| js_err(e.to_string()))
 }
 
 pub(crate) fn json_string_from_js(
@@ -221,6 +248,12 @@ fn chat_message_to_json(m: types::ChatMessage) -> serde_json::Value {
   if let Some(content) = m.content {
     o.insert("content".to_string(), serde_json::Value::String(content));
   }
+  if let Some(reasoning) = m.reasoning {
+    o.insert(
+      "reasoning".to_string(),
+      serde_json::Value::String(reasoning),
+    );
+  }
   if let Some(tc) = m.tool_call {
     o.insert("tool_call".to_string(), tool_call_to_json(tc));
   }
@@ -243,10 +276,56 @@ fn tool_to_json(t: types::Tool) -> serde_json::Value {
   serde_json::Value::Object(o)
 }
 
+fn usage_to_json(u: types::Usage) -> serde_json::Value {
+  let mut o = serde_json::Map::new();
+  if let Some(prompt) = u.prompt_tokens {
+    o.insert("prompt_tokens".to_string(), serde_json::Value::from(prompt));
+  }
+  if let Some(completion) = u.completion_tokens {
+    o.insert(
+      "completion_tokens".to_string(),
+      serde_json::Value::from(completion),
+    );
+  }
+  if let Some(total) = u.total_tokens {
+    o.insert("total_tokens".to_string(), serde_json::Value::from(total));
+  }
+  serde_json::Value::Object(o)
+}
+
+fn usage_from_json(v: &serde_json::Value) -> Result<types::Usage, JsError> {
+  let obj = v
+    .as_object()
+    .ok_or_else(|| js_err("usage must be an object"))?;
+  fn token(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+  ) -> Result<Option<u64>, JsError> {
+    match obj.get(key) {
+      None | Some(serde_json::Value::Null) => Ok(None),
+      Some(value) => value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| js_err(format!("{key} must be a non-negative integer"))),
+    }
+  }
+  Ok(types::Usage {
+    prompt_tokens: token(obj, "prompt_tokens")?,
+    completion_tokens: token(obj, "completion_tokens")?,
+    total_tokens: token(obj, "total_tokens")?,
+  })
+}
+
 fn delta_to_json(delta: types::ChatDelta) -> serde_json::Value {
   let mut o = serde_json::Map::new();
   if let Some(content) = delta.content {
     o.insert("content".to_string(), serde_json::Value::String(content));
+  }
+  if let Some(reasoning) = delta.reasoning {
+    o.insert(
+      "reasoning".to_string(),
+      serde_json::Value::String(reasoning),
+    );
   }
   if let Some(tc) = delta.tool_call {
     o.insert("tool_call".to_string(), tool_call_to_json(tc));
@@ -256,6 +335,9 @@ fn delta_to_json(delta: types::ChatDelta) -> serde_json::Value {
       "finish_reason".to_string(),
       serde_json::Value::String(finish_reason),
     );
+  }
+  if let Some(usage) = delta.usage {
+    o.insert("usage".to_string(), usage_to_json(usage));
   }
   serde_json::Value::Object(o)
 }
@@ -270,11 +352,16 @@ pub(crate) fn delta_from_js(
     .ok_or_else(|| js_err("delta must be an object"))?;
   Ok(types::ChatDelta {
     content: opt_str(obj, "content")?,
+    reasoning: opt_str(obj, "reasoning")?,
     tool_call: match obj.get("tool_call") {
       None | Some(serde_json::Value::Null) => None,
       Some(tc) => Some(tool_call_from_json(tc)?),
     },
     finish_reason: opt_str(obj, "finish_reason")?,
+    usage: match obj.get("usage") {
+      None | Some(serde_json::Value::Null) => None,
+      Some(usage) => Some(usage_from_json(usage)?),
+    },
   })
 }
 
@@ -291,6 +378,12 @@ pub(crate) fn chat_result_to_json(r: types::ChatResult) -> serde_json::Value {
   if let Some(content) = r.content {
     o.insert("content".to_string(), serde_json::Value::String(content));
   }
+  if let Some(reasoning) = r.reasoning {
+    o.insert(
+      "reasoning".to_string(),
+      serde_json::Value::String(reasoning),
+    );
+  }
   o.insert(
     "tool_calls".to_string(),
     serde_json::Value::Array(
@@ -302,6 +395,9 @@ pub(crate) fn chat_result_to_json(r: types::ChatResult) -> serde_json::Value {
       "finish_reason".to_string(),
       serde_json::Value::String(finish_reason),
     );
+  }
+  if let Some(usage) = r.usage {
+    o.insert("usage".to_string(), usage_to_json(usage));
   }
   serde_json::Value::Object(o)
 }
@@ -364,14 +460,23 @@ pub(crate) fn envelope_to_js(
     Event::EndpointMessage(message) => {
       let messages = message.messages.into_iter().map(chat_message_to_json);
       let tools = message.tools.into_iter().map(tool_to_json);
-      (
-        "endpoint-message",
-        serde_json::json!({
-          "session": message.session,
-          "messages": serde_json::Value::Array(messages.collect()),
-          "tools": serde_json::Value::Array(tools.collect()),
-        }),
-      )
+      let mut o = serde_json::Map::new();
+      o.insert(
+        "session".to_string(),
+        serde_json::Value::String(message.session),
+      );
+      o.insert(
+        "messages".to_string(),
+        serde_json::Value::Array(messages.collect()),
+      );
+      o.insert(
+        "tools".to_string(),
+        serde_json::Value::Array(tools.collect()),
+      );
+      if let Some(params) = message.params {
+        o.insert("params".to_string(), serde_json::Value::String(params));
+      }
+      ("endpoint-message", serde_json::Value::Object(o))
     }
     Event::EndpointSessionEnd(end) => {
       let mut o = serde_json::Map::new();

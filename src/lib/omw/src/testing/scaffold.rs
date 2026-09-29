@@ -369,6 +369,7 @@ mod tests {
       _model: &str,
       _messages: Vec<ChatMessage>,
       _tools: Vec<Tool>,
+      _params: Option<serde_json::Value>,
     ) -> anyhow::Result<
       futures_util::stream::BoxStream<'static, Result<ChatDelta, String>>,
     > {
@@ -402,6 +403,7 @@ mod tests {
       _model: &str,
       _messages: Vec<ChatMessage>,
       _tools: Vec<Tool>,
+      _params: Option<serde_json::Value>,
     ) -> anyhow::Result<
       futures_util::stream::BoxStream<'static, Result<ChatDelta, String>>,
     > {

@@ -8,7 +8,7 @@ use omw_wasm_rust::{host, prelude::*};
 omw_wasm_rust::brain!(|| {
   let provider = Provider::get("openai")?;
   let messages = [ChatMessage::user("say hi")];
-  let reply = provider.chat("gpt-test", &messages, &[])?;
+  let reply = provider.chat("gpt-test", &messages, &[], None)?;
   host::info(reply.text().unwrap_or_default());
   Ok(())
 });

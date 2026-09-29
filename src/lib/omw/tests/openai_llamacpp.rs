@@ -109,16 +109,18 @@ async fn llamacpp_streams_real_inference() -> anyhow::Result<()> {
     content: Some(
       "You are a helpful assistant that does what the user says.".to_string(),
     ),
+    reasoning: None,
     tool_call: None,
   };
   let user_msg = ChatMessage {
     role: Role::User,
     content: Some("Reply with exactly the single word: 'pong'.".to_string()),
+    reasoning: None,
     tool_call: None,
   };
   let mut stream = entry
     .inner()
-    .chat_stream("omw-test", vec![system_msg, user_msg], Vec::new())
+    .chat_stream("omw-test", vec![system_msg, user_msg], Vec::new(), None)
     .await?;
 
   let mut content = String::new();

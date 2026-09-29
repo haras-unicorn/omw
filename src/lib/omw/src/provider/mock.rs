@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{ChatDelta, ChatMessage, Factory, Provider, ToolCall};
+use super::{ChatDelta, ChatMessage, Factory, Provider, ToolCall, Usage};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the mock provider.
@@ -33,14 +33,32 @@ struct Config {
   pub models: Vec<String>,
 }
 
-/// One scripted turn: either content or a tool call.
+/// One scripted turn: optional reasoning, content, a tool call, and usage.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Turn {
+  /// Plain content emitted before the terminal finish reason.
+  #[serde(default)]
+  pub content: Option<String>,
+  /// Reasoning/thinking content emitted as its own delta.
+  #[serde(default)]
+  pub reasoning: Option<String>,
+  /// A tool call, which makes the terminal finish reason `"tool_calls"`.
+  #[serde(default)]
+  pub tool_call: Option<ToolCallSpec>,
+  /// Token accounting attached to the terminal delta.
+  #[serde(default)]
+  pub usage: Option<UsageSpec>,
+}
+
+/// The scripted token counts of one turn.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum Turn {
-  /// A plain content turn. The mock emits it and a terminal `stop`.
-  Content { content: String },
-  /// A tool-call turn. The mock emits the call and a terminal `tool_calls`.
-  ToolCall { tool_call: ToolCallSpec },
+pub struct UsageSpec {
+  #[serde(default)]
+  pub prompt_tokens: Option<u64>,
+  #[serde(default)]
+  pub completion_tokens: Option<u64>,
+  #[serde(default)]
+  pub total_tokens: Option<u64>,
 }
 
 /// The scripted values of one tool call.
@@ -98,6 +116,8 @@ pub struct ChatCall {
   pub model: String,
   pub messages: Vec<ChatMessage>,
   pub tools: Vec<Tool>,
+  /// The opaque per-call generation params the guest passed, if any.
+  pub params: Option<Value>,
 }
 
 /// A scripted provider backed by an in-memory turn queue.
@@ -171,33 +191,64 @@ impl Provider for MockProvider {
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>> {
     self.calls.lock().await.push(ChatCall {
       model: model.to_string(),
       messages,
       tools,
+      params,
     });
-    let deltas: Vec<ChatDelta> = match self.next_turn().await {
-      Some(Turn::Content { content }) => vec![ChatDelta {
-        content: Some(content),
-        tool_call: None,
-        finish_reason: Some("stop".to_string()),
-      }],
-      Some(Turn::ToolCall { tool_call }) => vec![ChatDelta {
-        content: None,
-        tool_call: Some(ToolCall {
-          id: tool_call.id,
-          name: tool_call.name,
-          arguments: tool_call.arguments,
-        }),
-        finish_reason: Some("tool_calls".to_string()),
-      }],
-      None => Vec::new(),
-    };
+    let deltas = turn_to_deltas(self.next_turn().await);
     Ok(Box::pin(futures_util::stream::iter(
       deltas.into_iter().map(Ok),
     )))
   }
+}
+
+/// Expand one scripted turn into the deltas the mock streams: reasoning first
+/// (when present), then a terminal delta carrying the content or tool call plus
+/// the turn's usage.
+fn turn_to_deltas(turn: Option<Turn>) -> Vec<ChatDelta> {
+  let Some(turn) = turn else {
+    return Vec::new();
+  };
+  let usage = turn.usage.as_ref().map(|usage| Usage {
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens,
+  });
+  let mut deltas = Vec::new();
+  if let Some(reasoning) = turn.reasoning {
+    deltas.push(ChatDelta {
+      content: None,
+      reasoning: Some(reasoning),
+      tool_call: None,
+      finish_reason: None,
+      usage: None,
+    });
+  }
+  match turn.tool_call {
+    Some(tool_call) => deltas.push(ChatDelta {
+      content: turn.content,
+      reasoning: None,
+      tool_call: Some(ToolCall {
+        id: tool_call.id,
+        name: tool_call.name,
+        arguments: tool_call.arguments,
+      }),
+      finish_reason: Some("tool_calls".to_string()),
+      usage,
+    }),
+    None => deltas.push(ChatDelta {
+      content: turn.content,
+      reasoning: None,
+      tool_call: None,
+      finish_reason: Some("stop".to_string()),
+      usage,
+    }),
+  }
+  deltas
 }
 
 #[cfg(test)]
@@ -215,13 +266,13 @@ mod tests {
         ],
       }),
     )?;
-    let first = provider.chat("m", Vec::new(), Vec::new()).await?;
+    let first = provider.chat("m", Vec::new(), Vec::new(), None).await?;
     assert_eq!(first.content.as_deref(), Some("one"));
-    let second = provider.chat("m", Vec::new(), Vec::new()).await?;
+    let second = provider.chat("m", Vec::new(), Vec::new(), None).await?;
     assert_eq!(second.tool_calls.len(), 1);
     assert_eq!(second.tool_calls[0].name, "t");
     // The script is exhausted, so the last turn repeats.
-    let third = provider.chat("m", Vec::new(), Vec::new()).await?;
+    let third = provider.chat("m", Vec::new(), Vec::new(), None).await?;
     assert_eq!(third.tool_calls.len(), 1);
     assert_eq!(third.tool_calls[0].id, "c1");
     Ok(())
@@ -252,10 +303,42 @@ mod tests {
       }),
     )?;
     // A string is left verbatim; an inline value is stringified at build.
-    let first = provider.chat("m", Vec::new(), Vec::new()).await?;
+    let first = provider.chat("m", Vec::new(), Vec::new(), None).await?;
     assert_eq!(first.tool_calls[0].arguments, "{\"input\":\"hi\"}");
-    let second = provider.chat("m", Vec::new(), Vec::new()).await?;
+    let second = provider.chat("m", Vec::new(), Vec::new(), None).await?;
     assert_eq!(second.tool_calls[0].arguments, "{\"a\":1,\"b\":[2,3]}");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn reasoning_usage_and_params_are_scripted_and_recorded()
+  -> anyhow::Result<()> {
+    let provider = MockProvider::build(
+      "m",
+      &serde_json::json!({
+        "turns": [{
+          "reasoning": "thinking",
+          "content": "answer",
+          "usage": { "prompt_tokens": 2, "completion_tokens": 4 },
+        }],
+      }),
+    )?;
+    let params = serde_json::json!({ "temperature": 0.5 });
+    let result = provider
+      .chat("m", Vec::new(), Vec::new(), Some(params.clone()))
+      .await?;
+    assert_eq!(result.content.as_deref(), Some("answer"));
+    assert_eq!(result.reasoning.as_deref(), Some("thinking"));
+    let usage = result
+      .usage
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("missing usage"))?;
+    assert_eq!(usage.prompt_tokens, Some(2));
+    assert_eq!(usage.completion_tokens, Some(4));
+    assert_eq!(usage.total_tokens, None);
+
+    let calls = provider.calls().await;
+    assert_eq!(calls[0].params.as_ref(), Some(&params));
     Ok(())
   }
 

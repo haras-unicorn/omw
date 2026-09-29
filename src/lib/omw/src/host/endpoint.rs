@@ -328,8 +328,10 @@ mod tests {
   ) -> ChatDelta {
     ChatDelta {
       content,
+      reasoning: None,
       tool_call: None,
       finish_reason,
+      usage: None,
     }
   }
 

@@ -21,6 +21,9 @@ pub struct EndpointMessage {
   pub session: String,
   pub messages: Vec<crate::provider::ChatMessage>,
   pub tools: Vec<crate::tooling::Tool>,
+  /// The generation params the endpoint client submitted (temperature,
+  /// max_tokens, …), as opaque JSON. `None` when the client sent none.
+  pub params: Option<serde_json::Value>,
 }
 
 /// An endpoint session ended: normally (`error` absent) when the agent's

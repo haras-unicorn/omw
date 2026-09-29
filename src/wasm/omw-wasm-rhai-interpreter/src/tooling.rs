@@ -165,11 +165,15 @@ pub(crate) fn tool_result_to_map(r: types::ToolResult) -> Map {
 }
 
 /// Map a `types::ChatResult` into a rhai map so scripts can read `content`,
-/// `tool_calls`, and `finish_reason` off a blocking `chat` result.
+/// `reasoning`, `tool_calls`, `finish_reason`, and `usage` off a blocking
+/// `chat` result.
 pub(crate) fn chat_result_to_map(r: types::ChatResult) -> Map {
   let mut m = Map::new();
   if let Some(content) = r.content {
     m.insert("content".into(), content.into());
+  }
+  if let Some(reasoning) = r.reasoning {
+    m.insert("reasoning".into(), reasoning.into());
   }
   let mut calls = Array::new();
   for tc in r.tool_calls {
@@ -182,6 +186,33 @@ pub(crate) fn chat_result_to_map(r: types::ChatResult) -> Map {
   m.insert("tool_calls".into(), calls.into());
   if let Some(finish_reason) = r.finish_reason {
     m.insert("finish_reason".into(), finish_reason.into());
+  }
+  if let Some(usage) = r.usage {
+    m.insert("usage".into(), usage_to_map(usage).into());
+  }
+  m
+}
+
+/// Map a `types::Usage` into a rhai map of token counts.
+pub(crate) fn usage_to_map(usage: types::Usage) -> Map {
+  let mut m = Map::new();
+  if let Some(prompt) = usage.prompt_tokens {
+    m.insert(
+      "prompt_tokens".into(),
+      i64::try_from(prompt).unwrap_or(i64::MAX).into(),
+    );
+  }
+  if let Some(completion) = usage.completion_tokens {
+    m.insert(
+      "completion_tokens".into(),
+      i64::try_from(completion).unwrap_or(i64::MAX).into(),
+    );
+  }
+  if let Some(total) = usage.total_tokens {
+    m.insert(
+      "total_tokens".into(),
+      i64::try_from(total).unwrap_or(i64::MAX).into(),
+    );
   }
   m
 }

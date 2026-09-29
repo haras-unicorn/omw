@@ -30,3 +30,9 @@ delivers SSE deltas ending with `data: [DONE]`; `stream: false` buffers deltas
 into one JSON `chat.completion`. `tools` (OpenAI tool schema) is optional.
 Errors — unknown roles, malformed tools, unknown models — are reported as OpenAI
 `error` responses with matching status codes.
+
+Any other request fields the client sends (`temperature`, `max_tokens`,
+`reasoning_effort`, …) are collected verbatim and forwarded to the owning agent
+as the `endpoint-message`'s opaque `params` JSON string, so a brain can pass
+them straight to its own provider. Reasoning the agent streams back is relayed
+as `reasoning_content` in both the SSE deltas and the buffered message.

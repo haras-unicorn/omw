@@ -701,6 +701,7 @@ mod tests {
         vec![crate::provider::ChatMessage {
           role: crate::provider::Role::User,
           content: Some("hi".to_string()),
+          reasoning: None,
           tool_call: None,
         }],
         vec![crate::tooling::Tool {
@@ -708,6 +709,7 @@ mod tests {
           description: Some("weather".to_string()),
           input_schema: serde_json::json!({ "type": "object" }),
         }],
+        None,
       )
       .map_err(|e| anyhow::anyhow!(e))?;
 

@@ -108,12 +108,14 @@ pub fn spawn_pump(
   model: String,
   messages: Vec<ChatMessage>,
   tools: Vec<Tool>,
+  params: Option<serde_json::Value>,
 ) {
   let mut cancel = streams.open(uuid.clone());
   tracing::info!(agent = %name, uuid = %uuid, model = %model, "chat stream opened");
   rt.spawn(async move {
     let agent = name.clone();
-    let mut stream = match provider.chat_stream(&model, messages, tools).await {
+    let mut stream =
+      match provider.chat_stream(&model, messages, tools, params).await {
       Ok(stream) => stream,
       Err(e) => {
         tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed to open");
@@ -216,6 +218,7 @@ mod tests {
       "mock-model".to_string(),
       Vec::new(),
       Vec::new(),
+      None,
     );
     let first = bus.recv("alice", Duration::from_secs(5))?;
     match first.event {

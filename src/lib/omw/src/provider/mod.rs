@@ -42,15 +42,31 @@ pub struct ToolCall {
 pub struct ChatMessage {
   pub role: Role,
   pub content: Option<String>,
+  /// Reasoning/thinking content the model produced for this message. Sent
+  /// back to the provider on assistant messages when present.
+  pub reasoning: Option<String>,
   pub tool_call: Option<ToolCall>,
+}
+
+/// Token accounting for one chat response. Every field is optional because not
+/// every provider reports every count.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Usage {
+  pub prompt_tokens: Option<u64>,
+  pub completion_tokens: Option<u64>,
+  pub total_tokens: Option<u64>,
 }
 
 /// A streaming delta of model output.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatDelta {
   pub content: Option<String>,
+  /// Reasoning/thinking content produced by this chunk.
+  pub reasoning: Option<String>,
   pub tool_call: Option<ToolCall>,
   pub finish_reason: Option<String>,
+  /// Token accounting reported by this chunk, if any.
+  pub usage: Option<Usage>,
 }
 
 /// The in-band result of a blocking `chat` call: the concatenated text, the
@@ -58,8 +74,12 @@ pub struct ChatDelta {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatResult {
   pub content: Option<String>,
+  /// Concatenated reasoning/thinking content, when the provider produced any.
+  pub reasoning: Option<String>,
   pub tool_calls: Vec<ToolCall>,
   pub finish_reason: Option<String>,
+  /// Token accounting for the response, when the provider reported it.
+  pub usage: Option<Usage>,
 }
 
 /// A configured provider instance: the impl plus its config-derived name and
@@ -132,21 +152,30 @@ pub trait Provider: Send + Sync {
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<Value>,
   ) -> anyhow::Result<ChatResult> {
-    let mut stream = self.chat_stream(model, messages, tools).await?;
+    let mut stream = self.chat_stream(model, messages, tools, params).await?;
     let mut content = String::new();
+    let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
     let mut finish_reason = None;
+    let mut usage = None;
     while let Some(delta) = stream.next().await {
       let delta = delta.map_err(anyhow::Error::msg)?;
       if let Some(chunk) = delta.content {
         content.push_str(&chunk);
+      }
+      if let Some(chunk) = delta.reasoning {
+        reasoning.push_str(&chunk);
       }
       if let Some(tc) = delta.tool_call {
         merge_tool_call(&mut tool_calls, tc);
       }
       if delta.finish_reason.is_some() {
         finish_reason = delta.finish_reason;
+      }
+      if delta.usage.is_some() {
+        usage = delta.usage;
       }
     }
     Ok(ChatResult {
@@ -155,19 +184,30 @@ pub trait Provider: Send + Sync {
       } else {
         Some(content)
       },
+      reasoning: if reasoning.is_empty() {
+        None
+      } else {
+        Some(reasoning)
+      },
       tool_calls,
       finish_reason,
+      usage,
     })
   }
 
   /// Run a chat and stream the deltas. Implementations must return an error
   /// (rather than an empty stream) on transport/auth failures before the
   /// first delta.
+  ///
+  /// `params` is an optional opaque JSON object of generation settings
+  /// (temperature, max_tokens, reasoning_effort, …) forwarded to the provider
+  /// and merged over its configured defaults.
   async fn chat_stream(
     &self,
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>>;
 }
 

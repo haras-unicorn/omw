@@ -81,7 +81,9 @@ fn eval_rhai(script: &str) -> Result<Option<String>, String> {
 /// sub-modules with the engine, plus the handle method implementations.
 fn install_omw(engine: &mut Engine) {
   engine.register_fn("provider_chat", provider_chat);
+  engine.register_fn("provider_chat", provider_chat_with_params);
   engine.register_fn("provider_chat_stream", provider_chat_stream);
+  engine.register_fn("provider_chat_stream", provider_chat_stream_with_params);
   engine.register_fn("provider_is_open", provider_is_open);
   engine.register_fn("provider_cancel", provider_cancel);
   engine.register_fn("provider_list_models", provider_list_models);
