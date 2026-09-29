@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "omw"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "omw-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "omw-test"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3030,7 +3030,7 @@ dependencies = [
 
 [[package]]
 name = "omw-wasm-rust"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "wit-bindgen 0.61.1",
 ]
