@@ -29,8 +29,26 @@ interface ChatMessage {
   /** Optional text content; absent on messages bearing only a tool call. */
   content?: string;
 
+  /**
+   * Optional reasoning/thinking content. Sent back to the provider on
+   * assistant messages when present.
+   */
+  reasoning?: string;
+
   /** Optional tool call attached to this message. */
   tool_call?: ToolCall;
+}
+
+/** Token accounting for one chat response. */
+interface Usage {
+  /** Tokens in the prompt/request. */
+  prompt_tokens?: number;
+
+  /** Tokens generated in the response. */
+  completion_tokens?: number;
+
+  /** Total tokens, when the provider reports it. */
+  total_tokens?: number;
 }
 
 /** One incremental chunk of a streaming chat response. */
@@ -38,11 +56,17 @@ interface ChatDelta {
   /** Optional text content produced by this chunk. */
   content?: string;
 
+  /** Optional reasoning/thinking content produced by this chunk. */
+  reasoning?: string;
+
   /** Optional tool call announced by this chunk. */
   tool_call?: ToolCall;
 
   /** Optional terminal reason the stream stopped (`"stop"`, `"length"`, …). */
   finish_reason?: string;
+
+  /** Optional token accounting reported by this chunk. */
+  usage?: Usage;
 }
 
 /** A callable tool offered to the model, as passed to `chat`/`chatStream`. */
@@ -77,11 +101,17 @@ interface ChatResult {
   /** The concatenated text content; absent if the response was only calls. */
   content?: string;
 
+  /** The concatenated reasoning/thinking content, when produced. */
+  reasoning?: string;
+
   /** The reassembled tool calls the model made, in first-seen order. */
   tool_calls: ToolCall[];
 
   /** Optional terminal reason the response stopped (`"stop"`, …). */
   finish_reason?: string;
+
+  /** Optional token accounting for the response. */
+  usage?: Usage;
 }
 
 /** The result of a single tool invocation. */
@@ -143,6 +173,12 @@ interface EndpointMessage {
 
   /** The tools advertised by the endpoint client. */
   tools: ChatTool[];
+
+  /**
+   * The generation params the endpoint client submitted (temperature, …), as
+   * an opaque JSON string. `JSON.parse` it to read fields; absent when none.
+   */
+  params?: string;
 }
 
 /** An endpoint session ended, normally or abruptly. */
@@ -183,16 +219,28 @@ interface ProviderHandle {
   /**
    * Run a chat conversation to completion and return the full result in-band.
    * Unlike `chatStream`, no events are delivered and the call cannot be
-   * cancelled.
+   * cancelled. `params` is an optional object (or JSON string) of generation
+   * settings (temperature, max_tokens, reasoning_effort, …) merged over the
+   * provider's configured defaults.
    */
-  chat(model: string, messages: ChatMessage[], tools: ChatTool[]): ChatResult;
+  chat(
+    model: string,
+    messages: ChatMessage[],
+    tools: ChatTool[],
+    params?: object | string,
+  ): ChatResult;
 
   /**
    * Open a streaming chat response. Returns a UUID handle; deltas flow into the
    * inbox as `"chat-delta"` events until a terminal `"chat-end"` (or `"error"`)
-   * closes the stream.
+   * closes the stream. `params` is as in `chat`.
    */
-  chatStream(model: string, messages: ChatMessage[], tools: ChatTool[]): string;
+  chatStream(
+    model: string,
+    messages: ChatMessage[],
+    tools: ChatTool[],
+    params?: object | string,
+  ): string;
 
   /** Whether a chat stream is still open. */
   isOpen(uuid: string): boolean;

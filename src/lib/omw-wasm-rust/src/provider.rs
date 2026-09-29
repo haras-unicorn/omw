@@ -34,13 +34,18 @@ impl Provider {
   }
 
   /// Run a chat conversation to completion, in-band.
+  ///
+  /// `params` is an optional opaque JSON object of generation settings
+  /// (temperature, max_tokens, reasoning_effort, …) forwarded to the provider
+  /// and merged over its configured defaults.
   pub fn chat(
     &self,
     model: &str,
     messages: &[ChatMessage],
     tools: &[Tool],
+    params: Option<&str>,
   ) -> Result<ChatResult, String> {
-    self.inner.chat(model, messages, tools)
+    self.inner.chat(model, messages, tools, params)
   }
 
   /// Open a streaming chat response. Deltas arrive in the inbox as
@@ -50,9 +55,10 @@ impl Provider {
     model: &str,
     messages: &[ChatMessage],
     tools: &[Tool],
+    params: Option<&str>,
   ) -> Result<StreamGuard, String> {
     let name = self.inner.name();
-    let uuid = self.inner.chat_stream(model, messages, tools)?;
+    let uuid = self.inner.chat_stream(model, messages, tools, params)?;
     Ok(StreamGuard {
       provider: name,
       uuid,

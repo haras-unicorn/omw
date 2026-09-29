@@ -824,8 +824,10 @@ mod tests {
   fn delta(content: &str) -> Event {
     Event::ChatDelta(ChatDelta {
       content: Some(content.to_string()),
+      reasoning: None,
       tool_call: None,
       finish_reason: None,
+      usage: None,
     })
   }
 

@@ -3,7 +3,7 @@ use rhai_rt::{Array, Blob, Dynamic, EvalAltResult, Map};
 use crate::{
   convert::to_error,
   omw::omw::{host, types},
-  resource_content_to_map, resource_to_map, tool_result_to_map,
+  resource_content_to_map, resource_to_map, tool_result_to_map, usage_to_map,
 };
 
 pub(crate) fn host_log(
@@ -224,6 +224,9 @@ pub(crate) fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
         tools.push(tool_to_map(t).into());
       }
       payload.insert("tools".into(), tools.into());
+      if let Some(params) = message.params {
+        payload.insert("params".into(), params.into());
+      }
       ("endpoint-message", payload.into())
     }
     types::Event::EndpointSessionEnd(end) => {
@@ -241,11 +244,15 @@ pub(crate) fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
 }
 
 /// Map a `types::ChatDelta` into a rhai map so scripts can read `content`,
-/// `tool_call` and `finish_reason` off a `"chat-delta"` event's payload.
+/// `reasoning`, `tool_call`, `finish_reason`, and `usage` off a `"chat-delta"`
+/// event's payload.
 pub(crate) fn delta_to_map(delta: types::ChatDelta) -> Map {
   let mut m = Map::new();
   if let Some(content) = delta.content {
     m.insert("content".into(), content.into());
+  }
+  if let Some(reasoning) = delta.reasoning {
+    m.insert("reasoning".into(), reasoning.into());
   }
   if let Some(tc) = delta.tool_call {
     let mut t = Map::new();
@@ -257,16 +264,22 @@ pub(crate) fn delta_to_map(delta: types::ChatDelta) -> Map {
   if let Some(finish_reason) = delta.finish_reason {
     m.insert("finish_reason".into(), finish_reason.into());
   }
+  if let Some(usage) = delta.usage {
+    m.insert("usage".into(), usage_to_map(usage).into());
+  }
   m
 }
 
 /// Map a `types::ChatDelta` back out of a rhai map (the inverse of
-/// [`delta_to_map`]). Reads `content`, `tool_call` (a map with `id`/
-/// `name`/`arguments`), and `finish_reason` off it.
+/// [`delta_to_map`]). Reads `content`, `reasoning`, `tool_call` (a map with
+/// `id`/`name`/`arguments`), `finish_reason`, and `usage`.
 pub(crate) fn delta_from_map(delta: &Map) -> Result<types::ChatDelta, String> {
   let content = delta
     .get("content")
     .and_then(|c| c.clone().try_cast::<String>());
+  let reasoning = delta
+    .get("reasoning")
+    .and_then(|r| r.clone().try_cast::<String>());
   let tool_call = match delta.get("tool_call") {
     Some(tc) => {
       let tc = tc
@@ -296,19 +309,47 @@ pub(crate) fn delta_from_map(delta: &Map) -> Result<types::ChatDelta, String> {
   let finish_reason = delta
     .get("finish_reason")
     .and_then(|f| f.clone().try_cast::<String>());
+  let usage = match delta.get("usage") {
+    Some(usage) => {
+      let usage = usage
+        .clone()
+        .try_cast::<Map>()
+        .ok_or_else(|| "usage must be a map".to_string())?;
+      Some(types::Usage {
+        prompt_tokens: token_of(&usage, "prompt_tokens"),
+        completion_tokens: token_of(&usage, "completion_tokens"),
+        total_tokens: token_of(&usage, "total_tokens"),
+      })
+    }
+    None => None,
+  };
   Ok(types::ChatDelta {
     content,
+    reasoning,
     tool_call,
     finish_reason,
+    usage,
   })
 }
 
+/// Read a non-negative token count off a rhai map.
+fn token_of(map: &Map, key: &str) -> Option<u64> {
+  map
+    .get(key)
+    .and_then(|v| v.clone().try_cast::<i64>())
+    .and_then(|v| u64::try_from(v).ok())
+}
+
 /// Map a `types::ChatMessage` into a rhai map so scripts can read `role`,
-/// `content`,and `tool_call` off an `endpoint-message` event's messages.
+/// `content`, `reasoning`, and `tool_call` off an `endpoint-message` event's
+/// messages.
 pub(crate) fn chat_message_to_map(m: types::ChatMessage) -> Map {
   let mut r = Map::new();
   if let Some(content) = m.content {
     r.insert("content".into(), content.into());
+  }
+  if let Some(reasoning) = m.reasoning {
+    r.insert("reasoning".into(), reasoning.into());
   }
   if let Some(tc) = m.tool_call {
     r.insert("tool_call".into(), tool_call_to_map(tc).into());

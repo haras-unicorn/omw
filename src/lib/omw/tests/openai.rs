@@ -26,7 +26,7 @@ async fn chat_all(
 ) -> anyhow::Result<Vec<omw::provider::ChatDelta>> {
   let mut stream = entry
     .inner()
-    .chat_stream(model, messages, Vec::new())
+    .chat_stream(model, messages, Vec::new(), None)
     .await?;
   let mut out = Vec::new();
   while let Some(delta) = stream.next().await {
@@ -39,6 +39,7 @@ fn user(content: &str) -> ChatMessage {
   ChatMessage {
     role: Role::User,
     content: Some(content.to_string()),
+    reasoning: None,
     tool_call: None,
   }
 }
@@ -132,7 +133,7 @@ async fn non_2xx_yields_an_error() -> anyhow::Result<()> {
   let entry = build_provider(&server.uri())?;
   let err = match entry
     .inner()
-    .chat("gpt-test", vec![user("hi")], Vec::new())
+    .chat("gpt-test", vec![user("hi")], Vec::new(), None)
     .await
   {
     Ok(_) => anyhow::bail!("expected a non-2xx error"),
@@ -162,6 +163,58 @@ async fn sends_bearer_token_and_expected_payload() -> anyhow::Result<()> {
 
   let entry = build_provider(&server.uri())?;
   chat_all(&entry, "gpt-test", vec![user("hi")]).await?;
+  server.verify().await;
+  Ok(())
+}
+
+#[tokio::test]
+async fn merges_config_defaults_call_params_and_pins_mandatory_fields()
+-> anyhow::Result<()> {
+  let server = MockServer::start().await;
+  // Call params override config defaults; `model`/`stream` cannot be broken.
+  Mock::given(method("POST"))
+    .and(path("/v1/chat/completions"))
+    .and(bearer_token("sk-test"))
+    .and(body_partial_json(json!({
+      "model": "gpt-test",
+      "stream": true,
+      "messages": [{ "role": "user", "content": "hi" }],
+      "temperature": 0.2,
+      "max_tokens": 32,
+      "reasoning_effort": "high",
+      "extra_flag": true,
+    })))
+    .respond_with(ResponseTemplate::new(200).set_body_string(
+      "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+    ))
+    .expect(1)
+    .mount(&server)
+    .await;
+
+  let entry = omw::provider::Registry::default().build(
+    "openai",
+    "openai",
+    &json!({
+      "base_url": format!("{}/v1", server.uri()),
+      "api_key": "sk-test",
+      "params": { "temperature": 0.9, "extra_flag": true },
+    }),
+  )?;
+  let _stream = entry
+    .inner()
+    .chat_stream(
+      "gpt-test",
+      vec![user("hi")],
+      Vec::new(),
+      Some(json!({
+        "temperature": 0.2,
+        "max_tokens": 32,
+        "reasoning_effort": "high",
+        "model": "hacked",
+        "stream": false,
+      })),
+    )
+    .await?;
   server.verify().await;
   Ok(())
 }

@@ -137,6 +137,11 @@ async fn chat_completions(
     Ok(tools) => tools,
     Err(error) => return error_response(StatusCode::BAD_REQUEST, &error),
   };
+  let params = if body.params.is_empty() {
+    None
+  } else {
+    Some(Value::Object(body.params.clone()))
+  };
   let (agent, subscription) = match state.bus.endpoint_lookup(&body.model) {
     Some(pair) => pair,
     None => {
@@ -150,11 +155,13 @@ async fn chat_completions(
   // Open the session before routing, so the event the agent receives carries
   // the real session id the server will drain.
   let mut open = state.registry.clone().open(&agent, &subscription);
-  if let Err(error) =
-    state
-      .bus
-      .endpoint_route(&body.model, &open.session, messages, tools)
-  {
+  if let Err(error) = state.bus.endpoint_route(
+    &body.model,
+    &open.session,
+    messages,
+    tools,
+    params,
+  ) {
     // The model unsubscribed mid-request: drop the session silently. The
     // agent never saw an `endpoint-message`, so it must not get an
     // `endpoint-session-end` for a session it doesn't know.
@@ -166,6 +173,7 @@ async fn chat_completions(
     Sse::new(sse_body(open, Arc::clone(&state.registry), model)).into_response()
   } else {
     let mut content = String::new();
+    let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut finish_reason = None;
     let mut normal = false;
@@ -174,6 +182,9 @@ async fn chat_completions(
         Outbound::Delta(d) => {
           if let Some(chunk) = d.content {
             content.push_str(&chunk);
+          }
+          if let Some(chunk) = d.reasoning {
+            reasoning.push_str(&chunk);
           }
           if let Some(tc) = d.tool_call {
             merge_tool_call(&mut tool_calls, tc);
@@ -199,6 +210,7 @@ async fn chat_completions(
     Json(chat_completion(
       &body.model,
       &content,
+      &reasoning,
       &tool_calls,
       finish_reason,
     ))
@@ -276,6 +288,9 @@ fn delta_sse(
   if let Some(content) = &d.content {
     delta.insert("content".into(), content.clone().into());
   }
+  if let Some(reasoning) = &d.reasoning {
+    delta.insert("reasoning_content".into(), reasoning.clone().into());
+  }
   if let Some(tc) = &d.tool_call {
     delta.insert(
       "tool_calls".into(),
@@ -302,6 +317,7 @@ fn delta_sse(
 fn chat_completion(
   model: &str,
   content: &str,
+  reasoning: &str,
   tool_calls: &[ToolCall],
   finish_reason: Option<String>,
 ) -> serde_json::Value {
@@ -309,6 +325,9 @@ fn chat_completion(
   message.insert("role".into(), "assistant".into());
   if !content.is_empty() {
     message.insert("content".into(), content.into());
+  }
+  if !reasoning.is_empty() {
+    message.insert("reasoning_content".into(), reasoning.into());
   }
   if !tool_calls.is_empty() {
     message.insert(
@@ -407,6 +426,7 @@ fn parse_messages(
       Ok(ChatMessage {
         role,
         content,
+        reasoning: m.reasoning.clone(),
         tool_call,
       })
     })
@@ -468,6 +488,10 @@ struct ChatRequest {
   tools: Option<Vec<WireTool>>,
   #[serde(default)]
   stream: bool,
+  /// Any additional OpenAI generation params (temperature, max_tokens, …),
+  /// forwarded verbatim to the agent as opaque JSON.
+  #[serde(flatten)]
+  params: serde_json::Map<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -475,6 +499,8 @@ struct WireMessage {
   role: String,
   #[serde(default)]
   content: Option<serde_json::Value>,
+  #[serde(default)]
+  reasoning: Option<String>,
   #[serde(default)]
   tool_calls: Option<Vec<WireToolCall>>,
 }
@@ -604,8 +630,10 @@ mod tests {
         &session,
         ChatDelta {
           content: Some("Hello".to_string()),
+          reasoning: Some("pondering".to_string()),
           tool_call: None,
           finish_reason: None,
+          usage: None,
         },
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -615,8 +643,10 @@ mod tests {
         &session,
         ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: Some("stop".to_string()),
+          usage: None,
         },
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -642,6 +672,7 @@ mod tests {
   async fn chat_completions_streams_sse_until_done() -> anyhow::Result<()> {
     let (body, _) = drive_reply(true).await?;
     assert!(body.contains("Hello"));
+    assert!(body.contains("\"reasoning_content\":\"pondering\""));
     assert!(body.contains("\"finish_reason\":\"stop\""));
     assert!(body.contains("\"model\":\"gpt-4o\""));
     assert!(body.contains("\"role\":\"assistant\""));
@@ -656,6 +687,10 @@ mod tests {
       .map_err(|error| anyhow::anyhow!("expected a JSON body: {error}"))?;
     assert_eq!(json["model"], "gpt-4o");
     assert_eq!(json["choices"][0]["message"]["content"], "Hello");
+    assert_eq!(
+      json["choices"][0]["message"]["reasoning_content"],
+      "pondering"
+    );
     assert_eq!(json["choices"][0]["finish_reason"], "stop");
     Ok(())
   }
@@ -793,6 +828,8 @@ mod tests {
                 "parameters": { "type": "object" },
               },
             }],
+            "temperature": 0.3,
+            "max_tokens": 64,
             "stream": false,
           }),
         )
@@ -820,14 +857,23 @@ mod tests {
     );
     assert_eq!(message.tools.len(), 1);
     assert_eq!(message.tools[0].name, "get_weather");
+    let params = message
+      .params
+      .as_ref()
+      .ok_or_else(|| anyhow::anyhow!("expected forwarded params"))?;
+    assert_eq!(params["temperature"], serde_json::json!(0.3));
+    assert_eq!(params["max_tokens"], serde_json::json!(64));
+    assert!(params.get("model").is_none());
     registry
       .push(
         "alice",
         &message.session,
         ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: Some("stop".to_string()),
+          usage: None,
         },
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -896,7 +942,7 @@ mod tests {
     let open = registry.clone().open("alice", &sub);
     bus.endpoint_unsubscribe("alice", &sub);
     let route =
-      bus.endpoint_route("gpt-4o", &open.session, Vec::new(), Vec::new());
+      bus.endpoint_route("gpt-4o", &open.session, Vec::new(), Vec::new(), None);
     assert!(route.is_err());
     registry.remove_silent(&open.session);
     assert!(bus.try_recv("alice")?.is_none());
@@ -968,8 +1014,10 @@ mod tests {
         &open.session,
         ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: Some("stop".to_string()),
+          usage: None,
         },
       )
       .map_err(|e| anyhow::anyhow!(e))?;
@@ -982,8 +1030,10 @@ mod tests {
         &open.session,
         ChatDelta {
           content: None,
+          reasoning: None,
           tool_call: None,
           finish_reason: Some("stop".to_string()),
+          usage: None,
         },
       )
       .unwrap_err();

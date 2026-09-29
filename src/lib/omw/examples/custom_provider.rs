@@ -27,6 +27,7 @@ struct EchoCall {
   model: String,
   messages: Vec<ChatMessage>,
   tools: Vec<Tool>,
+  params: Option<serde_json::Value>,
 }
 
 /// A scripted provider backed by an in-memory response list.
@@ -69,19 +70,23 @@ impl Provider for EchoProvider {
     model: &str,
     messages: Vec<ChatMessage>,
     tools: Vec<Tool>,
+    params: Option<serde_json::Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>> {
     self.calls.lock().await.push(EchoCall {
       model: model.to_string(),
       messages,
       tools,
+      params,
     });
     let responses = self.responses.clone();
     Ok(Box::pin(futures_util::stream::iter(
       responses.into_iter().map(|content| {
         Ok(ChatDelta {
           content: Some(content),
+          reasoning: None,
           tool_call: None,
           finish_reason: None,
+          usage: None,
         })
       }),
     )))
@@ -120,10 +125,11 @@ responses = ["hello from echo"]
   let messages = vec![ChatMessage {
     role: Role::User,
     content: Some("say hi".to_string()),
+    reasoning: None,
     tool_call: None,
   }];
   let result = provider
-    .chat("echo-model", messages.clone(), Vec::new())
+    .chat("echo-model", messages.clone(), Vec::new(), None)
     .await?;
   anyhow::ensure!(
     result.content.as_deref() == Some("hello from echo"),
@@ -132,7 +138,7 @@ responses = ["hello from echo"]
 
   use futures_util::StreamExt as _;
   let mut stream = provider
-    .chat_stream("echo-model", messages.clone(), Vec::new())
+    .chat_stream("echo-model", messages.clone(), Vec::new(), None)
     .await?;
   let mut seen = String::new();
   while let Some(delta) = stream.next().await {
@@ -163,6 +169,11 @@ responses = ["hello from echo"]
       call.tools.is_empty(),
       "unexpected tools: {:?}",
       call.tools
+    );
+    anyhow::ensure!(
+      call.params.is_none(),
+      "unexpected params: {:?}",
+      call.params
     );
   }
   Ok(())

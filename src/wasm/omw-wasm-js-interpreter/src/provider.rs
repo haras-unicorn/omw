@@ -4,8 +4,8 @@ use boa_engine::{
 };
 
 use crate::convert::{
-  chat_result_to_json, handle_name, js_err, messages_from_js, str_arg,
-  tools_from_js, value_from_json,
+  chat_result_to_json, handle_name, js_err, messages_from_js, params_from_js,
+  str_arg, tools_from_js, value_from_json,
 };
 
 pub(crate) fn provider_get(
@@ -58,7 +58,10 @@ fn provider_chat(
   let model = str_arg(args, 0, "model")?;
   let messages = messages_from_js(args.get_or_undefined(1), ctx)?;
   let tools = tools_from_js(args.get_or_undefined(2), ctx)?;
-  let result = p.chat(&model, &messages, &tools).map_err(js_err)?;
+  let params = params_from_js(args.get_or_undefined(3), ctx)?;
+  let result = p
+    .chat(&model, &messages, &tools, params.as_deref())
+    .map_err(js_err)?;
   value_from_json(&chat_result_to_json(result), ctx)
 }
 
@@ -72,7 +75,10 @@ fn provider_chat_stream(
   let model = str_arg(args, 0, "model")?;
   let messages = messages_from_js(args.get_or_undefined(1), ctx)?;
   let tools = tools_from_js(args.get_or_undefined(2), ctx)?;
-  let id = p.chat_stream(&model, &messages, &tools).map_err(js_err)?;
+  let params = params_from_js(args.get_or_undefined(3), ctx)?;
+  let id = p
+    .chat_stream(&model, &messages, &tools, params.as_deref())
+    .map_err(js_err)?;
   Ok(JsValue::from(js_string!(id.as_str())))
 }
 

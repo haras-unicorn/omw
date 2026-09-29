@@ -32,6 +32,8 @@ Each `requests` entry is:
 - `messages` — the inbound chat messages, as `{ role, content }` (role defaults
   to `user`).
 - `tools` — any tools the caller offered.
+- `params` — opaque generation params (temperature, …) to forward with the
+  request, surfaced as the `endpoint-message`'s `params` JSON string.
 - `stream` — whether the caller asked for SSE. Informational only: the mock
   drains the same session either way.
 - `after` — the ordering gate (below).

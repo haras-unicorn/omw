@@ -67,8 +67,10 @@ impl MockAgent {
           &message.session,
           ChatDelta {
             content: None,
+            reasoning: None,
             tool_call: None,
             finish_reason: Some("stop".to_string()),
+            usage: None,
           },
         );
       }
@@ -129,8 +131,10 @@ async fn non_streaming_completion_through_sdk() -> anyhow::Result<()> {
     "gpt-4o",
     vec![ChatDelta {
       content: Some("Hello".to_string()),
+      reasoning: None,
       tool_call: None,
       finish_reason: None,
+      usage: None,
     }],
   );
   let base = serve(Arc::clone(&bus), Arc::clone(&agent.registry)).await?;
@@ -159,13 +163,17 @@ async fn streaming_completion_through_sdk() -> anyhow::Result<()> {
     vec![
       ChatDelta {
         content: Some("Hel".to_string()),
+        reasoning: None,
         tool_call: None,
         finish_reason: None,
+        usage: None,
       },
       ChatDelta {
         content: Some("lo".to_string()),
+        reasoning: None,
         tool_call: None,
         finish_reason: None,
+        usage: None,
       },
     ],
   );
@@ -199,12 +207,14 @@ async fn tool_call_round_trip_through_sdk() -> anyhow::Result<()> {
     "gpt-4o",
     vec![ChatDelta {
       content: None,
+      reasoning: None,
       tool_call: Some(ToolCall {
         id: "call_1".to_string(),
         name: "get_weather".to_string(),
         arguments: r#"{"location":"Boston"}"#.to_string(),
       }),
       finish_reason: None,
+      usage: None,
     }],
   );
   let base = serve(Arc::clone(&bus), Arc::clone(&agent.registry)).await?;
@@ -322,6 +332,7 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
     vec![ChatMessage {
       role: Role::User,
       content: Some("hi".to_string()),
+      reasoning: None,
       tool_call: None,
     }]
   );
@@ -341,8 +352,10 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
       &session,
       ChatDelta {
         content: None,
+        reasoning: None,
         tool_call: None,
         finish_reason: Some("stop".to_string()),
+        usage: None,
       },
     )
     .map_err(|e| anyhow::anyhow!(e))?;

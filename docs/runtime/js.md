@@ -53,7 +53,11 @@ the WIT interfaces to the script:
 
 - `omw.provider.get(name)` — returns a provider handle object whose blocking
   `chat`, streaming `chatStream`, `isOpen`, `cancel`, `listModels`, and `kind`
-  entries are methods.
+  entries are methods. `chat`/`chatStream` take an optional trailing `params`
+  argument: either an object of generation settings
+  (`{ temperature: 0.2, reasoning_effort: "high" }`) or an already-JSON string
+  (e.g. an `endpoint-message`'s `params`), merged over the provider's configured
+  defaults.
 - `omw.tooling.get(name)` — returns a tooling handle object whose `listTools`,
   `callTool`, `isOpen`, `cancel`, `callToolBlocking`, `listResources`,
   `readResource`, `subscribeResourceList`, `subscribeResource`,
@@ -100,14 +104,17 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `tool-result`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, an object for `chat-delta` (with
-  `content`, `tool_call` `{ id, name, arguments }`, and `finish_reason`), an
-  object for `tool-result` (`{ name, arguments, value }`), a list of resource
-  objects (`{ uri, name, description?, mime_type? }`) for
-  `resource-list-updated`, a resource-content object
-  (`{ uri, mime_type?, content }`) for `resource-updated`, an object for
-  `endpoint-message` (`{ session, messages, tools }`, with `messages` a list of
-  `{ role, content?, tool_call? }` objects, and `tools` a list of
-  `{ name, description?, input_schema }`), an object for `endpoint-session-end`
+  `content`, `reasoning`, `tool_call` `{ id, name, arguments }`,
+  `finish_reason`, and `usage`
+  `{ prompt_tokens?, completion_tokens?, total_tokens? }`), an object for
+  `tool-result` (`{ name, arguments, value }`), a list of resource objects
+  (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
+  resource-content object (`{ uri, mime_type?, content }`) for
+  `resource-updated`, an object for `endpoint-message`
+  (`{ session, messages, tools, params? }`, with `messages` a list of
+  `{ role, content?, reasoning?, tool_call? }` objects, `tools` a list of
+  `{ name, description?, input_schema }`, and `params` the opaque JSON string
+  the client submitted), an object for `endpoint-session-end`
   (`{ session, error? }`), and `null` otherwise. The `content` field holds
   actual text for textual formats and base64 for anything else — match on
   `mime_type` to tell which. Decode binary payloads with `omw.host.base64Decode`

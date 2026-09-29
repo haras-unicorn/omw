@@ -8,7 +8,7 @@ omw_wasm_rust::brain!(|| {
   let provider = Provider::get("openai")?;
   let tooling = Tooling::get("mcp")?;
   let first =
-    provider.chat("gpt-test", &[ChatMessage::user("use echo")], &[])?;
+    provider.chat("gpt-test", &[ChatMessage::user("use echo")], &[], None)?;
   let call = first
     .tool_calls
     .into_iter()
@@ -23,10 +23,12 @@ omw_wasm_rust::brain!(|| {
       ChatMessage {
         role: Role::Tool,
         content: Some(result.value),
+        reasoning: None,
         tool_call: None,
       },
     ],
     &[],
+    None,
   )?;
   host::info(second.text().unwrap_or_default());
   Ok(())

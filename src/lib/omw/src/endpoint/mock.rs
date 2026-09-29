@@ -29,6 +29,8 @@ struct InboundMessage {
   role: String,
   #[serde(default)]
   content: Option<String>,
+  #[serde(default)]
+  reasoning: Option<String>,
 }
 
 fn default_role() -> String {
@@ -45,6 +47,7 @@ impl InboundMessage {
         _ => Role::User,
       },
       content: self.content,
+      reasoning: self.reasoning,
       tool_call: None,
     }
   }
@@ -62,6 +65,9 @@ struct Request {
   /// the same session either way.
   #[serde(default)]
   pub stream: bool,
+  /// Opaque generation params the client submitted (temperature, …).
+  #[serde(default)]
+  pub params: Option<Value>,
   /// Ordering gate: absent or `"start"` fires as soon as the model is
   /// subscribed; a `call`/`inbound` pattern waits for a matching trace event.
   #[serde(default)]
@@ -147,6 +153,7 @@ impl Endpoint for MockEndpoint {
         &session,
         messages,
         request.tools.clone(),
+        request.params.clone(),
       ) {
         tracing::warn!(model = %request.model, error = %error, "endpoint mock route miss");
         registry.remove_silent(&session);
@@ -234,8 +241,10 @@ mod tests {
   fn delta(content: Option<&str>, finish_reason: Option<&str>) -> ChatDelta {
     ChatDelta {
       content: content.map(str::to_string),
+      reasoning: None,
       tool_call: None,
       finish_reason: finish_reason.map(str::to_string),
+      usage: None,
     }
   }
 

@@ -9,7 +9,7 @@ omw_wasm_rust::brain!(|| {
   let _subscription = host::subscribe_endpoint("gpt-4o")?;
   let provider = Provider::get("openai")?;
   let reply =
-    provider.chat("gpt-test", &[ChatMessage::user("warm up")], &[])?;
+    provider.chat("gpt-test", &[ChatMessage::user("warm up")], &[], None)?;
   let event = host::recv()?;
   let Event::EndpointMessage(message) = event.event else {
     return Err("expected an endpoint-message event".to_string());

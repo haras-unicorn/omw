@@ -39,6 +39,10 @@ interface types {
     /// Optional text content; absent on messages bearing only a tool call.
     content: option<string>,
 
+    /// Optional reasoning/thinking content the model produced for this
+    /// message. Sent back to the provider on assistant messages when present.
+    reasoning: option<string>,
+
     /// Optional tool call attached to this message.
     tool-call: option<tool-call>,
   }
@@ -48,12 +52,19 @@ interface types {
     /// Optional text content produced by this chunk.
     content: option<string>,
 
+    /// Optional reasoning/thinking content produced by this chunk.
+    reasoning: option<string>,
+
     /// Optional tool call announced by this chunk.
     tool-call: option<tool-call>,
 
     /// Optional terminal reason the stream stopped (`"stop"`, `"length"`,
     /// `"tool_calls"`, …).
     finish-reason: option<string>,
+
+    /// Optional token accounting reported by this chunk (many providers only
+    /// report it on the final chunk).
+    usage: option<usage>,
   }
 
   /// A callable tool exposed by tooling and offered to the model.
@@ -113,11 +124,28 @@ interface types {
     value: string,
   }
 
+  /// Token accounting for one chat response, as reported by the provider.
+  /// Every field is optional because not every provider reports every count.
+  record usage {
+    /// Tokens in the prompt/request.
+    prompt-tokens: option<u64>,
+
+    /// Tokens generated in the response.
+    completion-tokens: option<u64>,
+
+    /// Total tokens, when the provider reports it.
+    total-tokens: option<u64>,
+  }
+
   /// The full result of a blocking `chat` call.
   record chat-result {
     /// The concatenated text content of the response; absent if the response
     /// carried only tool calls.
     content: option<string>,
+
+    /// The concatenated reasoning/thinking content of the response, when the
+    /// provider produced any.
+    reasoning: option<string>,
 
     /// The fully-reassembled tool calls the model made, in first-seen order.
     tool-calls: list<tool-call>,
@@ -125,6 +153,9 @@ interface types {
     /// Optional terminal reason the response stopped (`"stop"`, `"length"`,
     /// `"tool_calls"`, …).
     finish-reason: option<string>,
+
+    /// Optional token accounting for the response.
+    usage: option<usage>,
   }
 
   /// An inbound chat request routed from the endpoint to a subscribed agent,
@@ -139,6 +170,10 @@ interface types {
 
     /// The tools advertised by the endpoint client, if any.
     tools: list<tool>,
+
+    /// The generation params the endpoint client submitted (temperature,
+    /// max_tokens, …), as opaque JSON. Absent when the client sent none.
+    params: option<string>,
   }
 
   /// A session ended: either the agent's reply completed (`error` absent) or
@@ -231,19 +266,28 @@ interface provider {
     /// Run a chat conversation to completion and return the full result in-band.
     /// Unlike `chat-stream`, no events are delivered; the call only returns
     /// after the response finishes (or errors), and cannot be cancelled.
+    ///
+    /// `params` is an optional opaque JSON object of generation settings
+    /// (temperature, max_tokens, reasoning_effort, …) forwarded to the
+    /// provider and merged over its configured defaults.
     chat: func(
       model: string,
       messages: list<chat-message>,
       tools: list<tool>,
+      params: option<string>,
     ) -> result<chat-result, string>;
 
     /// Open a streaming chat response. Returns a UUID handle; deltas flow
     /// into the agent's inbox as `"chat-delta"` events until a terminal
     /// `"chat-end"` (or `"error"`) event closes the stream.
+    ///
+    /// `params` is an optional opaque JSON object of generation settings,
+    /// as in `chat`.
     chat-stream: func(
       model: string,
       messages: list<chat-message>,
       tools: list<tool>,
+      params: option<string>,
     ) -> result<string, string>;
 
     /// Whether a chat stream is still open.
