@@ -31,6 +31,12 @@ A Cargo workspace with six crates plus a single WIT contract.
     `[endpoint]` entry of the same shape, plus per-agent wiring and per-agent
     seeded `[memory.<agent>]` values (inserted into the agent's memory before
     its brain runs, so they persist across hot reloads like any other memory).
+    `Config::schema_json` emits the machine-readable schema; each impl category
+    contributes a `pub(crate)` implementation `JsonSchema` that unions the
+    built-in kinds enabled in the build (openai/mcp/openai-endpoint/wasm for
+    `omw-cli`, plus the `mock` doubles and any script runtimes for `omw-test`)
+    with the generic `ImplConfig` escape hatch, so the schema follows the
+    crate's features (`schema.rs` holds the shared `kind_variant` helper).
 
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
@@ -327,7 +333,8 @@ Assume you are in the default development shell. Commands go through the `dev`
 wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
 
 - `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`; also
-  regenerates the per-variant test configs, `options.md` and `schema.json`
+  regenerates the per-variant test configs, `options.md` and the two schemas
+  (`schema.json` for `omw-cli`, `schema.test.json` for `omw-test`)
 - `dev test` — `omw test lib examples` (each library example), `omw test units`
   (`cargo clippy --all-features -- -D warnings` plus
   `cargo test --all-features`) and `omw test brain examples` (cross-builds the

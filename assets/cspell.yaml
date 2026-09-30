@@ -2,6 +2,9 @@
 useGitignore: true
 version: "0.2"
 language: en
+ignorePaths:
+  - schema.json
+  - schema.test.json
 ignoreWords:
   - tzdata
   - adduser

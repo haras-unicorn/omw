@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use futures_util::stream::BoxStream;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -21,8 +22,8 @@ use super::{ChatDelta, ChatMessage, Factory, Provider, ToolCall, Usage};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the mock provider.
-#[derive(Debug, Clone, Deserialize, Default)]
-struct Config {
+#[derive(Debug, Clone, Deserialize, Default, JsonSchema)]
+pub(crate) struct Config {
   /// Scripted turns; one is popped per `chat` (repeating the last once
   /// exhausted).
   #[serde(default)]
@@ -34,7 +35,7 @@ struct Config {
 }
 
 /// One scripted turn: optional reasoning, content, a tool call, and usage.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, JsonSchema)]
 pub struct Turn {
   /// Plain content emitted before the terminal finish reason.
   #[serde(default)]
@@ -51,7 +52,7 @@ pub struct Turn {
 }
 
 /// The scripted token counts of one turn.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct UsageSpec {
   #[serde(default)]
   pub prompt_tokens: Option<u64>,
@@ -106,6 +107,26 @@ impl<'de> Deserialize<'de> for ToolCallSpec {
       id: raw.id,
       name: raw.name,
       arguments: raw.arguments.into_string(),
+    })
+  }
+}
+
+impl schemars::JsonSchema for ToolCallSpec {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("MockToolCallSpec")
+  }
+
+  fn json_schema(
+    _generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    schemars::json_schema!({
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "arguments": {}
+      },
+      "required": ["id", "name", "arguments"]
     })
   }
 }

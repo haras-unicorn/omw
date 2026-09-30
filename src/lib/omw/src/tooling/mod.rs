@@ -16,7 +16,15 @@ pub mod mcp;
 pub(crate) mod mock;
 
 /// A tool exposed by a tooling.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(
+  Debug,
+  Clone,
+  PartialEq,
+  Eq,
+  serde::Deserialize,
+  serde::Serialize,
+  schemars::JsonSchema,
+)]
 pub struct Tool {
   pub name: String,
   pub description: Option<String>,
@@ -26,7 +34,15 @@ pub struct Tool {
 
 /// An MCP resource (a URI-addressed, readable data value) exposed by a
 /// tooling.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(
+  Debug,
+  Clone,
+  PartialEq,
+  Eq,
+  serde::Deserialize,
+  serde::Serialize,
+  schemars::JsonSchema,
+)]
 pub struct ResourceInfo {
   pub uri: String,
   pub name: String,
@@ -302,6 +318,33 @@ macro_rules! register_toolings {
   ($registry:expr, $($t:ty),* $(,)?) => {
     $( $registry.register::<$t>()?; )*
   };
+}
+
+/// Schema for the `tooling` map: the built-in kinds enabled in this build,
+/// plus the generic opaque escape hatch for custom back ends.
+pub(crate) struct ToolingImpls;
+
+impl schemars::JsonSchema for ToolingImpls {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("ToolingImpls")
+  }
+
+  fn json_schema(
+    generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    let mut variants: Vec<schemars::Schema> = Vec::new();
+    #[cfg(feature = "tooling-mcp")]
+    variants.push(crate::schema::kind_variant::<mcp::Config>(generator, "mcp"));
+    #[cfg(feature = "mock")]
+    variants.push(crate::schema::kind_variant::<mock::Config>(
+      generator, "mock",
+    ));
+    variants.push(generator.subschema_for::<crate::config::ImplConfig>());
+    schemars::json_schema!({
+      "type": "object",
+      "additionalProperties": { "anyOf": variants },
+    })
+  }
 }
 
 #[cfg(test)]

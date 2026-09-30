@@ -221,9 +221,7 @@ pub async fn scaffold(args: ScaffoldArgs) -> Result<()> {
 
 /// Generate the JSON schema for the configuration and write it to `path`.
 pub fn generate_schema(path: &Path) -> Result<()> {
-  let schema = schemars::schema_for!(Config);
-  let json = serde_json::to_string_pretty(&schema)
-    .context("failed to serialize schema")?;
+  let contents = Config::schema_json()?;
   if let Some(parent) = path.parent()
     && !parent.as_os_str().is_empty()
   {
@@ -231,7 +229,6 @@ pub fn generate_schema(path: &Path) -> Result<()> {
       format!("failed to create directory {}", parent.display())
     })?;
   }
-  let contents = format!("{json}\n");
   std::fs::write(path, contents)
     .with_context(|| format!("failed to write schema to {}", path.display()))?;
   tracing::info!("wrote configuration schema to {}", path.display());

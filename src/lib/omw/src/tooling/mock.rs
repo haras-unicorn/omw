@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::stream::BoxStream;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -38,8 +39,8 @@ fn default_delay_ms() -> u64 {
 }
 
 /// Impl-specific configuration for the mock tooling.
-#[derive(Debug, Clone, Deserialize)]
-struct Config {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   #[serde(default)]
   pub tools: Vec<Tool>,
 
@@ -70,8 +71,8 @@ struct Config {
 }
 
 /// One scripted `call-tool` result.
-#[derive(Debug, Clone, Deserialize)]
-struct ScriptedToolCall {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct ScriptedToolCall {
   name: String,
   #[serde(default)]
   result: String,
@@ -80,16 +81,16 @@ struct ScriptedToolCall {
 }
 
 /// One scripted, full-replacement resource-list update.
-#[derive(Debug, Clone, Deserialize)]
-struct ResourceListUpdate {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct ResourceListUpdate {
   resources: Vec<ResourceInfo>,
   #[serde(default)]
   after: After,
 }
 
 /// One scripted, one-by-one resource-content update.
-#[derive(Debug, Clone, Deserialize)]
-struct ResourceContentUpdate {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct ResourceContentUpdate {
   uri: String,
   content: String,
   #[serde(default)]

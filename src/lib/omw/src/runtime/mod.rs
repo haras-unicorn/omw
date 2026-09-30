@@ -253,6 +253,37 @@ macro_rules! register_runtimes {
   };
 }
 
+/// Schema for the `runtime` map: the built-in kinds enabled in this build,
+/// plus the generic opaque escape hatch for custom back ends.
+pub(crate) struct RuntimeImpls;
+
+impl schemars::JsonSchema for RuntimeImpls {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("RuntimeImpls")
+  }
+
+  fn json_schema(
+    generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    let mut variants: Vec<schemars::Schema> = Vec::new();
+    #[cfg(feature = "runtime-wasm")]
+    variants.push(crate::schema::kind_variant::<wasm::Config>(
+      generator, "wasm",
+    ));
+    #[cfg(feature = "runtime-rhai")]
+    variants.push(crate::schema::kind_variant::<rhai::Config>(
+      generator, "rhai",
+    ));
+    #[cfg(feature = "runtime-js")]
+    variants.push(crate::schema::kind_variant::<js::Config>(generator, "js"));
+    variants.push(generator.subschema_for::<crate::config::ImplConfig>());
+    schemars::json_schema!({
+      "type": "object",
+      "additionalProperties": { "anyOf": variants },
+    })
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use serde_json::Map;

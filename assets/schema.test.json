@@ -1,0 +1,962 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "OMW configuration.",
+  "type": "object",
+  "properties": {
+    "agents": {
+      "description": "Agents that OMW is going to run, keyed by agent name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/AgentConfig"
+      },
+      "default": {}
+    },
+    "endpoint": {
+      "description": "Optional endpoint implementation.",
+      "$ref": "#/$defs/EndpointImpls",
+      "default": null
+    },
+    "memory": {
+      "description": "Per-agent seeded memory, keyed by agent name then key. Seeded into the\nagent's memory before its brain first runs, so a test (or a deployment)\ncan fast-forward an agent to a state. Seeded values persist like any\nother memory, including across hot reloads.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
+    "providers": {
+      "description": "Named provider implementations.",
+      "$ref": "#/$defs/ProviderImpls",
+      "default": {}
+    },
+    "runtime": {
+      "description": "Named runtime implementations.",
+      "$ref": "#/$defs/RuntimeImpls",
+      "default": {}
+    },
+    "tooling": {
+      "description": "Named tooling implementations.",
+      "$ref": "#/$defs/ToolingImpls",
+      "default": {}
+    },
+    "tunables": {
+      "description": "Global runtime tunables.",
+      "$ref": "#/$defs/Tunables",
+      "default": {
+        "allow_unlocked_secrets": false,
+        "cancel_pumps_on_reload": true,
+        "inbox_bound": 1024,
+        "interrupt_budget_ms": 100,
+        "loop_backoff_cap_secs": 30,
+        "loop_backoff_start_ms": 100,
+        "recv_slice_ms": 200,
+        "recv_timeout_secs": 60,
+        "reload_grace_secs": 5,
+        "reload_poll_ms": 200,
+        "session_buffer": 8192,
+        "tooling_connect_backoff_cap_secs": 30,
+        "tooling_connect_backoff_start_ms": 100,
+        "trace_buffer": 4096,
+        "watch_debounce_ms": 200
+      }
+    }
+  },
+  "$defs": {
+    "After": {
+      "description": "When a scripted step fires: \"start\" (the default) or a `call`/`inbound` pattern to wait for.",
+      "anyOf": [
+        {
+          "const": "start"
+        },
+        {
+          "type": "object"
+        }
+      ]
+    },
+    "AgentConfig": {
+      "description": "A single agent wiring itself to the globals above. The agent's name is the\nkey it appears under in [`Config::agents`].",
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "description": "Which named runtime implementation this agent's brain uses.",
+          "type": "string"
+        },
+        "script": {
+          "description": "The agent's brain script.",
+          "type": "string"
+        }
+      },
+      "required": ["runtime", "script"]
+    },
+    "Config": {
+      "description": "Impl-specific configuration for the mock provider.",
+      "type": "object",
+      "properties": {
+        "models": {
+          "description": "The model names `list-models` returns. Defaults to `[\"mock-model\"]`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "turns": {
+          "description": "Scripted turns; one is popped per `chat` (repeating the last once\nexhausted).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Turn"
+          }
+        }
+      }
+    },
+    "Config2": {
+      "description": "Impl-specific configuration for the mock tooling.",
+      "type": "object",
+      "properties": {
+        "delay_ms": {
+          "description": "How long each scripted step waits before firing.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 10,
+          "minimum": 0
+        },
+        "initial_resource_contents": {
+          "description": "Canned resource content keyed by URI, returned by `read-resource`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "initial_resource_list": {
+          "description": "The resource list `list-resources` starts from.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResourceInfo"
+          }
+        },
+        "resource_content_updates": {
+          "description": "Ordered, one-by-one content updates driven by `subscribe-resource`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceContentUpdate"
+          }
+        },
+        "resource_list_updates": {
+          "description": "Ordered, full-replacement resource-list updates driven by\n`subscribe-resource-list`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceListUpdate"
+          }
+        },
+        "tool_calls": {
+          "description": "Ordered `call-tool` results; consumed one per call and name-verified.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScriptedToolCall"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        }
+      }
+    },
+    "Config3": {
+      "description": "WASI context configuration for wasm-based runtimes, flattened into each\nruntime's own config. Deny-by-default, mirroring\n`WasiCtxBuilder::default()`: no stdio inheritance, no env, no args, no\npreopens, no network.",
+      "type": "object",
+      "properties": {
+        "allow_blocking_current_thread": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_ip_name_lookup": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_tcp": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_udp": {
+          "type": "boolean",
+          "default": false
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "default": {}
+        },
+        "inherit_args": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdio": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdout": {
+          "type": "boolean",
+          "default": false
+        },
+        "initial_cwd": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "insecure_random_seed": {
+          "type": ["integer", "null"],
+          "format": "uint128",
+          "default": null,
+          "minimum": 0
+        },
+        "max_random_size": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "preopens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Preopen"
+          }
+        }
+      }
+    },
+    "Config4": {
+      "description": "Impl-specific configuration for the Rhai runtime.",
+      "type": "object",
+      "properties": {
+        "allow_blocking_current_thread": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_ip_name_lookup": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_tcp": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_udp": {
+          "type": "boolean",
+          "default": false
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "default": {}
+        },
+        "inherit_args": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdio": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdout": {
+          "type": "boolean",
+          "default": false
+        },
+        "initial_cwd": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "insecure_random_seed": {
+          "type": ["integer", "null"],
+          "format": "uint128",
+          "default": null,
+          "minimum": 0
+        },
+        "interpreter": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "max_random_size": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "preopens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Preopen"
+          }
+        }
+      }
+    },
+    "Config5": {
+      "description": "Impl-specific configuration for the js runtime.",
+      "type": "object",
+      "properties": {
+        "allow_blocking_current_thread": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_ip_name_lookup": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_tcp": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_udp": {
+          "type": "boolean",
+          "default": false
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "default": {}
+        },
+        "inherit_args": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdio": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdout": {
+          "type": "boolean",
+          "default": false
+        },
+        "initial_cwd": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "insecure_random_seed": {
+          "type": ["integer", "null"],
+          "format": "uint128",
+          "default": null,
+          "minimum": 0
+        },
+        "interpreter": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "max_random_size": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "preopens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Preopen"
+          }
+        }
+      }
+    },
+    "Config6": {
+      "description": "Impl-specific configuration for the endpoint mock.",
+      "type": "object",
+      "properties": {
+        "poll_ms": {
+          "description": "How long to wait between polls for a model subscription.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 10,
+          "minimum": 0
+        },
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Request"
+          }
+        }
+      }
+    },
+    "EndpointImpls": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/Config6"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "mock"
+                    }
+                  },
+                  "required": ["kind"]
+                }
+              ]
+            },
+            {
+              "$ref": "#/$defs/ImplConfig"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "FsPerms": {
+      "description": "Filesystem permissions for one [`Preopen`].",
+      "type": "string",
+      "enum": ["read_only", "read_write"]
+    },
+    "ImplConfig": {
+      "description": "A single configured implementation: which kind plus opaque params.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Which implementation this is.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": ["kind"]
+    },
+    "InboundMessage": {
+      "description": "One inbound chat message from the scripted client. Kept local so the mock\ndoes not require the provider DTOs to be deserializable.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "reasoning": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "role": {
+          "type": "string",
+          "default": "user"
+        }
+      }
+    },
+    "MockToolCallSpec": {
+      "type": "object",
+      "properties": {
+        "arguments": {},
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "arguments"]
+    },
+    "Preopen": {
+      "description": "One preopened directory: `host_path` on the host, visible to the guest\nas `guest_path`.",
+      "type": "object",
+      "properties": {
+        "guest_path": {
+          "type": "string"
+        },
+        "host_path": {
+          "type": "string"
+        },
+        "perms": {
+          "$ref": "#/$defs/FsPerms"
+        }
+      },
+      "required": ["host_path", "guest_path"]
+    },
+    "ProviderImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "mock"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
+    },
+    "Request": {
+      "description": "One scripted request the mock routes into a subscribed agent.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Ordering gate: absent or `\"start\"` fires as soon as the model is\nsubscribed; a `call`/`inbound` pattern waits for a matching trace event.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/After"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InboundMessage"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "params": {
+          "description": "Opaque generation params the client submitted (temperature, …).",
+          "default": null
+        },
+        "stream": {
+          "description": "Whether the client asked for SSE. Informational only; the mock drains\nthe same session either way.",
+          "type": "boolean",
+          "default": false
+        },
+        "tools": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        }
+      },
+      "required": ["model"]
+    },
+    "ResourceContentUpdate": {
+      "description": "One scripted, one-by-one resource-content update.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/After"
+        },
+        "content": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": ["uri", "content"]
+    },
+    "ResourceInfo": {
+      "description": "An MCP resource (a URI-addressed, readable data value) exposed by a\ntooling.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": ["string", "null"]
+        },
+        "mime_type": {
+          "type": ["string", "null"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": ["uri", "name"]
+    },
+    "ResourceListUpdate": {
+      "description": "One scripted, full-replacement resource-list update.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/After"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceInfo"
+          }
+        }
+      },
+      "required": ["resources"]
+    },
+    "RuntimeImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config3"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "wasm"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config4"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "rhai"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config5"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "js"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
+    },
+    "ScriptedToolCall": {
+      "description": "One scripted `call-tool` result.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/After"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": ["name"]
+    },
+    "Secret": {
+      "type": "string"
+    },
+    "Tool": {
+      "description": "A tool exposed by a tooling.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": ["string", "null"]
+        },
+        "input_schema": {
+          "description": "JSON Schema for the tool's arguments."
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "input_schema"]
+    },
+    "ToolingImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config2"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "mock"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
+    },
+    "Tunables": {
+      "description": "Runtime tunables: channel sizes, timeouts, and backoffs. All optional;\nomitted values fall back to the built-in defaults.",
+      "type": "object",
+      "properties": {
+        "allow_unlocked_secrets": {
+          "description": "Permit secrets to stay unlocked (pageable) when `mlock` fails, e.g.\ninside containers where the outer `RLIMIT_MEMLOCK` cannot be raised.\nDefault `false` (fail-closed). Only enable where the weaker guarantee\nis acceptable.",
+          "type": "boolean",
+          "default": false
+        },
+        "cancel_pumps_on_reload": {
+          "description": "Cancel open pumps (streams, timers, resources, tool calls) on reload.\n`false` keeps them across reload.",
+          "type": "boolean",
+          "default": true
+        },
+        "inbox_bound": {
+          "description": "How many events a single agent inbox buffers before sends fail.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1024,
+          "minimum": 0
+        },
+        "interrupt_budget_ms": {
+          "description": "Uninterrupted runtime execution allowed after grace expires, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
+          "minimum": 0
+        },
+        "loop_backoff_cap_secs": {
+          "description": "Backoff cap for `loop` restarts on failure, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
+        "loop_backoff_start_ms": {
+          "description": "Backoff start for `loop` restarts on failure, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
+          "minimum": 0
+        },
+        "recv_slice_ms": {
+          "description": "How long `recv_while` parks between early-abort checks, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        },
+        "recv_timeout_secs": {
+          "description": "How long a blocking `recv` waits before timing out, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60,
+          "minimum": 0
+        },
+        "reload_grace_secs": {
+          "description": "How long the supervisor waits for a cooperative exit, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5,
+          "minimum": 0
+        },
+        "reload_poll_ms": {
+          "description": "How long the blocking-call helper waits between reload checks, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        },
+        "session_buffer": {
+          "description": "How many deltas a single endpoint session buffers before drops.",
+          "type": "integer",
+          "format": "uint",
+          "default": 8192,
+          "minimum": 0
+        },
+        "tooling_connect_backoff_cap_secs": {
+          "description": "Backoff cap for tooling reconnects on failure, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
+        "tooling_connect_backoff_start_ms": {
+          "description": "Backoff start for tooling reconnects on failure, in ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 100,
+          "minimum": 0
+        },
+        "trace_buffer": {
+          "description": "How many trace events the `omw-test` broadcast channel buffers.",
+          "type": "integer",
+          "format": "uint",
+          "default": 4096,
+          "minimum": 0
+        },
+        "watch_debounce_ms": {
+          "description": "How long to coalesce the burst of file events a single save produces,\nin ms.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 200,
+          "minimum": 0
+        }
+      }
+    },
+    "Turn": {
+      "description": "One scripted turn: optional reasoning, content, a tool call, and usage.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Plain content emitted before the terminal finish reason.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "reasoning": {
+          "description": "Reasoning/thinking content emitted as its own delta.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "tool_call": {
+          "description": "A tool call, which makes the terminal finish reason `\"tool_calls\"`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MockToolCallSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "description": "Token accounting attached to the terminal delta.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "UsageSpec": {
+      "description": "The scripted token counts of one turn.",
+      "type": "object",
+      "properties": {
+        "completion_tokens": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "prompt_tokens": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

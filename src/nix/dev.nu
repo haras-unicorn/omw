@@ -65,9 +65,12 @@ def "main format" [] {
   open --raw (nix build --no-link --print-out-paths ".#options")
     | prettier --parser markdown
     | save -f "./docs/deployment/nixos/options.md"
-  cargo run -p omw-cli --all-features -- schema --output /dev/stdout
+  cargo run -p omw-cli -- schema --output /dev/stdout
     | prettier --parser json
     | save -f "./assets/schema.json"
+  cargo run -p omw-test -- schema --output /dev/stdout
+    | prettier --parser json
+    | save -f "./assets/schema.test.json"
   prettier --write .
   nixfmt ...(fd '.*\.nix$' . | lines)
   cargo fmt --all
@@ -96,10 +99,18 @@ def "main lint" [] {
   }
   if ((open --raw ./assets/schema.json
     | str trim)
-    != (cargo run -p omw-cli --all-features -- schema --output /dev/stdout
+    != (cargo run -p omw-cli -- schema --output /dev/stdout
     | prettier --parser json
     | str trim)) {
     print -e "schema.json doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./assets/schema.test.json
+    | str trim)
+    != (cargo run -p omw-test -- schema --output /dev/stdout
+    | prettier --parser json
+    | str trim)) {
+    print -e "schema.test.json doesn't match generated"
     exit 1
   }
   for case in (omw brain example cases) {

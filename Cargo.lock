@@ -2979,8 +2979,6 @@ dependencies = [
  "config",
  "omw",
  "rustls",
- "schemars 1.2.2",
- "serde_json",
  "serial_test",
  "tempfile",
  "tokio",

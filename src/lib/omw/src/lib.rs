@@ -16,6 +16,7 @@ pub mod host;
 pub mod prelude;
 pub mod provider;
 pub mod runtime;
+mod schema;
 pub mod secret;
 pub mod shutdown;
 pub mod testing;

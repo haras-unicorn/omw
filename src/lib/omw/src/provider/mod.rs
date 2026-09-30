@@ -378,6 +378,35 @@ macro_rules! register_providers {
   };
 }
 
+/// Schema for the `providers` map: the built-in kinds enabled in this build,
+/// plus the generic opaque escape hatch for custom back ends.
+pub(crate) struct ProviderImpls;
+
+impl schemars::JsonSchema for ProviderImpls {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("ProviderImpls")
+  }
+
+  fn json_schema(
+    generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    let mut variants: Vec<schemars::Schema> = Vec::new();
+    #[cfg(feature = "provider-openai")]
+    variants.push(crate::schema::kind_variant::<openai::Config>(
+      generator, "openai",
+    ));
+    #[cfg(feature = "mock")]
+    variants.push(crate::schema::kind_variant::<mock::Config>(
+      generator, "mock",
+    ));
+    variants.push(generator.subschema_for::<crate::config::ImplConfig>());
+    schemars::json_schema!({
+      "type": "object",
+      "additionalProperties": { "anyOf": variants },
+    })
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;

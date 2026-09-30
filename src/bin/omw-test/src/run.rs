@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use omw::config::Format;
 use omw::watch::{RecursiveMode, Watcher, scope};
 
@@ -23,6 +23,7 @@ pub async fn run() -> Result<()> {
 
   let result = match cli.command {
     Command::Run { args } => run_tests(args).await,
+    Command::Schema { output } => generate_schema(&output),
     #[cfg(feature = "compile-wasm")]
     Command::CompileWasm { args } => compile_wasm(&args),
   };
@@ -31,6 +32,22 @@ pub async fn run() -> Result<()> {
     tracing::error!(error = %error, "omw-test terminated with an error");
   }
   result
+}
+
+/// Generate the JSON schema for the test configuration and write it to `path`.
+fn generate_schema(path: &Path) -> Result<()> {
+  let contents = omw::config::Config::schema_json()?;
+  if let Some(parent) = path.parent()
+    && !parent.as_os_str().is_empty()
+  {
+    std::fs::create_dir_all(parent).with_context(|| {
+      format!("failed to create directory {}", parent.display())
+    })?;
+  }
+  std::fs::write(path, contents)
+    .with_context(|| format!("failed to write schema to {}", path.display()))?;
+  tracing::info!("wrote configuration schema to {}", path.display());
+  Ok(())
 }
 
 async fn run_tests(args: RunArgs) -> Result<()> {

@@ -98,15 +98,19 @@ pub struct Config {
 
   /// Named provider implementations.
   #[serde(default)]
+  #[schemars(with = "crate::provider::ProviderImpls")]
   pub providers: HashMap<String, ImplConfig>,
   /// Named tooling implementations.
   #[serde(default)]
+  #[schemars(with = "crate::tooling::ToolingImpls")]
   pub tooling: HashMap<String, ImplConfig>,
   /// Named runtime implementations.
   #[serde(default)]
+  #[schemars(with = "crate::runtime::RuntimeImpls")]
   pub runtime: HashMap<String, ImplConfig>,
   /// Optional endpoint implementation.
   #[serde(default)]
+  #[schemars(with = "crate::endpoint::EndpointImpls")]
   pub endpoint: Option<ImplConfig>,
 
   /// Per-agent seeded memory, keyed by agent name then key. Seeded into the
@@ -119,6 +123,24 @@ pub struct Config {
   /// Global runtime tunables.
   #[serde(default)]
   pub tunables: Tunables,
+}
+
+impl Config {
+  /// The JSON schema document for the configuration, pretty-printed with a
+  /// trailing newline.
+  ///
+  /// Feature-aware: each of `providers`/`tooling`/`runtime`/`endpoint` unions
+  /// only the built-in kinds compiled into this build (so `omw-cli` describes
+  /// openai/mcp/openai-endpoint/wasm, while `omw-test` adds the `mock` test
+  /// doubles and any script runtimes it enables). Unknown kinds still validate
+  /// through the generic escape hatch.
+  pub fn schema_json() -> anyhow::Result<String> {
+    let schema = schemars::schema_for!(Config);
+    let mut json = serde_json::to_string_pretty(&schema)
+      .context("failed to serialize config schema")?;
+    json.push('\n');
+    Ok(json)
+  }
 }
 
 /// A single agent wiring itself to the globals above. The agent's name is the
@@ -343,5 +365,42 @@ impl Tunables {
 
   pub fn watch_debounce(&self) -> std::time::Duration {
     std::time::Duration::from_millis(self.watch_debounce_ms)
+  }
+}
+
+#[cfg(test)]
+mod schema_tests {
+  use super::Config;
+
+  /// The generated schema names every built-in kind enabled in this build.
+  #[test]
+  fn schema_json_describes_enabled_kinds() -> anyhow::Result<()> {
+    let json = Config::schema_json()?;
+    let asserts = |kind: &str| {
+      assert!(
+        json.contains(&format!("\"const\": \"{kind}\"")),
+        "schema is missing the {kind:?} kind"
+      );
+    };
+    #[cfg(feature = "provider-openai")]
+    asserts("openai");
+    #[cfg(feature = "tooling-mcp")]
+    asserts("mcp");
+    #[cfg(feature = "endpoint-openai")]
+    asserts("openai");
+    #[cfg(feature = "runtime-wasm")]
+    asserts("wasm");
+    #[cfg(feature = "runtime-rhai")]
+    asserts("rhai");
+    #[cfg(feature = "runtime-js")]
+    asserts("js");
+    #[cfg(feature = "mock")]
+    asserts("mock");
+    // The generic escape hatch keeps custom kinds valid.
+    assert!(
+      json.contains("ImplConfig"),
+      "schema is missing the escape hatch"
+    );
+    Ok(())
   }
 }

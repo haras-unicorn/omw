@@ -417,6 +417,15 @@ in
                 omw schema --output "$out"
               '';
 
+          omw-test-config-schema =
+            pkgs.runCommand "omw-test-config-schema.json"
+              {
+                nativeBuildInputs = [ matrix.omw-test ];
+              }
+              ''
+                omw-test schema --output "$out"
+              '';
+
           docs =
             pkgs.runCommand "omw-docs"
               {
