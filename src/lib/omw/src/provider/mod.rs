@@ -394,7 +394,7 @@ mod tests {
       runtime: HashMap::new(),
       endpoint: None,
       memory: std::collections::BTreeMap::new(),
-      agents: Vec::new(),
+      agents: std::collections::BTreeMap::new(),
       tunables: crate::config::Tunables::default(),
     }
   }
@@ -443,11 +443,13 @@ mod tests {
       runtime: HashMap::new(),
       endpoint: None,
       memory: std::collections::BTreeMap::new(),
-      agents: vec![AgentConfig {
-        name: "a".to_string(),
-        runtime: "rhai".to_string(),
-        script: "s".to_string(),
-      }],
+      agents: std::collections::BTreeMap::from([(
+        "a".to_string(),
+        AgentConfig {
+          runtime: "rhai".to_string(),
+          script: "s".to_string(),
+        },
+      )]),
       tunables: crate::config::Tunables::default(),
     };
     let registry = Registry::default();

@@ -12,7 +12,7 @@
 //! keeps the shared [`MessageBus`](crate::host::bus::MessageBus) (inboxes,
 //! subscriptions) alive and restarts just the run.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -111,21 +111,21 @@ impl Scripts {
   /// Start watching the scripts of `agents`. Scripts whose parent directory
   /// does not exist are skipped with a warning.
   #[cfg(test)]
-  pub fn new(agents: &[AgentConfig]) -> anyhow::Result<Self> {
+  pub fn new(agents: &BTreeMap<String, AgentConfig>) -> anyhow::Result<Self> {
     Self::with_tunables(agents, Tunables::default())
   }
 
   /// [`new`](Self::new) with an explicit debounce.
   pub fn with_tunables(
-    agents: &[AgentConfig],
+    agents: &BTreeMap<String, AgentConfig>,
     tunables: Tunables,
   ) -> anyhow::Result<Self> {
     let mut scripts: Vec<WatchedScript> = Vec::new();
-    for agent in agents {
+    for (name, agent) in agents {
       let script = absolute(&PathBuf::from(&agent.script))?;
       let Some(file_name) = script.file_name().map(OsString::from) else {
         tracing::warn!(
-          agent = %agent.name,
+          agent = %name,
           script = %agent.script,
           "cannot watch a script without a file name"
         );
@@ -133,7 +133,7 @@ impl Scripts {
       };
       let Some(parent) = script.parent().map(Path::to_path_buf) else {
         tracing::warn!(
-          agent = %agent.name,
+          agent = %name,
           script = %agent.script,
           "cannot watch a script without a parent directory"
         );
@@ -143,7 +143,7 @@ impl Scripts {
         Ok(parent) => parent,
         Err(error) => {
           tracing::warn!(
-            agent = %agent.name,
+            agent = %name,
             script = %agent.script,
             error = %error,
             "cannot watch a script whose directory does not exist"
@@ -156,8 +156,8 @@ impl Scripts {
         script.path == path
           || (script.parent == parent && script.file_name == file_name)
       }) {
-        if !existing.agents.contains(&agent.name) {
-          existing.agents.push(agent.name.clone());
+        if !existing.agents.contains(name) {
+          existing.agents.push(name.clone());
         }
         continue;
       }
@@ -165,7 +165,7 @@ impl Scripts {
         path,
         parent,
         file_name,
-        agents: vec![agent.name.clone()],
+        agents: vec![name.clone()],
       });
     }
 
@@ -264,12 +264,18 @@ fn resolve(paths: &[PathBuf], scripts: &[WatchedScript]) -> Vec<String> {
 mod tests {
   use super::*;
 
-  fn agent(name: &str, script: &str) -> AgentConfig {
+  fn agent(script: &str) -> AgentConfig {
     AgentConfig {
-      name: name.to_string(),
       runtime: "rhai".to_string(),
       script: script.to_string(),
     }
+  }
+
+  fn agents(entries: &[(&str, &str)]) -> BTreeMap<String, AgentConfig> {
+    entries
+      .iter()
+      .map(|(name, script)| (name.to_string(), agent(script)))
+      .collect()
   }
 
   fn watched(
@@ -329,7 +335,7 @@ mod tests {
     std::fs::write(&brain, "1")?;
     let script = brain.to_string_lossy().to_string();
     let scripts =
-      Scripts::new(&[agent("alice", &script), agent("bob", &script)])?;
+      Scripts::new(&agents(&[("alice", &script), ("bob", &script)]))?;
     assert!(!scripts.is_empty());
     assert_eq!(scripts.scripts.len(), 1);
     assert_eq!(scripts.scripts[0].agents, vec!["alice", "bob"]);
@@ -339,7 +345,7 @@ mod tests {
   #[test]
   fn new_skips_scripts_without_a_watchable_directory() -> anyhow::Result<()> {
     let scripts =
-      Scripts::new(&[agent("alice", "/nonexistent-dir-omw/brain.rhai")])?;
+      Scripts::new(&agents(&[("alice", "/nonexistent-dir-omw/brain.rhai")]))?;
     assert!(scripts.is_empty());
     Ok(())
   }
@@ -350,7 +356,7 @@ mod tests {
     let brain = dir.path().join("brain.rhai");
     std::fs::write(&brain, "v1")?;
     let mut scripts =
-      Scripts::new(&[agent("alice", &brain.to_string_lossy())])?;
+      Scripts::new(&agents(&[("alice", &brain.to_string_lossy())]))?;
     std::fs::write(&brain, "v2")?;
     let reload =
       tokio::time::timeout(Duration::from_secs(10), scripts.next_reload())
@@ -367,8 +373,9 @@ mod tests {
     let dir = tempfile::tempdir()?;
     let brain = dir.path().join("brain.rhai");
     std::fs::write(&brain, "v1")?;
-    let mut scripts = Scripts::new(&[agent("alice", &brain.to_string_lossy())])
-      .map_err(|e| anyhow::anyhow!(e))?;
+    let mut scripts =
+      Scripts::new(&agents(&[("alice", &brain.to_string_lossy())]))
+        .map_err(|e| anyhow::anyhow!(e))?;
     std::fs::write(dir.path().join("other.rhai"), "unrelated")?;
     assert!(
       tokio::time::timeout(Duration::from_secs(2), scripts.next_reload())

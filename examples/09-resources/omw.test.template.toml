@@ -46,8 +46,7 @@ resource_content_updates = [
 [runtime.runtime]
 kind = "{{RUNTIME}}"
 
-[[agents]]
-name = "reader"
+[agents.reader]
 runtime = "runtime"
 script = "{{SCRIPT}}"
 

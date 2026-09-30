@@ -24,8 +24,7 @@ requests = [
 [runtime.runtime]
 kind = "wasm"
 
-[[agents]]
-name = "server"
+[agents.server]
 runtime = "runtime"
 script = "brain.wasm"
 

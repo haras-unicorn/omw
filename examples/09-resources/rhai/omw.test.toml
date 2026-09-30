@@ -46,8 +46,7 @@ resource_content_updates = [
 [runtime.runtime]
 kind = "rhai"
 
-[[agents]]
-name = "reader"
+[agents.reader]
 runtime = "runtime"
 script = "brain.rhai"
 

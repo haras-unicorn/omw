@@ -124,8 +124,7 @@ args = ["-y", "@modelcontextprotocol/server-everything"]
 [runtime.rhai]
 kind = "rhai"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "rhai"
 script = "brain.rhai"
 ```

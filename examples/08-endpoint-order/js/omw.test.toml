@@ -24,8 +24,7 @@ requests = [
 [runtime.runtime]
 kind = "js"
 
-[[agents]]
-name = "server"
+[agents.server]
 runtime = "runtime"
 script = "brain.js"
 

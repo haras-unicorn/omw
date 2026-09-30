@@ -30,8 +30,7 @@ async fn main() -> anyhow::Result<()> {
       [runtime.rhai]
       kind = "rhai"
 
-      [[agents]]
-      name = "alice"
+      [agents.alice]
       runtime = "rhai"
       script = "__SCRIPT__"
 

@@ -7,13 +7,11 @@
 [runtime.runtime]
 kind = "wasm"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "brain.wasm"
 
-[[agents]]
-name = "bob"
+[agents.bob]
 runtime = "runtime"
 script = "brain.wasm"
 

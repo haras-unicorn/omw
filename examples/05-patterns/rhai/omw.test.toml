@@ -15,8 +15,7 @@ turns = [
 [runtime.runtime]
 kind = "rhai"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "brain.rhai"
 

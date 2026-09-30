@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 /// OMW configuration.
 #[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
 pub struct Config {
-  /// Agents that OMW is going to run.
+  /// Agents that OMW is going to run, keyed by agent name.
   #[serde(default)]
-  pub agents: Vec<AgentConfig>,
+  pub agents: BTreeMap<String, AgentConfig>,
 
   /// Named provider implementations.
   #[serde(default)]
@@ -44,10 +44,10 @@ pub struct Config {
   pub tunables: Tunables,
 }
 
-/// A single agent wiring itself to the globals above.
+/// A single agent wiring itself to the globals above. The agent's name is the
+/// key it appears under in [`Config::agents`].
 #[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]
 pub struct AgentConfig {
-  pub name: String,
   /// Which named runtime implementation this agent's brain uses.
   pub runtime: String,
   /// The agent's brain script.

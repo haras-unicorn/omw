@@ -38,8 +38,7 @@ brain file) — and names its runtime `runtime`:
 [runtime.runtime]
 kind = "{{RUNTIME}}"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "{{SCRIPT}}"
 ```

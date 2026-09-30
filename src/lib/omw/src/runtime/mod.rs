@@ -209,13 +209,14 @@ impl Registry {
   pub fn build_for_agent(
     &self,
     cfg: &crate::config::Config,
+    name: &str,
     agent: &crate::config::AgentConfig,
   ) -> anyhow::Result<RuntimeEntry> {
     use anyhow::Context as _;
     let impl_cfg = cfg.runtime.get(&agent.runtime).with_context(|| {
       format!(
-        "agent {:?} references unknown runtime {:?}",
-        agent.name, agent.runtime
+        "agent {name:?} references unknown runtime {:?}",
+        agent.runtime
       )
     })?;
     self

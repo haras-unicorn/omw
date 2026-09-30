@@ -50,8 +50,7 @@ async fn main() -> anyhow::Result<()> {
 [runtime.inline]
 kind = "inline"
 
-[[agents]]
-name = "agent"
+[agents.agent]
 runtime = "inline"
 script = "brain.txt"
 "#;

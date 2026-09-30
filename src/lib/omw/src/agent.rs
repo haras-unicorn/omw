@@ -204,15 +204,17 @@ async fn run_agents_inner(
   );
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   let mut handles = Vec::new();
-  for agent in &cfg.agents {
+  for (name, agent) in &cfg.agents {
     let config = cfg.clone();
     let agent = agent.clone();
-    let name = agent.name.clone();
+    let name = name.clone();
     let shared = Arc::clone(&shared);
     let watch_tx = watch_tx.clone();
     let stop = stops.flag(&name);
+    let task_name = name.clone();
     let handle = tokio::spawn(async move {
-      run_agent(&config, &agent, &shared, watch_tx.clone(), stop).await
+      run_agent(&config, &task_name, &agent, &shared, watch_tx.clone(), stop)
+        .await
     });
     handles.push((name, handle));
   }
@@ -327,9 +329,10 @@ async fn loop_once(
   );
   let signal = spawn_signal(&shutdown);
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
-  join_all(cfg.agents.iter().map(|agent| {
+  join_all(cfg.agents.iter().map(|(name, agent)| {
     let config = cfg.clone();
     let agent = agent.clone();
+    let name = name.clone();
     let shared = Arc::clone(&shared);
     let watch_tx = watch_tx.clone();
     let trace = trace.clone();
@@ -341,43 +344,43 @@ async fn loop_once(
       let stop = Arc::new(AtomicBool::new(false));
       loop {
         if shared.shutdown.is_requested() {
-          tracing::info!(agent = %agent.name, "agent shutting down");
+          tracing::info!(agent = %name, "agent shutting down");
           break;
         }
-        match run_agent(&config, &agent, &shared, watch_tx.clone(), Arc::clone(&stop)).await {
+        match run_agent(&config, &name, &agent, &shared, watch_tx.clone(), Arc::clone(&stop)).await {
           Ok(AgentStop::Completed(completed)) => {
-            tracing::info!(agent = %agent.name, ?completed, "agent iteration completed");
+            tracing::info!(agent = %name, ?completed, "agent iteration completed");
             if let Some(tx) = &trace {
               let _ = tx.send(TraceEvent::Outcome {
-                agent: agent.name.clone(),
+                agent: name.clone(),
                 outcome: completed.clone(),
               });
             }
             delay = backoff_start;
           }
           Ok(AgentStop::Shutdown) => {
-            tracing::info!(agent = %agent.name, "agent shutting down");
+            tracing::info!(agent = %name, "agent shutting down");
             break;
           }
           Ok(AgentStop::Stopped) => {
-            tracing::info!(agent = %agent.name, "agent stopped");
+            tracing::info!(agent = %name, "agent stopped");
             break;
           }
           Err(error) => {
             if shared.shutdown.is_requested() {
-              tracing::info!(agent = %agent.name, "agent shutting down");
+              tracing::info!(agent = %name, "agent shutting down");
               break;
             }
-            tracing::error!(agent = %agent.name, error = %error, "agent iteration failed");
+            tracing::error!(agent = %name, error = %error, "agent iteration failed");
             tracing::debug!(
-              agent = %agent.name,
+              agent = %name,
               delay_ms = delay.as_millis(),
               "backing off before retrying the agent"
             );
             tokio::select! {
               biased;
               () = shared.shutdown.wait() => {
-                tracing::info!(agent = %agent.name, "agent shutting down");
+                tracing::info!(agent = %name, "agent shutting down");
                 break;
               }
               () = tokio::time::sleep(delay) => {}
@@ -433,16 +436,18 @@ enum AgentStop {
 /// collect it and `loop` can restart or break.
 async fn run_agent(
   config: &Config,
+  name: &str,
   agent: &AgentConfig,
   shared: &Shared,
   watch_tx: Option<ReloadTx>,
   stop: Arc<AtomicBool>,
 ) -> anyhow::Result<AgentStop> {
-  let runtime = shared.runtimes.get(&agent.name).ok_or_else(|| {
-    anyhow::anyhow!("agent {:?} has no built runtime", agent.name)
-  })?;
+  let runtime = shared
+    .runtimes
+    .get(name)
+    .ok_or_else(|| anyhow::anyhow!("agent {name:?} has no built runtime"))?;
   let mut ctx = AgentContext::with_tunables(
-    agent.name.clone(),
+    name.to_string(),
     PathBuf::from(&agent.script),
     shared.providers.clone(),
     shared.tooling.clone(),
@@ -456,7 +461,7 @@ async fn run_agent(
     config.tunables,
   )?;
   ctx.set_stop_flag(stop);
-  if let Some(seed) = config.memory.get(&agent.name) {
+  if let Some(seed) = config.memory.get(name) {
     ctx
       .memory()
       .seed(seed.iter().map(|(key, value)| (key.clone(), value.clone())));
@@ -469,23 +474,23 @@ async fn run_agent(
   // a fixing edit that will never come.
   let (reload_tx, mut reload_rx) = mpsc::unbounded_channel::<()>();
   if let Some(watch_tx) = &watch_tx {
-    watch_tx.register(&agent.name, reload_tx);
+    watch_tx.register(name, reload_tx);
   }
   if let Err(error) = runtime.inner().validate(&ctx).await {
     if shared.shutdown.is_requested() {
-      tracing::info!(agent = %agent.name, "agent shutting down");
+      tracing::info!(agent = %name, "agent shutting down");
       return Ok(AgentStop::Shutdown);
     }
     if watch_tx.is_none() {
-      tracing::error!(agent = %agent.name, error = %error, "agent brain failed startup validation");
+      tracing::error!(agent = %name, error = %error, "agent brain failed startup validation");
       return Err(error);
     }
-    tracing::warn!(agent = %agent.name, error = %error, "agent brain invalid at startup, waiting for a fixing edit");
+    tracing::warn!(agent = %name, error = %error, "agent brain invalid at startup, waiting for a fixing edit");
     loop {
       tokio::select! {
         biased;
         () = shared.shutdown.wait() => {
-          tracing::info!(agent = %agent.name, "agent shutting down");
+          tracing::info!(agent = %name, "agent shutting down");
           return Ok(AgentStop::Shutdown);
         }
         reload = reload_rx.recv() => {
@@ -498,10 +503,10 @@ async fn run_agent(
       match runtime.inner().validate(&ctx).await {
         Ok(()) => break,
         Err(error) => {
-          tracing::warn!(agent = %agent.name, error = %error, "agent reload rejected: invalid script, keeping the agent parked");
-          if let Some(lifecycle) = shared.bus.lifecycle_of(&agent.name) {
+          tracing::warn!(agent = %name, error = %error, "agent reload rejected: invalid script, keeping the agent parked");
+          if let Some(lifecycle) = shared.bus.lifecycle_of(name) {
             shared.bus.deliver(
-              &agent.name,
+              name,
               &lifecycle,
               Event::Error(error.to_string()),
             );
@@ -517,25 +522,25 @@ async fn run_agent(
     // does not spuriously exit. A shutdown that landed between iterations
     // exits terminally instead of starting another run.
     if shared.shutdown.is_requested() {
-      tracing::info!(agent = %agent.name, "agent shutting down");
+      tracing::info!(agent = %name, "agent shutting down");
       return Ok(AgentStop::Shutdown);
     }
     ctx.clear_reload();
-    if let Err(error) = shared.bus.drain_system(&agent.name) {
-      tracing::warn!(agent = %agent.name, error = %error, "failed to drain system events");
+    if let Err(error) = shared.bus.drain_system(name) {
+      tracing::warn!(agent = %name, error = %error, "failed to drain system events");
     }
-    tracing::info!(agent = %agent.name, runtime = %agent.runtime, "agent iteration starting");
+    tracing::info!(agent = %name, runtime = %agent.runtime, "agent iteration starting");
     match run_with_reload(runtime.inner(), &ctx, shared, &mut reload_rx).await {
       RunEnd::Done(RunOutcome::Completed) => {
-        tracing::info!(agent = %agent.name, "agent run completed");
+        tracing::info!(agent = %name, "agent run completed");
         return Ok(AgentStop::Completed(RunOutcome::Completed));
       }
       RunEnd::Done(RunOutcome::Exited(message)) => {
-        tracing::info!(agent = %agent.name, message = %message, "agent exited");
+        tracing::info!(agent = %name, message = %message, "agent exited");
         return Ok(AgentStop::Completed(RunOutcome::Exited(message)));
       }
       RunEnd::Aborted(Abort::Shutdown) => {
-        tracing::info!(agent = %agent.name, "agent shutting down");
+        tracing::info!(agent = %name, "agent shutting down");
         // A shutdown abort owns the brain's pumps outright: no next
         // iteration will run, so cancel them now instead of leaving
         // ownerless pumps on the bridge runtime until drop.
@@ -546,7 +551,7 @@ async fn run_agent(
         return Ok(AgentStop::Shutdown);
       }
       RunEnd::Aborted(Abort::Reload) => {
-        tracing::info!(agent = %agent.name, "agent run reloaded, restarting with the new script");
+        tracing::info!(agent = %name, "agent run reloaded, restarting with the new script");
         // A reload abort leaves the current iteration's pumps (chat
         // streams, timers, resource subs, tool calls) registered but
         // ownerless; `cancel_pumps_on_reload = false` keeps them across
@@ -565,7 +570,7 @@ async fn run_agent(
         continue;
       }
       RunEnd::Aborted(Abort::Stop) => {
-        tracing::info!(agent = %agent.name, "agent stopped by the testing harness");
+        tracing::info!(agent = %name, "agent stopped by the testing harness");
         // Terminal, and no next iteration will run, so cancel this run's
         // ownerless pumps like a shutdown does.
         ctx.streams().cancel_all();
@@ -575,7 +580,7 @@ async fn run_agent(
         return Ok(AgentStop::Stopped);
       }
       RunEnd::Failed(error) => {
-        tracing::error!(agent = %agent.name, error = %error, "agent run failed");
+        tracing::error!(agent = %name, error = %error, "agent run failed");
         return Err(error);
       }
     }
@@ -840,11 +845,11 @@ impl Shared {
       let runtimes = cfg
         .agents
         .iter()
-        .map(|agent| {
+        .map(|(name, agent)| {
           registries
             .runtimes
-            .build_for_agent(cfg, agent)
-            .map(|entry| (agent.name.clone(), entry))
+            .build_for_agent(cfg, name, agent)
+            .map(|entry| (name.clone(), entry))
         })
         .collect::<anyhow::Result<HashMap<_, _>>>()?;
       let bus = match &trace {
@@ -1020,11 +1025,13 @@ mod tests {
 
   fn probe_config() -> Config {
     Config {
-      agents: vec![AgentConfig {
-        name: "alice".to_string(),
-        runtime: "probe".to_string(),
-        script: "unused".to_string(),
-      }],
+      agents: std::collections::BTreeMap::from([(
+        "alice".to_string(),
+        AgentConfig {
+          runtime: "probe".to_string(),
+          script: "unused".to_string(),
+        },
+      )]),
       providers: HashMap::new(),
       tooling: HashMap::new(),
       runtime: HashMap::from([(
@@ -1096,18 +1103,22 @@ mod tests {
     >,
   ) -> Config {
     Config {
-      agents: vec![
-        AgentConfig {
-          name: "alice".to_string(),
-          runtime: "memory".to_string(),
-          script: "unused".to_string(),
-        },
-        AgentConfig {
-          name: "bob".to_string(),
-          runtime: "memory".to_string(),
-          script: "unused".to_string(),
-        },
-      ],
+      agents: std::collections::BTreeMap::from([
+        (
+          "alice".to_string(),
+          AgentConfig {
+            runtime: "memory".to_string(),
+            script: "unused".to_string(),
+          },
+        ),
+        (
+          "bob".to_string(),
+          AgentConfig {
+            runtime: "memory".to_string(),
+            script: "unused".to_string(),
+          },
+        ),
+      ]),
       providers: HashMap::new(),
       tooling: HashMap::new(),
       runtime: HashMap::from([(

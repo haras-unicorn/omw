@@ -49,7 +49,7 @@ pub async fn scaffold(
   if !config.memory.is_empty() {
     root.insert("memory".to_string(), memory_map(&config.memory));
   }
-  root.insert("agents".to_string(), agents_array(&config.agents));
+  root.insert("agents".to_string(), agents_map(&config.agents));
   root.insert("tunables".to_string(), tunables_value(&config.tunables));
   let body = toml::to_string_pretty(&toml::Value::Table(root))
     .context("failed to serialize the scaffolded config")?;
@@ -228,23 +228,22 @@ fn memory_map(
   toml::Value::Table(table)
 }
 
-/// Copy the agents through verbatim.
-fn agents_array(agents: &[AgentConfig]) -> toml::Value {
-  let mut array = Vec::new();
-  for agent in agents {
-    let mut table = toml::Table::new();
-    table.insert("name".to_string(), toml::Value::String(agent.name.clone()));
-    table.insert(
+/// Copy the agents through verbatim, keyed by agent name.
+fn agents_map(agents: &BTreeMap<String, AgentConfig>) -> toml::Value {
+  let mut table = toml::Table::new();
+  for (name, agent) in agents {
+    let mut entry = toml::Table::new();
+    entry.insert(
       "runtime".to_string(),
       toml::Value::String(agent.runtime.clone()),
     );
-    table.insert(
+    entry.insert(
       "script".to_string(),
       toml::Value::String(agent.script.clone()),
     );
-    array.push(toml::Value::Table(table));
+    table.insert(name.clone(), toml::Value::Table(entry));
   }
-  toml::Value::Array(array)
+  toml::Value::Table(table)
 }
 
 /// Copy the tunables through verbatim.
@@ -602,8 +601,7 @@ mod tests {
         [memory.alice]
         handle = "seed-42"
 
-        [[agents]]
-        name = "alice"
+        [agents.alice]
         runtime = "rhai"
         script = "brain.rhai"
 
@@ -640,11 +638,11 @@ mod tests {
       parsed.endpoint.as_ref().map(|e| e.kind.as_str()),
       Some("mock")
     );
-    assert_eq!(parsed.agents[0].name, "alice");
+    assert_eq!(parsed.agents["alice"].runtime, "rhai");
     assert_eq!(parsed.memory["alice"]["handle"], "seed-42");
     assert_eq!(parsed.tunables.recv_timeout_secs, 30);
 
-    assert!(out.contains("[[agents]]"), "{out}");
+    assert!(out.contains("[agents.alice]"), "{out}");
     assert!(!out.contains("[assertions"), "{out}");
     Ok(())
   }

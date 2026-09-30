@@ -21,8 +21,7 @@ The js runtime takes no required parameters beyond the shared WASI sandbox:
 [runtime.js]
 kind = "js"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "js"
 script = "brain.js"
 ```

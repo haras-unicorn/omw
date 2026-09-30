@@ -5,6 +5,7 @@
 //! restart when a brain script changes; `Watcher` is the general primitive for
 //! watching any path.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use omw::prelude::*;
@@ -16,11 +17,13 @@ async fn main() -> anyhow::Result<()> {
   std::fs::write(&brain, "// v1")?;
 
   // `Scripts` maps each script to the agents running it.
-  let agents = vec![AgentConfig {
-    name: "alice".to_string(),
-    runtime: "rhai".to_string(),
-    script: brain.to_string_lossy().into_owned(),
-  }];
+  let agents = BTreeMap::from([(
+    "alice".to_string(),
+    AgentConfig {
+      runtime: "rhai".to_string(),
+      script: brain.to_string_lossy().into_owned(),
+    },
+  )]);
   let mut scripts = Scripts::with_tunables(&agents, Tunables::default())?;
   anyhow::ensure!(!scripts.is_empty(), "the script should be watchable");
 

@@ -49,8 +49,7 @@
 //! [runtime.wasm]
 //! kind = "wasm"
 //!
-//! [[agents]]
-//! name = "server"
+//! [agents.server]
 //! runtime = "wasm"
 //! script = "brain.wasm"
 //! ```

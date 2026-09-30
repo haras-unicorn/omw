@@ -398,10 +398,14 @@ mod tests {
     Config {
       agents: agents
         .iter()
-        .map(|(name, runtime)| AgentConfig {
-          name: name.to_string(),
-          runtime: runtime.to_string(),
-          script: "unused".to_string(),
+        .map(|(name, runtime)| {
+          (
+            name.to_string(),
+            AgentConfig {
+              runtime: runtime.to_string(),
+              script: "unused".to_string(),
+            },
+          )
         })
         .collect(),
       providers: std::collections::HashMap::new(),
