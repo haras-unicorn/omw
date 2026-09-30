@@ -105,9 +105,10 @@ tar -xzf omw-js.tar.gz
 
 ## Usage
 
-Configuration lives in a TOML file (default `omw.toml` in the current directory,
-overridable with `--config`). It declares named providers, tooling, and runtimes
-plus a list of agents:
+Configuration lives in a TOML, YAML or JSON file (by default the first of
+`omw.toml`, `omw.yaml`, `omw.yml`, `omw.json` in the current directory,
+overridable with `--config` and `--format`). It declares named providers,
+tooling, and runtimes plus a list of agents:
 
 ```toml
 [providers.openai]

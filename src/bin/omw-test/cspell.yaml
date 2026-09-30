@@ -6,3 +6,5 @@ ignoreWords:
   - debouncer
   - cdylib
   - rustflags
+  - extensionless
+  - rsplit

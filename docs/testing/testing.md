@@ -8,7 +8,8 @@ records what every agent saw and did, and checks that recording against an
 
 A test config is a normal `omw.toml`-shaped file named `omw.test.toml`: the same
 config `omw` consumes, plus an `[assertions]` table that stock `omw` ignores the
-same way it ignores unknown keys. Values can be layered from the environment
+same way it ignores unknown keys. Test configs can be TOML, YAML or JSON
+(`omw.test.{toml,yaml,yml,json}`). Values can be layered from the environment
 with the `OMW_TEST__` prefix, exactly like `OMW__` for `omw` itself.
 
 ## Running
@@ -26,15 +27,18 @@ omw-test run examples            # every discovered config
   test's root-relative path including its file name (`*` does not cross `/`,
   `**` does); include is applied first, then exclude. A missing `script` is
   always a failure, never a skip; narrow the set with the globs instead.
+- `--format <fmt>` forces the config format (`toml`, `yaml` or `json`) for every
+  loaded config; without it, each file's format is inferred from its extension.
 - `--watch` re-runs on change instead of exiting: after each pass it waits for a
   debounced filesystem event and runs again (file mode watches the config's
   parent directory; directory mode watches the root recursively). The library
   hot-reload watch is always off.
 
-Discovery skips hidden directories and collects any file whose name is
-`omw.test.toml` or ends with `.omw.test.toml`, so several test configs can live
-side by side in one directory. The shared templates (`omw.test.template.toml`)
-never match, since they end in `template.toml`.
+Discovery skips hidden directories and collects any file whose stem is
+`omw.test` or ends with `.omw.test` and whose extension is `toml`, `yaml`, `yml`
+or `json`, so several test configs can live side by side in one directory. The
+shared templates (`omw.test.template.toml`) never match, since they end in
+`template.toml`.
 
 ## Scaffolding
 
@@ -45,6 +49,7 @@ where possible.
 
 ```sh
 omw scaffold omw.toml                 # writes ./omw.test.toml
+omw scaffold omw.yaml --format yaml   # explicit input format
 omw scaffold omw.toml --output t.toml # explicit output
 omw scaffold omw.toml --no-resources  # skip listing/reading tooling resources
 omw scaffold omw.toml --force         # overwrite an existing output
@@ -222,5 +227,5 @@ groups it per agent with `host::trace::group`. The channel is `None` for
 `omw-cli` and embedders, so it is zero-overhead when unset.
 
 Embedders can drive the same machinery in-process through `omw::testing`
-(`Harness`, `Assertions`, `parse`, `check`, `watch`) instead of shelling out to
-the binary.
+(`Harness`, `Assertions`, `parse(source, Format)`, `check`, `watch`) instead of
+shelling out to the binary.

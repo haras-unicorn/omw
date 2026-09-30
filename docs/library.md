@@ -86,12 +86,13 @@ run with `check`.
 ## Testing
 
 `omw::testing` is the deterministic brain-testing substrate. `Assertions` is the
-parsed `[assertions]` model, with `parse` reading it from a config string and
-`collect` gathering a recorded trace into something `check` can verify.
-`Harness` drives a `Config` through the controlled run path against the
-in-config `kind = "mock"` doubles, consuming the trace live, stopping
-`outcome = "asserted"` agents as their assertions settle, and returning a
-`Report` of per-agent verdicts. The `omw-test` binary is a thin CLI over this.
+parsed `[assertions]` model, with `parse(source, Format)` reading it from a
+config string in TOML, YAML or JSON, and `collect` gathering a recorded trace
+into something `check` can verify. `Harness` drives a `Config` through the
+controlled run path against the in-config `kind = "mock"` doubles, consuming the
+trace live, stopping `outcome = "asserted"` agents as their assertions settle,
+and returning a `Report` of per-agent verdicts. The `omw-test` binary is a thin
+CLI over this.
 
 See [testing](./testing/testing.md) for the assertion language and each mock.
 
@@ -205,8 +206,8 @@ cap. See [tunables](./tunables.md).
 ## Prelude
 
 `use omw::prelude::*;` re-exports the embedding subset: `Config`, `AgentConfig`,
-`ImplConfig`, `Tunables`, `Registries`, the four back-end traits plus their
-`Factory` traits aliased as `ProviderFactory` / `ToolingFactory` /
+`ImplConfig`, `Tunables`, `Format`, `Registries`, the four back-end traits plus
+their `Factory` traits aliased as `ProviderFactory` / `ToolingFactory` /
 `RuntimeFactory` / `EndpointFactory`, the DTOs (`Role`, `ChatMessage`,
 `ChatDelta`, `ChatResult`, `ToolCall`, `Tool`, `ResourceInfo`,
 `ResourceContent`, `ResourceNotification`), the `*Entry` handles, `RunOutcome`,

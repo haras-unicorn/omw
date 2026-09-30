@@ -13,6 +13,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-boa_engine = { version = "0.22.0" }
-serde_json = "1.0.151"
+serde_json.workspace = true
 wit-bindgen.workspace = true
+boa_engine = { version = "0.22.0" }
