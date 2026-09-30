@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
   .replace("__SCRIPT__", &script.to_string_lossy());
 
   let config: Config = toml::from_str(&raw)?;
-  let assertions = parse(&raw)?;
+  let assertions = parse(&raw, Format::Toml)?;
   let registries = Registries::default();
 
   let report = Harness::new(&config, &registries, &assertions).run().await;

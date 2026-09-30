@@ -302,7 +302,7 @@ mod tests {
 
   use super::super::assert::{Assertions, parse};
   use super::*;
-  use crate::config::{AgentConfig, Config, ImplConfig, Tunables};
+  use crate::config::{AgentConfig, Config, Format, ImplConfig, Tunables};
   use crate::host::ctx::AgentContext;
   use crate::runtime::{RunOutcome, Runtime};
 
@@ -423,7 +423,7 @@ mod tests {
   }
 
   fn assertions(body: &str) -> Assertions {
-    parse(body).expect("assertions should parse")
+    parse(body, Format::Toml).expect("assertions should parse")
   }
 
   #[tokio::test]

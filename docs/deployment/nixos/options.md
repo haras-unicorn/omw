@@ -170,7 +170,7 @@ null
 
 ## services\.omw\.settingsFile
 
-Path to an omw configuration file (TOML)\. Mutually exclusive with
+Path to an omw configuration file (TOML, YAML or JSON)\. Mutually exclusive with
 `services.omw.settings`\.
 
 _Type:_ null or absolute path

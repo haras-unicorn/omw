@@ -49,7 +49,7 @@ Two things follow from this:
 
 - **`settings` and `settingsFile` are mutually exclusive.** `settings` is an
   attribute set rendered to TOML at build time; `settingsFile` is a path to a
-  TOML file on the system. Choose whichever fits.
+  config file (TOML, YAML or JSON) on the system. Choose whichever fits.
 - **Secrets are layered from the environment.** `OMW__`-prefixed variables (`__`
   separator, e.g. `OMW__PROVIDERS__OPENAI__API_KEY`) override file values at
   runtime, so API keys never have to live in the Nix store. Set them with the

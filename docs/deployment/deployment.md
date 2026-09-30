@@ -9,12 +9,15 @@ container (see [Docker](./docker.md)).
 
 ## Configuration everywhere
 
-Every deployment reads the same TOML file (`--config`, default `omw.toml`).
-`assets/omw.example.toml` in the repo is the shared starting point; the
-[Docker page](./docker.md#compose) walks through it. Secrets layer over the file
-from `OMW__`-prefixed environment variables (`__` separator), e.g.
-`OMW__PROVIDERS__OPENAI__API_KEY` overrides `providers.openai.api_key` — keep
-keys out of the file and supply them from the environment.
+Every deployment reads the same config (`--config`; by default the first of
+`omw.toml`, `omw.yaml`, `omw.yml`, `omw.json` in the working directory, and an
+error if none exists). The config is TOML, YAML or JSON, chosen by the file
+extension or forced with `--format`. `assets/omw.example.toml` in the repo is
+the shared starting point; the [Docker page](./docker.md#compose) walks through
+it. Secrets layer over the file from `OMW__`-prefixed environment variables
+(`__` separator), e.g. `OMW__PROVIDERS__OPENAI__API_KEY` overrides
+`providers.openai.api_key` — keep keys out of the file and supply them from the
+environment.
 
 ## Workspace convention
 

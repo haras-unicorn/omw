@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use omw::config::Config;
+use omw::config::{Config, Format};
 
 #[derive(Parser, Debug)]
 #[command(name = "omw", about = "OMW = OpenAI + MCP + WASM")]
@@ -15,12 +15,16 @@ pub struct Cli {
   pub command: Command,
 }
 
-/// Shared `run` / `loop` flags: config path + watch.
+/// Shared `run` / `loop` flags: config path + format + watch.
 #[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
 pub struct RunArgs {
-  /// Path to the config file (defaults to `omw.toml` in the current directory)
+  /// Path to the config file (defaults to the first of `omw.toml`,
+  /// `omw.yaml`, `omw.yml`, `omw.json` in the current directory)
   #[arg(long)]
   pub config: Option<PathBuf>,
+  /// Config format; inferred from the file extension when omitted
+  #[arg(long, value_name = "FORMAT")]
+  pub format: Option<Format>,
   /// Watch agent scripts and restart agents when their script changes
   #[arg(long)]
   pub watch: bool,
@@ -56,6 +60,9 @@ pub enum Command {
 pub struct ScaffoldArgs {
   /// Path to the config to convert
   pub config: PathBuf,
+  /// Config format; inferred from the file extension when omitted
+  #[arg(long, value_name = "FORMAT")]
+  pub format: Option<Format>,
   /// Output path (defaults to `omw.test.toml` next to the config)
   #[arg(long)]
   pub output: Option<PathBuf>,
@@ -73,22 +80,41 @@ impl Cli {
   }
 }
 
+/// Candidate default config file names, in preference order.
+const DEFAULT_CONFIG_NAMES: [&str; 4] =
+  ["omw.toml", "omw.yaml", "omw.yml", "omw.json"];
+
+/// The default config in `dir`: the first candidate that exists, else an error.
+pub fn default_config_path(dir: &Path) -> Result<PathBuf> {
+  for name in DEFAULT_CONFIG_NAMES {
+    let candidate = dir.join(name);
+    if candidate.is_file() {
+      return Ok(candidate);
+    }
+  }
+  anyhow::bail!(
+    "no config found in {} (looked for {}); pass --config",
+    dir.display(),
+    DEFAULT_CONFIG_NAMES.join(", ")
+  )
+}
+
 impl RunArgs {
   pub fn watch(&self) -> bool {
     self.watch
   }
 
-  pub fn resolve_config_path(&self) -> PathBuf {
-    self
-      .config
-      .clone()
-      .unwrap_or_else(|| PathBuf::from("omw.toml"))
+  pub fn resolve_config_path(&self) -> Result<PathBuf> {
+    match &self.config {
+      Some(path) => Ok(path.clone()),
+      None => default_config_path(Path::new(".")),
+    }
   }
 
-  /// Load the configuration from `omw.toml` (optional) overlaid with
-  /// `OMW_*` environment variables.
+  /// Load the configuration (format inferred from the extension or forced with
+  /// `--format`) overlaid with `OMW_*` environment variables.
   pub fn load_config(&self) -> Result<Config> {
-    load_config(&self.resolve_config_path())
+    load_config(&self.resolve_config_path()?, self.format)
   }
 }
 
@@ -106,33 +132,43 @@ impl ScaffoldArgs {
   }
 }
 
-/// Load a configuration file overlaid with `OMW_*` environment variables.
-pub fn load_config(path: &Path) -> Result<Config> {
+/// Load a configuration file overlaid with `OMW_*` environment variables. The
+/// format is `format` when given, else inferred from the path's extension.
+pub fn load_config(path: &Path, format: Option<Format>) -> Result<Config> {
   // The `config` crate cannot read `/dev/stdin` (an extension-less stream,
   // unlike a regular file path), so read stdin explicitly and inject it
   // via `File::from_str` when the config arrives through a stream.
-  let raw: ::config::Config = if path == Path::new("/dev/stdin") {
+  let (contents, format) = if path == Path::new("/dev/stdin") {
     let contents = std::io::read_to_string(std::io::stdin())
       .context("failed to read configuration from stdin")?;
-    ::config::Config::builder()
-      .add_source(
-        ::config::File::from_str(&contents, ::config::FileFormat::Toml)
-          .required(false),
-      )
-      .add_source(env_source())
-      .build()
+    (contents, format.unwrap_or(Format::Toml))
   } else {
-    ::config::Config::builder()
-      .add_source(::config::File::from(path).required(false))
-      .add_source(env_source())
-      .build()
-  }
-  .context("failed to build configuration")?;
+    let contents = std::fs::read_to_string(path)
+      .with_context(|| format!("failed to read config {}", path.display()))?;
+    let format =
+      format
+        .or_else(|| Format::from_path(path))
+        .with_context(|| {
+          format!(
+            "cannot infer the config format of {}; pass --format",
+            path.display()
+          )
+        })?;
+    (contents, format)
+  };
+  let raw: ::config::Config = ::config::Config::builder()
+    .add_source(
+      ::config::File::from_str(&contents, file_format(format)).required(false),
+    )
+    .add_source(env_source())
+    .build()
+    .context("failed to build configuration")?;
   let config: Config = raw
     .try_deserialize()
     .context("failed to deserialize configuration")?;
   tracing::info!(
     path = %path.display(),
+    format = %format,
     providers = config.providers.len(),
     tooling = config.tooling.len(),
     runtime = config.runtime.len(),
@@ -143,13 +179,22 @@ pub fn load_config(path: &Path) -> Result<Config> {
   Ok(config)
 }
 
+/// Map an [`omw::config::Format`] onto the `config` crate's file format.
+fn file_format(format: Format) -> ::config::FileFormat {
+  match format {
+    Format::Toml => ::config::FileFormat::Toml,
+    Format::Yaml => ::config::FileFormat::Yaml,
+    Format::Json => ::config::FileFormat::Json,
+  }
+}
+
 fn env_source() -> impl ::config::Source + Send + Sync + 'static {
   ::config::Environment::with_prefix("OMW").separator("__")
 }
 
 /// Convert a config into a scaffolded `omw.test.toml` at `args.output_path()`.
 pub async fn scaffold(args: ScaffoldArgs) -> Result<()> {
-  let config = load_config(&args.config)?;
+  let config = load_config(&args.config, args.format)?;
   let registries = omw::agent::Registries::default();
   let rendered =
     omw::testing::scaffold(&config, &registries, !args.no_resources).await?;
@@ -233,6 +278,7 @@ mod tests {
   fn cli(path: PathBuf) -> RunArgs {
     RunArgs {
       config: Some(path),
+      format: None,
       watch: false,
     }
   }
@@ -368,24 +414,124 @@ mod tests {
   }
 
   #[test]
-  fn resolve_config_path_defaults_to_omw_toml() {
-    let args = RunArgs {
-      config: None,
-      watch: false,
-    };
-    assert_eq!(args.resolve_config_path(), PathBuf::from("omw.toml"));
+  fn default_config_path_prefers_toml_then_yaml_then_json() -> anyhow::Result<()>
+  {
+    let dir = tempdir()?;
+    std::fs::write(dir.path().join("omw.json"), "{}")?;
+    std::fs::write(dir.path().join("omw.yaml"), "")?;
+    std::fs::write(dir.path().join("omw.toml"), "")?;
+    assert_eq!(
+      default_config_path(dir.path())?,
+      dir.path().join("omw.toml")
+    );
+
+    std::fs::remove_file(dir.path().join("omw.toml"))?;
+    assert_eq!(
+      default_config_path(dir.path())?,
+      dir.path().join("omw.yaml")
+    );
+
+    std::fs::remove_file(dir.path().join("omw.yaml"))?;
+    assert_eq!(
+      default_config_path(dir.path())?,
+      dir.path().join("omw.json")
+    );
+    Ok(())
   }
 
   #[test]
-  fn resolve_config_path_honors_override() {
+  fn default_config_path_errors_when_none_exists() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let error = default_config_path(dir.path())
+      .expect_err("should error without a config");
+    assert!(error.to_string().contains("no config found"));
+    Ok(())
+  }
+
+  #[test]
+  fn resolve_config_path_honors_override() -> anyhow::Result<()> {
     let cli = cli(PathBuf::from("custom.toml"));
-    assert_eq!(cli.resolve_config_path(), PathBuf::from("custom.toml"));
+    assert_eq!(cli.resolve_config_path()?, PathBuf::from("custom.toml"));
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn yaml_config_deserializes_by_extension() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.yaml");
+    std::fs::write(
+      &path,
+      "providers:\n  openai:\n    kind: openai\n    api_key: sk-test\nagents:\n  alice:\n    runtime: rhai\n    script: brain.rhai\n",
+    )?;
+    let cfg = cli(path).load_config()?;
+    assert_eq!(cfg.providers["openai"].kind, "openai");
+    assert_eq!(cfg.providers["openai"].params["api_key"], "sk-test");
+    assert_eq!(cfg.agents["alice"].script, "brain.rhai");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn json_config_deserializes_by_extension() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.json");
+    std::fs::write(
+      &path,
+      r#"{"providers":{"openai":{"kind":"openai","api_key":"sk-test"}}}"#,
+    )?;
+    let cfg = cli(path).load_config()?;
+    assert_eq!(cfg.providers["openai"].kind, "openai");
+    assert_eq!(cfg.providers["openai"].params["api_key"], "sk-test");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn format_override_parses_an_extensionless_file() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.conf");
+    std::fs::write(&path, "{\"agents\":{}}")?;
+    let args = RunArgs {
+      config: Some(path),
+      format: Some(Format::Json),
+      watch: false,
+    };
+    let cfg = args.load_config()?;
+    assert!(cfg.agents.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn extensionless_file_without_format_errors() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.conf");
+    std::fs::write(&path, "")?;
+    let error = cli(path)
+      .load_config()
+      .expect_err("should require an explicit format");
+    assert!(error.to_string().contains("cannot infer"), "{error:#}");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn missing_config_errors() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("omw.toml");
+    let error = cli(path)
+      .load_config()
+      .expect_err("should error on a missing config");
+    assert!(error.to_string().contains("failed to read"), "{error:#}");
+    Ok(())
   }
 
   #[test]
   fn scaffold_defaults_output_next_to_the_config() {
     let args = ScaffoldArgs {
       config: PathBuf::from("cases/a/omw.toml"),
+      format: None,
       output: None,
       force: false,
       no_resources: false,
@@ -397,6 +543,7 @@ mod tests {
   fn scaffold_honors_an_explicit_output() {
     let args = ScaffoldArgs {
       config: PathBuf::from("omw.toml"),
+      format: None,
       output: Some(PathBuf::from("out/omw.test.toml")),
       force: true,
       no_resources: true,
@@ -410,6 +557,8 @@ mod tests {
       "omw",
       "scaffold",
       "omw.toml",
+      "--format",
+      "yaml",
       "--force",
       "--no-resources",
     ])
@@ -417,6 +566,7 @@ mod tests {
     match cli.command {
       Command::Scaffold { args } => {
         assert_eq!(args.config, PathBuf::from("omw.toml"));
+        assert_eq!(args.format, Some(Format::Yaml));
         assert!(args.force);
         assert!(args.no_resources);
       }

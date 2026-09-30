@@ -72,8 +72,8 @@ let
           type = lib.types.nullOr lib.types.path;
           default = null;
           description = ''
-            Path to an omw configuration file (TOML). Mutually exclusive with
-            `services.omw.settings`.
+            Path to an omw configuration file (TOML, YAML or JSON). Mutually
+            exclusive with `services.omw.settings`.
           '';
         };
 

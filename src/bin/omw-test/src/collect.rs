@@ -5,18 +5,26 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use glob::Pattern;
-use omw::config::Config;
+use omw::config::{Config, Format};
 use omw::testing::{Assertions, parse};
 
-/// A config file is collected when its name is `omw.test.toml` or ends with
-/// `.omw.test.toml`, so several test configs can live side by side in one
-/// directory. `omw.test.template.toml` never matches.
-const CONFIG_NAME: &str = "omw.test.toml";
-const CONFIG_SUFFIX: &str = ".omw.test.toml";
+/// A config file is collected when its stem is `omw.test` or ends with
+/// `.omw.test`, and its extension is one of the supported formats, so several
+/// test configs can live side by side in one directory. `omw.test.template.toml`
+/// never matches.
+const CONFIG_STEM: &str = "omw.test";
+const CONFIG_SUFFIX: &str = ".omw.test";
+const CONFIG_EXTENSIONS: [&str; 4] = ["toml", "yaml", "yml", "json"];
 
 /// Whether `name` names a discoverable test config.
 fn is_test_config(name: &str) -> bool {
-  name == CONFIG_NAME || name.ends_with(CONFIG_SUFFIX)
+  let Some((stem, extension)) = name.rsplit_once('.') else {
+    return false;
+  };
+  if !CONFIG_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()) {
+    return false;
+  }
+  stem == CONFIG_STEM || stem.ends_with(CONFIG_SUFFIX)
 }
 
 /// One discovered test: its config file and its path relative to the discovery
@@ -90,15 +98,27 @@ pub fn filter(
 }
 
 /// Read a test config and parse both the runnable [`Config`] (with the
-/// `OMW_TEST__` environment overlay) and its `[assertions]` section.
-pub fn load(path: &Path) -> Result<(Config, Assertions)> {
+/// `OMW_TEST__` environment overlay) and its `[assertions]` section. The
+/// format is `format` when given, else inferred from the path's extension.
+pub fn load(
+  path: &Path,
+  format: Option<Format>,
+) -> Result<(Config, Assertions)> {
   let raw = std::fs::read_to_string(path)
     .with_context(|| format!("failed to read config {}", path.display()))?;
+  let format =
+    format
+      .or_else(|| Format::from_path(path))
+      .with_context(|| {
+        format!(
+          "cannot infer the config format of {}; pass --format",
+          path.display()
+        )
+      })?;
   let env = ::config::Environment::with_prefix("OMW_TEST").separator("__");
   let source: ::config::Config = ::config::Config::builder()
     .add_source(
-      ::config::File::from_str(&raw, ::config::FileFormat::Toml)
-        .required(false),
+      ::config::File::from_str(&raw, file_format(format)).required(false),
     )
     .add_source(env)
     .build()
@@ -108,6 +128,7 @@ pub fn load(path: &Path) -> Result<(Config, Assertions)> {
     .context("failed to deserialize configuration")?;
   tracing::info!(
     path = %path.display(),
+    format = %format,
     providers = config.providers.len(),
     tooling = config.tooling.len(),
     runtime = config.runtime.len(),
@@ -115,8 +136,17 @@ pub fn load(path: &Path) -> Result<(Config, Assertions)> {
     "configuration loaded"
   );
   tracing::debug!(config = ?config, "configuration details");
-  let assertions = parse(&raw)?;
+  let assertions = parse(&raw, format)?;
   Ok((config, assertions))
+}
+
+/// Map an [`omw::config::Format`] onto the `config` crate's file format.
+fn file_format(format: Format) -> ::config::FileFormat {
+  match format {
+    Format::Toml => ::config::FileFormat::Toml,
+    Format::Yaml => ::config::FileFormat::Yaml,
+    Format::Json => ::config::FileFormat::Json,
+  }
 }
 
 /// The process-wide testing tunables, read from the `OMW_TEST__` environment
@@ -246,6 +276,30 @@ mod tests {
         "01-hello/rhai/omw.test.toml",
         "01-hello/wasm/omw.test.toml",
         "02-tool-agent/rhai/omw.test.toml",
+      ]
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn discover_collects_yaml_and_json_configs() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    write(dir.path(), "a/omw.test.yaml", "")?;
+    write(dir.path(), "b/omw.test.yml", "")?;
+    write(dir.path(), "c/omw.test.json", "")?;
+    write(dir.path(), "d/first.omw.test.json", "")?;
+    // A template in a non-TOML format is still never collected.
+    write(dir.path(), "e/omw.test.template.yaml", "")?;
+    write(dir.path(), "f/omw.yaml", "")?;
+
+    let tests = discover(dir.path())?;
+    assert_eq!(
+      relative_paths(&tests),
+      vec![
+        "a/omw.test.yaml",
+        "b/omw.test.yml",
+        "c/omw.test.json",
+        "d/first.omw.test.json",
       ]
     );
     Ok(())
@@ -407,7 +461,7 @@ mod tests {
       "#,
     )?;
 
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     let provider = cfg
       .providers
       .get("openai")
@@ -451,7 +505,7 @@ mod tests {
         listen = "127.0.0.1:8080"
       "#,
     )?;
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     let endpoint = cfg
       .endpoint
       .as_ref()
@@ -464,10 +518,69 @@ mod tests {
 
   #[test]
   #[serial(env)]
+  fn yaml_config_parses_config_and_assertions() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = write(
+      dir.path(),
+      "omw.test.yaml",
+      r#"
+        runtime:
+          rhai:
+            kind: rhai
+        agents:
+          alice:
+            runtime: rhai
+            script: brain.rhai
+        assertions:
+          alice:
+            outcome: completed
+            events:
+              - kind: call
+                op: chat
+      "#,
+    )?;
+    let (cfg, assertions) = load(&path, None)?;
+    assert_eq!(cfg.runtime["rhai"].kind, "rhai");
+    assert_eq!(cfg.agents["alice"].script, "brain.rhai");
+    assert_eq!(assertions.assertions["alice"].events.len(), 1);
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn json_config_parses_config_and_assertions() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = write(
+      dir.path(),
+      "omw.test.json",
+      r#"{
+        "runtime": { "rhai": { "kind": "rhai" } },
+        "agents": { "alice": { "runtime": "rhai", "script": "brain.rhai" } },
+        "assertions": { "alice": { "outcome": "completed", "events": [] } }
+      }"#,
+    )?;
+    let (cfg, assertions) = load(&path, None)?;
+    assert_eq!(cfg.agents["alice"].runtime, "rhai");
+    assert!(assertions.assertions.contains_key("alice"));
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn format_override_parses_an_extensionless_file() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = write(dir.path(), "omw.test.conf", "{\"agents\":{}}")?;
+    let (cfg, _) = load(&path, Some(Format::Json))?;
+    assert!(cfg.agents.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
   fn endpoint_defaults_to_none() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let path = write(dir.path(), "omw.test.toml", "")?;
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     assert!(cfg.endpoint.is_none());
     Ok(())
   }
@@ -485,7 +598,7 @@ mod tests {
         foo = "bar"
       "#,
     )?;
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     let provider = cfg
       .providers
       .get("custom")
@@ -504,7 +617,7 @@ mod tests {
       "omw.test.toml",
       "[tunables]\nrecv_timeout_secs = 30\n",
     )?;
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     assert_eq!(cfg.tunables.recv_timeout_secs, 30);
     assert_eq!(
       cfg.tunables,
@@ -553,7 +666,7 @@ mod tests {
       "omw.test.toml",
       "[tunables]\ntooling_connect_backoff_start_ms = 50\ntooling_connect_backoff_cap_secs = 5\n",
     )?;
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     assert_eq!(cfg.tunables.tooling_connect_backoff_start_ms, 50);
     assert_eq!(cfg.tunables.tooling_connect_backoff_cap_secs, 5);
     assert_eq!(
@@ -586,7 +699,7 @@ mod tests {
         script = "brain.rhai"
       "#,
     )?;
-    let (mut config, _) = load(&path)?;
+    let (mut config, _) = load(&path, None)?;
     resolve_scripts(&mut config, &path);
     let expected = path
       .parent()
@@ -612,7 +725,7 @@ mod tests {
         script = "/absolute/brain.rhai"
       "#,
     )?;
-    let (mut config, _) = load(&path)?;
+    let (mut config, _) = load(&path, None)?;
     resolve_scripts(&mut config, &path);
     assert_eq!(config.agents["alice"].script, "/absolute/brain.rhai");
     Ok(())
@@ -639,7 +752,7 @@ mod tests {
     );
     let _vars = EnvSet::new(vars);
 
-    let (cfg, _) = load(&path)?;
+    let (cfg, _) = load(&path, None)?;
     let provider = cfg
       .providers
       .get("openai")

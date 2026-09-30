@@ -1,5 +1,5 @@
-//! TOML configuration: global provider/tooling/runtime implementations plus
-//! per-agent wiring.
+//! Configuration: global provider/tooling/runtime implementations plus
+//! per-agent wiring, in TOML, YAML or JSON.
 //!
 //! Config is deliberately impl-agnostic: each provider/tooling/runtime/endpoint
 //! entry is a `kind` string plus an opaque params blob. The kind is validated
@@ -8,9 +8,86 @@
 //! `runtime` and `endpoint`).
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::str::FromStr;
 
+use anyhow::Context as _;
 use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+/// The on-disk format a configuration (or `[assertions]` section) is written
+/// in. Inferred from a file's extension, or chosen explicitly with `--format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+  /// TOML (`.toml`).
+  Toml,
+  /// YAML (`.yaml` / `.yml`).
+  Yaml,
+  /// JSON (`.json`).
+  Json,
+}
+
+impl Format {
+  /// Infer a format from a bare extension (case-insensitive).
+  pub fn from_extension(extension: &str) -> Option<Self> {
+    match extension.to_ascii_lowercase().as_str() {
+      "toml" => Some(Self::Toml),
+      "yaml" | "yml" => Some(Self::Yaml),
+      "json" => Some(Self::Json),
+      _ => None,
+    }
+  }
+
+  /// Infer a format from a path's extension.
+  pub fn from_path(path: &Path) -> Option<Self> {
+    path
+      .extension()
+      .and_then(|extension| extension.to_str())
+      .and_then(Self::from_extension)
+  }
+
+  /// Parse `source` into `T` using this format.
+  pub fn parse<T: DeserializeOwned>(self, source: &str) -> anyhow::Result<T> {
+    match self {
+      Self::Toml => toml::from_str(source).context("invalid TOML"),
+      Self::Yaml => serde_norway::from_str(source).context("invalid YAML"),
+      Self::Json => serde_json::from_str(source).context("invalid JSON"),
+    }
+  }
+
+  /// The canonical lowercase name.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Toml => "toml",
+      Self::Yaml => "yaml",
+      Self::Json => "json",
+    }
+  }
+}
+
+impl std::fmt::Display for Format {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
+
+impl FromStr for Format {
+  type Err = anyhow::Error;
+
+  fn from_str(value: &str) -> anyhow::Result<Self> {
+    match value.to_ascii_lowercase().as_str() {
+      "toml" => Ok(Self::Toml),
+      "yaml" | "yml" => Ok(Self::Yaml),
+      "json" => Ok(Self::Json),
+      other => {
+        anyhow::bail!(
+          "unknown config format {other:?} (expected toml, yaml or json)"
+        )
+      }
+    }
+  }
+}
 
 /// OMW configuration.
 #[derive(Debug, Deserialize, Clone, Serialize, JsonSchema)]

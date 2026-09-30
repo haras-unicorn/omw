@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use omw::config::Format;
 
 #[derive(Parser, Debug)]
 #[command(name = "omw-test", about = "Deterministic OMW brain testing")]
@@ -36,7 +37,7 @@ pub enum Command {
   },
 }
 
-/// `run` flags: the discovery root, include/exclude globs, and watch.
+/// `run` flags: the discovery root, include/exclude globs, format and watch.
 #[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
 pub struct RunArgs {
   /// Config file or directory to search (defaults to `.`)
@@ -49,6 +50,9 @@ pub struct RunArgs {
   /// Skip tests whose root-relative directory matches this glob
   #[arg(long, value_name = "GLOB")]
   pub exclude: Vec<String>,
+  /// Config format; inferred from each file's extension when omitted
+  #[arg(long, value_name = "FORMAT")]
+  pub format: Option<Format>,
   /// Re-run on change instead of exiting
   #[arg(long)]
   pub watch: bool,
@@ -113,6 +117,7 @@ mod tests {
         path: PathBuf::from("."),
         include: Vec::new(),
         exclude: Vec::new(),
+        format: None,
         watch: false,
       })
     );
@@ -138,9 +143,17 @@ mod tests {
         path: PathBuf::from("examples"),
         include: vec!["**/rhai".to_owned(), "**/js".to_owned()],
         exclude: vec!["**/wasm".to_owned()],
+        format: None,
         watch: true,
       })
     );
+  }
+
+  #[test]
+  fn run_accepts_a_format_override() {
+    let args =
+      run_args(parse(&["omw-test", "run", "examples", "--format", "json"]));
+    assert_eq!(args.and_then(|args| args.format), Some(Format::Json));
   }
 
   #[cfg(feature = "compile-wasm")]

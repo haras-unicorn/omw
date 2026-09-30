@@ -511,6 +511,7 @@ mod tests {
           },
         ]
       "#,
+      crate::config::Format::Toml,
     )?;
     crate::testing::check(&crate::testing::collect(events), &expected)?;
     Ok(())

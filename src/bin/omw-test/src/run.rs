@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::Result;
+use omw::config::Format;
 use omw::watch::{RecursiveMode, Watcher, scope};
 
 #[cfg(feature = "compile-wasm")]
@@ -39,7 +40,7 @@ async fn run_tests(args: RunArgs) -> Result<()> {
       &args.include,
       &args.exclude,
     )?;
-    return run_pass(&tests, &args.path).await;
+    return run_pass(&tests, &args.path, args.format).await;
   }
   // Hold one watcher across reruns so a change between passes is not missed.
   let debounce = collect::env_tunables()?.watch_debounce();
@@ -51,7 +52,7 @@ async fn run_tests(args: RunArgs) -> Result<()> {
       &args.include,
       &args.exclude,
     )?;
-    if let Err(error) = run_pass(&tests, &args.path).await {
+    if let Err(error) = run_pass(&tests, &args.path, args.format).await {
       tracing::error!(error = %error, "test pass failed; watching for changes");
     }
     if watcher.next_change().await.is_none() {
@@ -60,14 +61,18 @@ async fn run_tests(args: RunArgs) -> Result<()> {
   }
 }
 
-async fn run_pass(tests: &[Test], path: &Path) -> Result<()> {
+async fn run_pass(
+  tests: &[Test],
+  path: &Path,
+  format: Option<Format>,
+) -> Result<()> {
   if tests.is_empty() {
     tracing::warn!(path = %path.display(), "no tests found");
     return Ok(());
   }
   let mut failures = Vec::new();
   for test in tests {
-    match run_one(test).await {
+    match run_one(test, format).await {
       Ok(()) => println!("PASS {}", test.label()),
       Err(error) => {
         println!("FAIL {}", test.label());
@@ -85,8 +90,8 @@ async fn run_pass(tests: &[Test], path: &Path) -> Result<()> {
   }
 }
 
-async fn run_one(test: &Test) -> Result<()> {
-  let (mut config, assertions) = collect::load(&test.config)?;
+async fn run_one(test: &Test, format: Option<Format>) -> Result<()> {
+  let (mut config, assertions) = collect::load(&test.config, format)?;
   collect::resolve_scripts(&mut config, &test.config);
   let registries = omw::agent::Registries::default();
   let report = omw::testing::Harness::new(&config, &registries, &assertions)

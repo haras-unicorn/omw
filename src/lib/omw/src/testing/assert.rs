@@ -27,6 +27,7 @@ use serde_json::Value;
 #[cfg(any(test, feature = "mock"))]
 use tokio::sync::{broadcast, watch};
 
+use crate::config::Format;
 use crate::host::events::Event;
 #[cfg(any(test, feature = "mock"))]
 use crate::host::trace::TraceSender;
@@ -739,9 +740,11 @@ fn render_array_step(step: &ArrayStep) -> String {
   }
 }
 
-/// Parse the `[assertions]` section out of a test config.
-pub fn parse(source: &str) -> anyhow::Result<Assertions> {
-  toml::from_str(source).context("failed to deserialize [assertions]")
+/// Parse the `[assertions]` section out of a test config written in `format`.
+pub fn parse(source: &str, format: Format) -> anyhow::Result<Assertions> {
+  format
+    .parse(source)
+    .context("failed to deserialize [assertions]")
 }
 
 #[cfg(test)]
@@ -844,7 +847,7 @@ mod tests {
 
   fn assertions(agent: &str, body: &str) -> Assertions {
     let rendered = format!("[assertions.{agent}]\n{body}");
-    parse(&rendered).expect("assertions should parse")
+    parse(&rendered, Format::Toml).expect("assertions should parse")
   }
 
   fn assert_check(agent: &str, body: &str, events: Vec<TraceEvent>) {
@@ -967,10 +970,12 @@ mod tests {
   fn nested_while_and_until_are_rejected() {
     parse(
       "[assertions.alice]\nevents = [{ \"$while\" = { \"$until\" = { kind = \"call\" } } }]\n",
+      Format::Toml,
     )
     .expect_err("`$while` may not wrap another sentinel");
     parse(
       "[assertions.alice]\nevents = [{ \"$until\" = { \"$while\" = { kind = \"call\" } } }]\n",
+      Format::Toml,
     )
     .expect_err("`$until` may not wrap another sentinel");
   }
@@ -991,6 +996,7 @@ mod tests {
   fn invalid_regex_is_rejected_at_parse() {
     let error = parse(
       "[assertions.alice]\nevents = [{ kind = \"call\", detail = { x = \"[\" } }]\n",
+      Format::Toml,
     )
     .expect_err("invalid regex should fail to parse");
     assert!(format!("{error:#}").contains("invalid regex"), "{error:#}");
@@ -1094,10 +1100,16 @@ mod tests {
 
   #[test]
   fn legacy_any_and_skip_tags_are_rejected() {
-    parse("[assertions.alice]\nevents = [{ kind = \"any\" }]\n")
-      .expect_err("`kind = \"any\"` should no longer parse");
-    parse("[assertions.alice]\nevents = [{ kind = \"skip\", count = 1 }]\n")
-      .expect_err("`kind = \"skip\"` should no longer parse");
+    parse(
+      "[assertions.alice]\nevents = [{ kind = \"any\" }]\n",
+      Format::Toml,
+    )
+    .expect_err("`kind = \"any\"` should no longer parse");
+    parse(
+      "[assertions.alice]\nevents = [{ kind = \"skip\", count = 1 }]\n",
+      Format::Toml,
+    )
+    .expect_err("`kind = \"skip\"` should no longer parse");
   }
 
   #[test]
@@ -1259,7 +1271,7 @@ mod tests {
 
   #[test]
   fn assertions_default_to_empty() -> anyhow::Result<()> {
-    let parsed = parse("[runtime.rhai]\nkind = \"rhai\"\n")?;
+    let parsed = parse("[runtime.rhai]\nkind = \"rhai\"\n", Format::Toml)?;
     assert!(parsed.assertions.is_empty());
     Ok(())
   }

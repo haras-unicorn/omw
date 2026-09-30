@@ -12,7 +12,7 @@
 pub use crate::agent::{
   Registries, loop_agents, loop_agents_traced, run_agents, run_agents_traced,
 };
-pub use crate::config::{AgentConfig, Config, ImplConfig, Tunables};
+pub use crate::config::{AgentConfig, Config, Format, ImplConfig, Tunables};
 pub use crate::endpoint::{
   Endpoint, EndpointEntry, Factory as EndpointFactory,
 };

@@ -678,7 +678,8 @@ mod tests {
   async fn output_is_a_valid_test_config() -> anyhow::Result<()> {
     let out = scaffold(&config(), &registries()?, true).await?;
     let parsed: Config = toml::from_str(&out)?;
-    crate::testing::parse(&out).context("assertions should parse")?;
+    crate::testing::parse(&out, crate::config::Format::Toml)
+      .context("assertions should parse")?;
     for (name, entry) in &parsed.tooling {
       let built = crate::tooling::Registry::default().build(
         name,
