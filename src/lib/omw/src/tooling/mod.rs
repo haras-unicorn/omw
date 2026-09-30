@@ -338,7 +338,7 @@ mod tests {
       runtime: HashMap::new(),
       endpoint: None,
       memory: std::collections::BTreeMap::new(),
-      agents: Vec::new(),
+      agents: std::collections::BTreeMap::new(),
       tunables: crate::config::Tunables::default(),
     };
     let registry = Registry::default();
@@ -360,7 +360,7 @@ mod tests {
       runtime: HashMap::new(),
       endpoint: None,
       memory: std::collections::BTreeMap::new(),
-      agents: Vec::new(),
+      agents: std::collections::BTreeMap::new(),
       tunables: crate::config::Tunables::default(),
     };
     let registry = Registry::default();

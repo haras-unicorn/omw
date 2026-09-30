@@ -20,13 +20,10 @@
       ];
     };
     settings.runtime.rhai.kind = "rhai";
-    settings.agents = [
-      {
-        name = "alice";
-        runtime = "rhai";
-        script = "/var/lib/omw/brain.rhai";
-      }
-    ];
+    settings.agents.alice = {
+      runtime = "rhai";
+      script = "/var/lib/omw/brain.rhai";
+    };
     environment.OMW__PROVIDERS__OPENAI__API_KEY = "…";
   };
 }

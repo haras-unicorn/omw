@@ -5,12 +5,12 @@
   "type": "object",
   "properties": {
     "agents": {
-      "description": "Agents that OMW is going to run.",
-      "type": "array",
-      "default": [],
-      "items": {
+      "description": "Agents that OMW is going to run, keyed by agent name.",
+      "type": "object",
+      "additionalProperties": {
         "$ref": "#/$defs/AgentConfig"
-      }
+      },
+      "default": {}
     },
     "endpoint": {
       "description": "Optional endpoint implementation.",
@@ -83,12 +83,9 @@
   },
   "$defs": {
     "AgentConfig": {
-      "description": "A single agent wiring itself to the globals above.",
+      "description": "A single agent wiring itself to the globals above. The agent's name is the\nkey it appears under in [`Config::agents`].",
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
         "runtime": {
           "description": "Which named runtime implementation this agent's brain uses.",
           "type": "string"
@@ -98,7 +95,7 @@
           "type": "string"
         }
       },
-      "required": ["name", "runtime", "script"]
+      "required": ["runtime", "script"]
     },
     "ImplConfig": {
       "description": "A single configured implementation: which kind plus opaque params.",

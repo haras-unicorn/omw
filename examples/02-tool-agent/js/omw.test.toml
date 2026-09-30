@@ -18,8 +18,7 @@ tool_calls = [{ name = "echo", result = "hi" }]
 [runtime.runtime]
 kind = "js"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "brain.js"
 

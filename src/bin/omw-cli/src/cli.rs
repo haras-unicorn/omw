@@ -294,8 +294,7 @@ mod tests {
         [runtime.rhai]
         kind = "rhai"
 
-        [[agents]]
-        name = "alice"
+        [agents.alice]
         runtime = "rhai"
         script = "brain.rhai"
       "#,
@@ -328,9 +327,8 @@ mod tests {
     assert_eq!(rhai.kind, "rhai");
 
     assert_eq!(cfg.agents.len(), 1);
-    assert_eq!(cfg.agents[0].name, "alice");
-    assert_eq!(cfg.agents[0].runtime, "rhai");
-    assert_eq!(cfg.agents[0].script, "brain.rhai");
+    assert_eq!(cfg.agents["alice"].runtime, "rhai");
+    assert_eq!(cfg.agents["alice"].script, "brain.rhai");
     Ok(())
   }
 

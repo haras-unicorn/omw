@@ -147,7 +147,7 @@ pub fn resolve_scripts(config: &mut Config, path: &Path) {
     .parent()
     .filter(|parent| !parent.as_os_str().is_empty())
     .unwrap_or(Path::new("."));
-  for agent in &mut config.agents {
+  for agent in config.agents.values_mut() {
     let script = Path::new(&agent.script);
     if script.is_relative() {
       agent.script = base.join(script).to_string_lossy().into_owned();
@@ -401,8 +401,7 @@ mod tests {
         [runtime.rhai]
         kind = "rhai"
 
-        [[agents]]
-        name = "alice"
+        [agents.alice]
         runtime = "rhai"
         script = "brain.rhai"
       "#,
@@ -434,9 +433,8 @@ mod tests {
     assert_eq!(rhai.kind, "rhai");
 
     assert_eq!(cfg.agents.len(), 1);
-    assert_eq!(cfg.agents[0].name, "alice");
-    assert_eq!(cfg.agents[0].runtime, "rhai");
-    assert_eq!(cfg.agents[0].script, "brain.rhai");
+    assert_eq!(cfg.agents["alice"].runtime, "rhai");
+    assert_eq!(cfg.agents["alice"].script, "brain.rhai");
     Ok(())
   }
 
@@ -583,8 +581,7 @@ mod tests {
         [runtime.rhai]
         kind = "rhai"
 
-        [[agents]]
-        name = "alice"
+        [agents.alice]
         runtime = "rhai"
         script = "brain.rhai"
       "#,
@@ -595,7 +592,7 @@ mod tests {
       .parent()
       .ok_or_else(|| anyhow::anyhow!("config has no parent"))?
       .join("brain.rhai");
-    assert_eq!(config.agents[0].script, expected.to_string_lossy());
+    assert_eq!(config.agents["alice"].script, expected.to_string_lossy());
     Ok(())
   }
 
@@ -610,15 +607,14 @@ mod tests {
         [runtime.rhai]
         kind = "rhai"
 
-        [[agents]]
-        name = "alice"
+        [agents.alice]
         runtime = "rhai"
         script = "/absolute/brain.rhai"
       "#,
     )?;
     let (mut config, _) = load(&path)?;
     resolve_scripts(&mut config, &path);
-    assert_eq!(config.agents[0].script, "/absolute/brain.rhai");
+    assert_eq!(config.agents["alice"].script, "/absolute/brain.rhai");
     Ok(())
   }
 

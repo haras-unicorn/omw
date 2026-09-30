@@ -10,8 +10,7 @@ turns = [{ content = "hello, world" }]
 [runtime.runtime]
 kind = "js"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "brain.js"
 

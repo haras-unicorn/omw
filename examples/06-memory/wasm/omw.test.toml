@@ -16,8 +16,7 @@ handle = "seed-42"
 [runtime.runtime]
 kind = "wasm"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "runtime"
 script = "brain.wasm"
 

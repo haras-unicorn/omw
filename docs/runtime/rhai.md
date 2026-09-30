@@ -21,8 +21,7 @@ The rhai runtime takes no required parameters beyond the shared WASI sandbox:
 [runtime.rhai]
 kind = "rhai"
 
-[[agents]]
-name = "alice"
+[agents.alice]
 runtime = "rhai"
 script = "brain.rhai"
 ```

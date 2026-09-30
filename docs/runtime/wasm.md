@@ -37,8 +37,7 @@ point the agent at it.
 [runtime.wasm]
 kind = "wasm"
 
-[[agents]]
-name = "server"
+[agents.server]
 runtime = "wasm"
 script = "brain.wasm"
 ```
@@ -83,8 +82,7 @@ cargo build --target wasm32-wasip2
 [runtime.wasm]
 kind = "wasm"
 
-[[agents]]
-name = "server"
+[agents.server]
 runtime = "wasm"
 script = "target/wasm32-wasip2/debug/brain.wasm"
 ```

@@ -104,12 +104,14 @@ fn impl_config(kind: &str, params: serde_json::Value) -> ImplConfig {
   }
 }
 
-fn agent(name: &str, runtime: &str, script: &str) -> AgentConfig {
-  AgentConfig {
-    name: name.to_string(),
-    runtime: runtime.to_string(),
-    script: script.to_string(),
-  }
+fn agent(name: &str, runtime: &str, script: &str) -> (String, AgentConfig) {
+  (
+    name.to_string(),
+    AgentConfig {
+      runtime: runtime.to_string(),
+      script: script.to_string(),
+    },
+  )
 }
 
 fn openai_params(base_url: &str) -> serde_json::Value {
@@ -161,7 +163,9 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
   )?;
 
   let config = Config {
-    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())]
+      .into_iter()
+      .collect(),
     providers: [(
       "openai".to_string(),
       impl_config("openai", openai_params(&provider.uri())),
@@ -241,7 +245,9 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
   )?;
 
   let config = Config {
-    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())]
+      .into_iter()
+      .collect(),
     providers: [(
       "openai".to_string(),
       impl_config("openai", openai_params(&provider.uri())),
@@ -336,7 +342,9 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   std::fs::write(&brain, "let === ")?;
 
   let config = Config {
-    agents: vec![agent("alice", "rhai", &brain.display().to_string())],
+    agents: vec![agent("alice", "rhai", &brain.display().to_string())]
+      .into_iter()
+      .collect(),
     providers: Default::default(),
     tooling: Default::default(),
     runtime: [("rhai".to_string(), impl_config("rhai", json!({})))]

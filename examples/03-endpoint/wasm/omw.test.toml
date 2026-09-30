@@ -18,8 +18,7 @@ requests = [
   { model = "gpt-4o", messages = [{ content = "bye" }], stream = false },
 ]
 
-[[agents]]
-name = "server"
+[agents.server]
 runtime = "runtime"
 script = "brain.wasm"
 

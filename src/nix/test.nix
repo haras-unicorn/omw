@@ -17,13 +17,10 @@ let
         services.omw = {
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
@@ -47,8 +44,7 @@ let
           [runtime.rhai]
           kind = "rhai"
 
-          [[agents]]
-          name = "alice"
+          [agents.alice]
           runtime = "rhai"
           script = "/etc/brain.rhai"
         '';
@@ -75,13 +71,10 @@ let
               model = "gpt-4o";
             };
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
           environment = {
             OMW__PROVIDERS__OPENAI__API_KEY = "from-env";
@@ -109,13 +102,10 @@ let
         services.omw = {
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
@@ -149,13 +139,10 @@ let
           group = "omw";
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
@@ -175,13 +162,10 @@ let
         services.omw = {
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
@@ -202,13 +186,10 @@ let
           mode = "loop";
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/does-not-exist.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/does-not-exist.rhai";
+            };
           };
         };
       };
@@ -230,13 +211,10 @@ let
           readWritePaths = [ "/etc" ];
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
@@ -276,13 +254,10 @@ let
           stateDir = "omw";
           settings = {
             runtime.rhai.kind = "rhai";
-            agents = [
-              {
-                name = "alice";
-                runtime = "rhai";
-                script = "/etc/brain.rhai";
-              }
-            ];
+            agents.alice = {
+              runtime = "rhai";
+              script = "/etc/brain.rhai";
+            };
           };
         };
 
