@@ -77,6 +77,10 @@ interface types {
 
     /// The tool's JSON-schema document describing its expected arguments.
     input-schema: string,
+
+    /// Optional JSON-schema document describing the tool's structured output
+    /// (MCP `outputSchema`). Absent when the tool declares no output shape.
+    output-schema: option<string>,
   }
 
   /// A tooling resource: a URI-addressed, readable data value exposed by a

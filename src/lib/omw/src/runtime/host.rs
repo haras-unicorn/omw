@@ -960,6 +960,9 @@ fn in_tool(t: tooling_bindings::Tool) -> Tool {
     description: t.description,
     input_schema: serde_json::from_str(&t.input_schema)
       .unwrap_or(serde_json::Value::Null),
+    output_schema: t
+      .output_schema
+      .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
   }
 }
 
@@ -1041,6 +1044,9 @@ impl From<crate::tooling::Tool> for tooling_bindings::Tool {
       description: t.description,
       input_schema: serde_json::to_string(&t.input_schema)
         .unwrap_or_else(|_| "null".into()),
+      output_schema: t
+        .output_schema
+        .map(|s| serde_json::to_string(&s).unwrap_or_else(|_| "null".into())),
     }
   }
 }
@@ -1396,18 +1402,25 @@ mod tests {
       name: "t".to_string(),
       description: None,
       input_schema: "not json".to_string(),
+      output_schema: Some("not json".to_string()),
     };
     let out = in_tool(malformed);
     assert_eq!(out.input_schema, serde_json::Value::Null);
+    assert_eq!(out.output_schema, Some(serde_json::Value::Null));
 
     let valid = tooling_bindings::Tool {
       name: "t".to_string(),
       description: Some("does things".to_string()),
       input_schema: r#"{"type":"object"}"#.to_string(),
+      output_schema: Some(r#"{"type":"string"}"#.to_string()),
     };
     let out = in_tool(valid);
     assert_eq!(out.input_schema, serde_json::json!({ "type": "object" }));
     assert_eq!(out.description.as_deref(), Some("does things"));
+    assert_eq!(
+      out.output_schema,
+      Some(serde_json::json!({ "type": "string" }))
+    );
   }
 
   #[test]
@@ -1416,16 +1429,20 @@ mod tests {
       name: "t".to_string(),
       description: None,
       input_schema: serde_json::json!({ "type": "object" }),
+      output_schema: Some(serde_json::json!({ "type": "string" })),
     };
     let wire: tooling_bindings::Tool = tool.into();
     assert_eq!(wire.input_schema, r#"{"type":"object"}"#);
+    assert_eq!(wire.output_schema.as_deref(), Some(r#"{"type":"string"}"#));
 
     let null = Tool {
       name: "n".to_string(),
       description: None,
       input_schema: serde_json::Value::Null,
+      output_schema: None,
     };
     let wire: tooling_bindings::Tool = null.into();
     assert_eq!(wire.input_schema, "null");
+    assert!(wire.output_schema.is_none());
   }
 }

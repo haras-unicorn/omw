@@ -41,7 +41,9 @@ resource_content_updates = [
 
 ## Keys
 
-- `tools` — the tools `list-tools` returns, as `Tool` values.
+- `tools` — the tools `list-tools` returns, as `Tool` values. Each may carry an
+  optional `output_schema` (the tool's structured-output JSON Schema) alongside
+  `name`, `description?`, and `input_schema`.
 - `tool_calls` — an **ordered** list of `call-tool` results. Each call consumes
   the next entry and verifies the invoked name matches; a mismatch, running past
   the end, or a call with no script at all is a tool-call error (delivered to

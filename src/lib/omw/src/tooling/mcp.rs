@@ -218,6 +218,9 @@ impl Tooling for MCPTooling {
         name: t.name.into_owned(),
         description: t.description.map(|d| d.into_owned()),
         input_schema: Value::Object(t.input_schema.as_ref().clone()),
+        output_schema: t
+          .output_schema
+          .map(|s| Value::Object(s.as_ref().clone())),
       });
     }
     tracing::debug!(count = out.len(), "mcp tools/list returned");

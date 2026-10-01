@@ -452,6 +452,7 @@ fn parse_tools(tools: Option<&[WireTool]>) -> Result<Vec<Tool>, String> {
             .parameters
             .clone()
             .unwrap_or(serde_json::Value::Null),
+          output_schema: None,
         })
       }
       WireTool::Flat {
@@ -462,6 +463,7 @@ fn parse_tools(tools: Option<&[WireTool]>) -> Result<Vec<Tool>, String> {
         name: name.clone(),
         description: description.clone(),
         input_schema: parameters.clone().unwrap_or(serde_json::Value::Null),
+        output_schema: None,
       }),
     })
     .collect()

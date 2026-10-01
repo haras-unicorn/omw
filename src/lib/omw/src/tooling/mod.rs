@@ -30,6 +30,9 @@ pub struct Tool {
   pub description: Option<String>,
   /// JSON Schema for the tool's arguments.
   pub input_schema: Value,
+  /// Optional JSON Schema for the tool's structured output (MCP
+  /// `outputSchema`). Absent when the tool declares no output shape.
+  pub output_schema: Option<Value>,
 }
 
 /// An MCP resource (a URI-addressed, readable data value) exposed by a

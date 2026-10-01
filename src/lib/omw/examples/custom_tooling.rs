@@ -65,6 +65,7 @@ impl Tooling for EchoTooling {
       name: "echo".to_string(),
       description: Some("Echoes the canned value.".to_string()),
       input_schema: serde_json::json!({ "type": "object" }),
+      output_schema: None,
     }])
   }
 

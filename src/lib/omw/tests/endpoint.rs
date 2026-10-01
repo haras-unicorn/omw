@@ -342,6 +342,7 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
       name: "get_weather".to_string(),
       description: None,
       input_schema: serde_json::json!({ "type": "object" }),
+      output_schema: None,
     }]
   );
   // Answer so the POST completes, then assert the terminal end event fires

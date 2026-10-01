@@ -592,6 +592,7 @@ mod tests {
       name: "weather".to_string(),
       description: Some("gets the weather".to_string()),
       input_schema: serde_json::json!({ "type": "object" }),
+      output_schema: None,
     };
     let wire = to_wire_tool(&tool);
     assert_eq!(wire["type"], "function");
@@ -606,6 +607,7 @@ mod tests {
       name: "bare".to_string(),
       description: None,
       input_schema: serde_json::json!({}),
+      output_schema: None,
     };
     let wire = to_wire_tool(&bare);
     assert!(wire["function"].get("description").is_none());

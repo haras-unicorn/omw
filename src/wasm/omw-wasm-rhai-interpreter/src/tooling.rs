@@ -62,6 +62,9 @@ pub(crate) fn tooling_list_tools(
       m.insert("description".into(), desc.into());
     }
     m.insert("input_schema".into(), t.input_schema.into());
+    if let Some(output_schema) = t.output_schema {
+      m.insert("output_schema".into(), output_schema.into());
+    }
     arr.push(m.into());
   }
   Ok(arr)

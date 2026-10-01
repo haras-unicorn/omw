@@ -81,6 +81,16 @@ fn tool_to_json(t: crate::omw::omw::types::Tool) -> serde_json::Value {
     "input_schema".to_string(),
     serde_json::Value::String(t.input_schema),
   );
+  if let Some(output_schema) = t.output_schema {
+    o.insert(
+      "outputSchema".to_string(),
+      serde_json::Value::String(output_schema.clone()),
+    );
+    o.insert(
+      "output_schema".to_string(),
+      serde_json::Value::String(output_schema),
+    );
+  }
   serde_json::Value::Object(o)
 }
 
