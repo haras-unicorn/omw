@@ -219,9 +219,12 @@ A Cargo workspace with six crates plus a single WIT contract.
 - `src/wasm/omw-wasm-js-interpreter` — the JS guest component (`#![no_main]`),
   compiled to `wasm32-wasip2`. Exports the `runtime` interface (`kind` +
   `run(script)`) and registers the `omw` global (Boa) whose
-  `provider`/`tooling`/`host` namespaces route to the host (camelCase). Ships an
-  `omw.d.ts` describing that global (meant to be vendored next to a `brain.js`;
-  see `docs/runtime/js.md`).
+  `provider`/`tooling`/`host` namespaces route to the host (camelCase). Ships
+  the JS-side declarations: the hand-written `omw.d.ts` for the `omw` global
+  (including the generic `Omw<Config>` type), and the generated `omw.all.d.ts` —
+  the concatenation of the deployment/testing config types
+  (`assets/schema.d.ts`, `assets/schema.test.d.ts`) and `omw.d.ts` — which is
+  the file to vendor next to a `brain.js` (see `docs/runtime/js.md`).
 
 - `src/lib/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
   (published to crates.io): re-exports the generated `omw` world bindings plus
@@ -270,6 +273,11 @@ A Cargo workspace with six crates plus a single WIT contract.
   builds the dev shells and points the wrapper at `dev.nu`, which defines the
   `dev` subcommands (`format` / `lint` / `test` / `build` / `release*` /
   `update`) and the `omw` helpers they share.
+- `src/nix/json-schema-to-typescript.nix` — a flake-parts module that packages
+  the `json-schema-to-typescript` CLI (`json2ts`, which is not in nixpkgs) as a
+  `buildNpmPackage` from the pinned upstream source
+  (`npmBuildScript = "build:server"`). The `json2ts` bin comes from the
+  package's own `bin` field and is put on the dev/ci shell `PATH`.
 
 - `src/nix/nixos.nix` — the NixOS module exposing `services.omw` — a systemd
   unit that runs `omw <mode> --config <file>` directly (secrets layer over the
@@ -282,7 +290,9 @@ A Cargo workspace with six crates plus a single WIT contract.
 
 - `assets/` — deployment examples included verbatim in the docs (`omw.service`,
   `Dockerfile`, `compose.yaml`, `omw.example.toml`, `omw.example.env`,
-  `omw.nix`).
+  `omw.nix`) plus the committed machine-readable schemas (`schema.json`,
+  `schema.test.json`) and the config TypeScript declarations generated from them
+  (`schema.d.ts`, `schema.test.d.ts`), each wrapped in a namespace.
 
 - `docs/deployment/` — deployment pages (`deployment.md` overview plus
   `systemd.md`, `docker.md`, `nixos/`); keep the shared config/workspace
@@ -361,8 +371,11 @@ Assume you are in the default development shell. Commands go through the `dev`
 wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
 
 - `dev format` — prettier, nixfmt, cargo fmt, then `cargo clippy --fix`; also
-  regenerates the per-variant test configs, `options.md` and the two schemas
-  (`schema.json` for `omw-cli`, `schema.test.json` for `omw-test`)
+  regenerates the per-variant test configs, `options.md`, the two schemas
+  (`schema.json` for `omw-cli`, `schema.test.json` for `omw-test`) and the
+  declarations generated from them (`assets/schema.d.ts`,
+  `assets/schema.test.d.ts` and the concatenated
+  `src/wasm/omw-wasm-js-interpreter/omw.all.d.ts`)
 - `dev test` — `omw test lib examples` (each library example), `omw test units`
   (`cargo clippy --all-features -- -D warnings` plus
   `cargo test --all-features`) and `omw test brain examples` (cross-builds the

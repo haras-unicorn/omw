@@ -45,3 +45,5 @@ ignoreWords:
   - serde
   - embedders
   - embedder
+  - json2ts
+  - npm

@@ -78,22 +78,48 @@ converts JavaScript's `f64` numbers to the WIT `u64` tick type at the boundary
 
 ## TypeScript declarations
 
-The interpreter crate ships an `omw.d.ts` declaration describing the `omw`
-global. TypeScript only resolves local files, so vendor a copy next to your
-`brain.js` and reference it:
+The interpreter ships four declaration files:
+
+- `assets/schema.d.ts` and `assets/schema.test.d.ts` — generated from the
+  deployment and testing JSON schemas, each wrapped in its own namespace
+  (`OmwConfig` and `OmwTestConfig`).
+- `src/wasm/omw-wasm-js-interpreter/omw.d.ts` — the hand-written bindings for
+  the `omw` global, including the generic `Omw<Config>` type.
+- `src/wasm/omw-wasm-js-interpreter/omw.all.d.ts` — the concatenation of the
+  three above, and the file to vendor next to your `brain.js`.
+
+TypeScript only resolves local files, so vendor a copy next to your `brain.js`
+and reference it:
 
 ```sh
-curl -L -o omw.d.ts \
-  https://raw.githubusercontent.com/haras-unicorn/omw/main/src/wasm/omw-wasm-js-interpreter/omw.d.ts
+curl -L -o omw.all.d.ts \
+  https://raw.githubusercontent.com/haras-unicorn/omw/main/src/wasm/omw-wasm-js-interpreter/omw.all.d.ts
 ```
 
 ```js
-/// <reference path="./omw.d.ts" />
+/// <reference path="./omw.all.d.ts" />
 ```
 
 That gives `brain.js` completion and checking for every provider / tooling /
 host method and the `{ id, kind, payload }` event union. The declarations are
 ambient (`declare const omw`), so they need no import.
+
+### Typing `omw` against your config
+
+`Omw` is generic over the config type. Import your config (for example a
+scaffolded `omw.test` config converted to JSON) and instantiate it so lookups
+are constrained to the names you actually configured:
+
+```js
+/// <reference path="./omw.all.d.ts" />
+const config = { providers: { openai: { kind: "mock" } } };
+const typed = omw as Omw<typeof config>;
+typed.provider.get("openai"); // ok
+typed.provider.get("nope"); // type error
+```
+
+The generated config types are namespaced: `OmwConfig.Config` describes the
+`omw` deployment config, and `OmwTestConfig.Config` the `omw-test` config.
 
 ## Values in js
 
@@ -104,32 +130,28 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `tool-result`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, an object for `chat-delta` (with
-  `content`, `reasoning`, `tool_call` `{ id, name, arguments }`,
-  `finish_reason`, and `usage`
-  `{ prompt_tokens?, completion_tokens?, total_tokens? }`), an object for
-  `tool-result` (`{ name, arguments, content, structured_content? }`), a list of
-  resource objects (`{ uri, name, description?, mime_type? }`) for
+  `content`, `reasoning`, `toolCall` `{ id, name, arguments }`, `finishReason`,
+  and `usage` `{ promptTokens?, completionTokens?, totalTokens? }`), an object
+  for `tool-result` (`{ name, arguments, content, structuredContent? }`), a list
+  of resource objects (`{ uri, name, description?, mimeType? }`) for
   `resource-list-updated`, a resource-content object
-  (`{ uri, mime_type?, content }`) for `resource-updated`, an object for
+  (`{ uri, mimeType?, content }`) for `resource-updated`, an object for
   `endpoint-message` (`{ session, messages, tools, params? }`, with `messages` a
-  list of `{ role, content?, reasoning?, tool_call? }` objects, `tools` a list
-  of `{ name, description?, input_schema, output_schema? }`, and `params` the
+  list of `{ role, content?, reasoning?, toolCall? }` objects, `tools` a list of
+  `{ name, description?, inputSchema, outputSchema? }`, and `params` the
   generation params the client submitted), an object for `endpoint-session-end`
   (`{ session, error? }`), and `null` otherwise. The `content` field holds
   actual text for textual formats and base64 for anything else — match on
-  `mime_type` to tell which. Decode binary payloads with `omw.host.base64Decode`
+  `mimeType` to tell which. Decode binary payloads with `omw.host.base64Decode`
   (which returns an array of bytes) and encode back with
   `omw.host.base64Encode`.
 
-Opaque JSON fields are parsed in place: `arguments`, `input_schema`,
-`output_schema`, `params`, and a tool result's `content`/`structured_content`
+Opaque JSON fields are parsed in place: `arguments`, `inputSchema`,
+`outputSchema`, `params`, and a tool result's `content`/`structuredContent`
 surface as objects/arrays when the stored text is valid JSON and as the raw
 string otherwise. `content` is the MCP content-block array, so a text result's
 text is `result.content[0].text`. Passing one of these values back into
 `chat`/`chatStream`/`callTool` re-serializes it, so events round-trip.
-
-Tool and resource shapes additionally carry camelCase aliases (`inputSchema`,
-`outputSchema`, `mimeType`) alongside the snake_case keys.
 
 The script's completion value becomes its terminal message, stringified as JSON:
 a string result is returned as-is, while arrays and objects surface as `[...]`.

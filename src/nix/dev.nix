@@ -329,7 +329,12 @@ in
     };
 
   perSystem =
-    { pkgs, lib, ... }:
+    {
+      config,
+      pkgs,
+      lib,
+      ...
+    }:
     let
       packages = makePackages pkgs;
     in
@@ -380,7 +385,8 @@ in
               cargo-edit
               packages.rust
             ]
-            ++ packages.nativeBuildInputs;
+            ++ packages.nativeBuildInputs
+            ++ [ config.packages.json-schema-to-typescript ];
 
           devScript = pkgs.writeShellApplication {
             name = "dev";

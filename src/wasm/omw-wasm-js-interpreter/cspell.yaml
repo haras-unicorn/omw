@@ -2,6 +2,8 @@
 useGitignore: true
 version: "0.2"
 language: en
+ignorePaths:
+  - omw.all.d.ts
 ignoreWords:
   - cdylib
   - rlib

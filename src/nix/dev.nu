@@ -71,6 +71,15 @@ def "main format" [] {
   cargo run -p omw-test -- schema --output /dev/stdout
     | prettier --parser json
     | save -f "./assets/schema.test.json"
+  (omw config types ./assets/schema.json OmwConfig)
+    | prettier --parser typescript
+    | save -f "./assets/schema.d.ts"
+  (omw config types ./assets/schema.test.json OmwTestConfig)
+    | prettier --parser typescript
+    | save -f "./assets/schema.test.d.ts"
+  (omw all types)
+    | prettier --parser typescript
+    | save -f "./src/wasm/omw-wasm-js-interpreter/omw.all.d.ts"
   prettier --write .
   nixfmt ...(fd '.*\.nix$' . | lines)
   cargo fmt --all
@@ -111,6 +120,30 @@ def "main lint" [] {
     | prettier --parser json
     | str trim)) {
     print -e "schema.test.json doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./assets/schema.d.ts
+    | str trim)
+    != (omw config types ./assets/schema.json OmwConfig
+    | prettier --parser typescript
+    | str trim)) {
+    print -e "schema.d.ts doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./assets/schema.test.d.ts
+    | str trim)
+    != (omw config types ./assets/schema.test.json OmwTestConfig
+    | prettier --parser typescript
+    | str trim)) {
+    print -e "schema.test.d.ts doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./src/wasm/omw-wasm-js-interpreter/omw.all.d.ts
+    | str trim)
+    != (omw all types
+    | prettier --parser typescript
+    | str trim)) {
+    print -e "omw.all.d.ts doesn't match generated"
     exit 1
   }
   for case in (omw brain example cases) {
@@ -260,6 +293,19 @@ def "omw guests" [] {
     omw-wasm-js-interpreter
     omw-wasm-mock
   ]
+}
+
+def "omw config types" [schema: path, namespace: string] {
+  let raw = (json2ts -i $schema --unreachableDefinitions)
+  "declare namespace " + $namespace + " {\n" + $raw + "\n}\n"
+}
+
+def "omw all types" [] {
+  [
+    (open --raw ./assets/schema.d.ts)
+    (open --raw ./assets/schema.test.d.ts)
+    (open --raw ./src/wasm/omw-wasm-js-interpreter/omw.d.ts)
+  ] | str join "\n\n"
 }
 
 def "omw make tarball" [binary: string variant?: string] {

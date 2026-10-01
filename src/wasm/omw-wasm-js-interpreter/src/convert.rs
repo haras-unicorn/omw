@@ -87,10 +87,10 @@ fn tool_call_from_json(
 ) -> Result<types::ToolCall, JsError> {
   let obj = v
     .as_object()
-    .ok_or_else(|| js_err("tool_call must be an object"))?;
+    .ok_or_else(|| js_err("toolCall must be an object"))?;
   let arguments = obj
     .get("arguments")
-    .ok_or_else(|| js_err("tool_call missing arguments"))?;
+    .ok_or_else(|| js_err("toolCall missing arguments"))?;
   Ok(types::ToolCall {
     id: req_str(obj, "id")?,
     name: req_str(obj, "name")?,
@@ -114,7 +114,7 @@ pub(crate) fn msg_from_json(
     role,
     content: opt_str(obj, "content")?,
     reasoning: opt_str(obj, "reasoning")?,
-    tool_call: match obj.get("tool_call") {
+    tool_call: match obj.get("toolCall") {
       None | Some(serde_json::Value::Null) => None,
       Some(tc) => Some(tool_call_from_json(tc)?),
     },
@@ -127,11 +127,11 @@ pub(crate) fn tool_from_json(
   let obj = v
     .as_object()
     .ok_or_else(|| js_err("tool must be an object"))?;
-  let input_schema = match obj.get("input_schema") {
+  let input_schema = match obj.get("inputSchema") {
     Some(value) => opaque_json(value)?,
     None => "{}".to_string(),
   };
-  let output_schema = match obj.get("output_schema") {
+  let output_schema = match obj.get("outputSchema") {
     None | Some(serde_json::Value::Null) => None,
     Some(value) => Some(opaque_json(value)?),
   };
@@ -279,7 +279,7 @@ fn chat_message_to_json(m: types::ChatMessage) -> serde_json::Value {
     );
   }
   if let Some(tc) = m.tool_call {
-    o.insert("tool_call".to_string(), tool_call_to_json(tc));
+    o.insert("toolCall".to_string(), tool_call_to_json(tc));
   }
   serde_json::Value::Object(o)
 }
@@ -293,9 +293,9 @@ fn tool_to_json(t: types::Tool) -> serde_json::Value {
       serde_json::Value::String(description),
     );
   }
-  o.insert("input_schema".to_string(), json_or_string(&t.input_schema));
+  o.insert("inputSchema".to_string(), json_or_string(&t.input_schema));
   if let Some(output_schema) = t.output_schema {
-    o.insert("output_schema".to_string(), json_or_string(&output_schema));
+    o.insert("outputSchema".to_string(), json_or_string(&output_schema));
   }
   serde_json::Value::Object(o)
 }
@@ -303,16 +303,16 @@ fn tool_to_json(t: types::Tool) -> serde_json::Value {
 fn usage_to_json(u: types::Usage) -> serde_json::Value {
   let mut o = serde_json::Map::new();
   if let Some(prompt) = u.prompt_tokens {
-    o.insert("prompt_tokens".to_string(), serde_json::Value::from(prompt));
+    o.insert("promptTokens".to_string(), serde_json::Value::from(prompt));
   }
   if let Some(completion) = u.completion_tokens {
     o.insert(
-      "completion_tokens".to_string(),
+      "completionTokens".to_string(),
       serde_json::Value::from(completion),
     );
   }
   if let Some(total) = u.total_tokens {
-    o.insert("total_tokens".to_string(), serde_json::Value::from(total));
+    o.insert("totalTokens".to_string(), serde_json::Value::from(total));
   }
   serde_json::Value::Object(o)
 }
@@ -334,9 +334,9 @@ fn usage_from_json(v: &serde_json::Value) -> Result<types::Usage, JsError> {
     }
   }
   Ok(types::Usage {
-    prompt_tokens: token(obj, "prompt_tokens")?,
-    completion_tokens: token(obj, "completion_tokens")?,
-    total_tokens: token(obj, "total_tokens")?,
+    prompt_tokens: token(obj, "promptTokens")?,
+    completion_tokens: token(obj, "completionTokens")?,
+    total_tokens: token(obj, "totalTokens")?,
   })
 }
 
@@ -352,11 +352,11 @@ fn delta_to_json(delta: types::ChatDelta) -> serde_json::Value {
     );
   }
   if let Some(tc) = delta.tool_call {
-    o.insert("tool_call".to_string(), tool_call_to_json(tc));
+    o.insert("toolCall".to_string(), tool_call_to_json(tc));
   }
   if let Some(finish_reason) = delta.finish_reason {
     o.insert(
-      "finish_reason".to_string(),
+      "finishReason".to_string(),
       serde_json::Value::String(finish_reason),
     );
   }
@@ -377,11 +377,11 @@ pub(crate) fn delta_from_js(
   Ok(types::ChatDelta {
     content: opt_str(obj, "content")?,
     reasoning: opt_str(obj, "reasoning")?,
-    tool_call: match obj.get("tool_call") {
+    tool_call: match obj.get("toolCall") {
       None | Some(serde_json::Value::Null) => None,
       Some(tc) => Some(tool_call_from_json(tc)?),
     },
-    finish_reason: opt_str(obj, "finish_reason")?,
+    finish_reason: opt_str(obj, "finishReason")?,
     usage: match obj.get("usage") {
       None | Some(serde_json::Value::Null) => None,
       Some(usage) => Some(usage_from_json(usage)?),
@@ -395,10 +395,7 @@ fn tool_result_to_json(r: types::ToolResult) -> serde_json::Value {
   o.insert("arguments".to_string(), json_or_string(&r.arguments));
   o.insert("content".to_string(), json_or_string(&r.content));
   if let Some(structured) = r.structured_content {
-    o.insert(
-      "structured_content".to_string(),
-      json_or_string(&structured),
-    );
+    o.insert("structuredContent".to_string(), json_or_string(&structured));
   }
   serde_json::Value::Object(o)
 }
@@ -415,14 +412,14 @@ pub(crate) fn chat_result_to_json(r: types::ChatResult) -> serde_json::Value {
     );
   }
   o.insert(
-    "tool_calls".to_string(),
+    "toolCalls".to_string(),
     serde_json::Value::Array(
       r.tool_calls.into_iter().map(tool_call_to_json).collect(),
     ),
   );
   if let Some(finish_reason) = r.finish_reason {
     o.insert(
-      "finish_reason".to_string(),
+      "finishReason".to_string(),
       serde_json::Value::String(finish_reason),
     );
   }
@@ -443,10 +440,7 @@ fn resource_to_json(r: types::ResourceInfo) -> serde_json::Value {
     );
   }
   if let Some(mime_type) = r.mime_type {
-    o.insert(
-      "mime_type".to_string(),
-      serde_json::Value::String(mime_type),
-    );
+    o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
   }
   serde_json::Value::Object(o)
 }
@@ -455,10 +449,7 @@ fn resource_content_to_json(c: types::ResourceContent) -> serde_json::Value {
   let mut o = serde_json::Map::new();
   o.insert("uri".to_string(), serde_json::Value::String(c.uri));
   if let Some(mime_type) = c.mime_type {
-    o.insert(
-      "mime_type".to_string(),
-      serde_json::Value::String(mime_type),
-    );
+    o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
   }
   o.insert("content".to_string(), serde_json::Value::String(c.content));
   serde_json::Value::Object(o)

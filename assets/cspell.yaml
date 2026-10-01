@@ -5,6 +5,8 @@ language: en
 ignorePaths:
   - schema.json
   - schema.test.json
+  - schema.d.ts
+  - schema.test.d.ts
 ignoreWords:
   - tzdata
   - adduser

@@ -26,3 +26,6 @@ ignoreWords:
   - gnutar
   - prebuild
   - wasms
+  - bcherny
+  - json2ts
+  - npm

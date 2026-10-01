@@ -7,13 +7,13 @@ const first = provider.chat(
   [{ role: "user", content: "use echo" }],
   [],
 );
-const call = first.tool_calls[0];
+const call = first.toolCalls[0];
 const result = tooling.callToolBlocking(call.name, { input: "hi" });
 const second = provider.chat(
   "gpt-test",
   [
     { role: "user", content: "use echo" },
-    { role: "assistant", tool_call: call },
+    { role: "assistant", toolCall: call },
     { role: "tool", content: result.content[0].text },
   ],
   [],
