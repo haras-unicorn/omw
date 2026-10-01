@@ -86,10 +86,14 @@ pub(crate) fn tool_from_dynamic(d: Dynamic) -> Result<provider::Tool, String> {
     .get("input_schema")
     .and_then(|s| s.clone().try_cast::<String>())
     .unwrap_or_else(|| "{}".to_string());
+  let output_schema = map
+    .get("output_schema")
+    .and_then(|s| s.clone().try_cast::<String>());
   Ok(provider::Tool {
     name,
     description,
     input_schema,
+    output_schema,
   })
 }
 

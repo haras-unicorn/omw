@@ -41,8 +41,10 @@ resource; all further calls go through that handle.
 
 ## Tools
 
-A `tool` has a `name`, an optional `description`, and an `input-schema` — a JSON
-Schema describing the arguments the model must supply. The guest hands the
+A `tool` has a `name`, an optional `description`, an `input-schema` — a JSON
+Schema describing the arguments the model must supply — and an optional
+`output-schema` describing the tool's structured output (MCP's `outputSchema`);
+it is absent when the tool declares no output shape. The guest hands the
 signature to a provider so the model can emit a `tool-call` for it, then invokes
 it with `call-tool`, or synchronously with `call-tool-blocking`.
 

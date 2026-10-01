@@ -275,6 +275,20 @@ fn tools_array(tools: &[Tool]) -> toml::Value {
       }
     };
     table.insert("input_schema".to_string(), input_schema);
+    if let Some(output_schema) = &tool.output_schema {
+      match json_to_toml(output_schema) {
+        Ok(value) => {
+          table.insert("output_schema".to_string(), value);
+        }
+        Err(error) => {
+          tracing::warn!(
+            tool = %tool.name,
+            error = %error,
+            "could not represent a tool's output schema as TOML; omitting it"
+          );
+        }
+      }
+    }
     array.push(toml::Value::Table(table));
   }
   toml::Value::Array(array)
@@ -435,6 +449,10 @@ mod tests {
           "type": "object",
           "properties": { "input": { "type": "string" } },
         }),
+        output_schema: Some(json!({
+          "type": "object",
+          "properties": { "echoed": { "type": "string" } },
+        })),
       }])
     }
 
@@ -626,6 +644,11 @@ mod tests {
     );
     assert_eq!(parsed.tooling["docs"].kind, "mock");
     assert_eq!(parsed.tooling["docs"].params["tools"][0]["name"], "echo");
+    assert_eq!(
+      parsed.tooling["docs"].params["tools"][0]["output_schema"]["properties"]
+        ["echoed"]["type"],
+      "string"
+    );
     assert_eq!(
       parsed.tooling["docs"].params["initial_resource_contents"]["mem://notes"],
       "v1"

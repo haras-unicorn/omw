@@ -112,8 +112,8 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `resource-updated`, an object for `endpoint-message`
   (`{ session, messages, tools, params? }`, with `messages` a list of
   `{ role, content?, reasoning?, tool_call? }` objects, `tools` a list of
-  `{ name, description?, input_schema }`, and `params` the opaque JSON string
-  the client submitted), an object for `endpoint-session-end`
+  `{ name, description?, input_schema, output_schema? }`, and `params` the
+  opaque JSON string the client submitted), an object for `endpoint-session-end`
   (`{ session, error? }`), and `null` otherwise. The `content` field holds
   actual text for textual formats and base64 for anything else — match on
   `mime_type` to tell which. Decode binary payloads with `omw.host.base64Decode`
@@ -121,7 +121,7 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `omw.host.base64Encode`.
 
 Tool and resource shapes additionally carry camelCase aliases (`inputSchema`,
-`mimeType`) alongside the snake_case keys.
+`outputSchema`, `mimeType`) alongside the snake_case keys.
 
 The script's completion value becomes its terminal message, stringified as JSON:
 a string result is returned as-is, while arrays and objects surface as `[...]`.

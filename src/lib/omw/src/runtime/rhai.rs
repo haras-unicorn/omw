@@ -784,6 +784,7 @@ mod tests {
           name: "get_weather".to_string(),
           description: Some("weather".to_string()),
           input_schema: serde_json::json!({ "type": "object" }),
+          output_schema: None,
         }],
         None,
       )

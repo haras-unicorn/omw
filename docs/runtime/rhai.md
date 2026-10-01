@@ -92,12 +92,13 @@ Events come back as maps shaped `#{ id, kind, payload }`:
   resource-content map (`{ uri, mime_type?, content }`) for `resource-updated`,
   a map for `endpoint-message` (`{ session, messages, tools, params? }`, with
   `messages` a list of `{ role, content?, reasoning?, tool_call? }` maps,
-  `tools` a list of `{ name, description?, input_schema }`, and `params` the
-  opaque JSON string the client submitted), a map for `endpoint-session-end`
-  (`{ session, error? }`), and unit otherwise. The `content` field holds actual
-  text for textual formats and base64 for anything else — match on `mime_type`
-  to tell which. Decode binary payloads with `omw::host::base64_decode` (which
-  returns a blob) and encode back with `omw::host::base64_encode`.
+  `tools` a list of `{ name, description?, input_schema, output_schema? }`, and
+  `params` the opaque JSON string the client submitted), a map for
+  `endpoint-session-end` (`{ session, error? }`), and unit otherwise. The
+  `content` field holds actual text for textual formats and base64 for anything
+  else — match on `mime_type` to tell which. Decode binary payloads with
+  `omw::host::base64_decode` (which returns a blob) and encode back with
+  `omw::host::base64_encode`.
 
 ## Example brain
 

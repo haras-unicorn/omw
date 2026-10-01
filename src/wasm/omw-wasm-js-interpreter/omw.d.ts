@@ -79,6 +79,9 @@ interface ChatTool {
 
   /** The tool's JSON-schema document; defaults to `"{}"` when omitted. */
   input_schema?: string;
+
+  /** Optional JSON-schema document; defaults to absent when omitted. */
+  output_schema?: string;
 }
 
 /** A tool as returned by `listTools`, carrying both key spellings. */
@@ -94,6 +97,12 @@ interface Tool {
 
   /** The tool's JSON-schema document. */
   input_schema: string;
+
+  /** The tool's optional output JSON-schema document (camelCase alias). */
+  outputSchema?: string;
+
+  /** The tool's optional output JSON-schema document. */
+  output_schema?: string;
 }
 
 /** The full result of a blocking `chat` call. */

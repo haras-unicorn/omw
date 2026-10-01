@@ -759,6 +759,9 @@
         },
         "name": {
           "type": "string"
+        },
+        "output_schema": {
+          "description": "Optional JSON Schema for the tool's structured output (MCP\n`outputSchema`). Absent when the tool declares no output shape."
         }
       },
       "required": ["name", "input_schema"]

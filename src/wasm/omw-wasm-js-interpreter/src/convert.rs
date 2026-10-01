@@ -112,10 +112,15 @@ pub(crate) fn tool_from_json(
     Some(serde_json::Value::String(s)) => s.clone(),
     _ => "{}".to_string(),
   };
+  let output_schema = match obj.get("output_schema") {
+    Some(serde_json::Value::String(s)) => Some(s.clone()),
+    _ => None,
+  };
   Ok(provider::Tool {
     name: req_str(obj, "name")?,
     description: opt_str(obj, "description")?,
     input_schema,
+    output_schema,
   })
 }
 
@@ -273,6 +278,12 @@ fn tool_to_json(t: types::Tool) -> serde_json::Value {
     "input_schema".to_string(),
     serde_json::Value::String(t.input_schema),
   );
+  if let Some(output_schema) = t.output_schema {
+    o.insert(
+      "output_schema".to_string(),
+      serde_json::Value::String(output_schema),
+    );
+  }
   serde_json::Value::Object(o)
 }
 

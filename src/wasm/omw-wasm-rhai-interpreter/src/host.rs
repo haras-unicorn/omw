@@ -365,7 +365,8 @@ pub(crate) fn chat_message_to_map(m: types::ChatMessage) -> Map {
 }
 
 /// Map a `types::Tool` into a rhai map so scripts can read `name`,
-/// `description`,and `input_schema` off an `endpoint-message` event's tools.
+/// `description`, `input_schema` and `output_schema` off an
+/// `endpoint-message` event's tools.
 pub(crate) fn tool_to_map(t: types::Tool) -> Map {
   let mut m = Map::new();
   if let Some(desc) = t.description {
@@ -373,6 +374,9 @@ pub(crate) fn tool_to_map(t: types::Tool) -> Map {
   }
   m.insert("name".into(), t.name.into());
   m.insert("input_schema".into(), t.input_schema.into());
+  if let Some(output_schema) = t.output_schema {
+    m.insert("output_schema".into(), output_schema.into());
+  }
   m
 }
 

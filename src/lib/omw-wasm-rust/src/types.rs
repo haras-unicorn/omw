@@ -144,12 +144,20 @@ impl Tool {
       name: name.into(),
       description: None,
       input_schema: input_schema.into(),
+      output_schema: None,
     }
   }
 
   /// Attach a human-readable description.
   pub fn with_description(mut self, desc: impl Into<String>) -> Self {
     self.description = Some(desc.into());
+    self
+  }
+
+  /// Attach a JSON-schema `output_schema` document describing the tool's
+  /// structured output.
+  pub fn with_output_schema(mut self, schema: impl Into<String>) -> Self {
+    self.output_schema = Some(schema.into());
     self
   }
 }
