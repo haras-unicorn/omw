@@ -14,7 +14,7 @@ const second = provider.chat(
   [
     { role: "user", content: "use echo" },
     { role: "assistant", tool_call: call },
-    { role: "tool", content: result.value },
+    { role: "tool", content: result.content[0].text },
   ],
   [],
 );

@@ -65,6 +65,14 @@ wit_bindgen::generate!({
 /// The `runtime` interface every brain component exports.
 pub use exports::omw::omw::runtime::Guest;
 
+/// Re-exported so brains can derive `Deserialize`/`Serialize` for typed
+/// `memory_get_as`/`memory_set_as` (and the JSON accessors) without adding
+/// their own `serde` dependency. Derive with
+/// `#[serde(crate = "omw_wasm_rust::serde")]`.
+pub use serde;
+/// Re-exported so brains can name `serde_json::Value` directly.
+pub use serde_json;
+
 /// The trait brains implement instead of [`Guest`].
 ///
 /// The wasm runtime bakes the program into the component, so the `script`

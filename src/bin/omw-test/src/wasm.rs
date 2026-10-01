@@ -90,6 +90,7 @@ fn build_one(
       crate-type = ["cdylib"]
       [dependencies]
       omw-wasm-rust = {{ path = "{}" }}
+      serde = {{ version = "1", features = ["derive"] }}
     "#,
     crate_name(source),
     sdk.display()

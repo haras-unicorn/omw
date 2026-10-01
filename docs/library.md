@@ -210,8 +210,8 @@ cap. See [tunables](./tunables.md).
 their `Factory` traits aliased as `ProviderFactory` / `ToolingFactory` /
 `RuntimeFactory` / `EndpointFactory`, the DTOs (`Role`, `ChatMessage`,
 `ChatDelta`, `ChatResult`, `ToolCall`, `Tool`, `ResourceInfo`,
-`ResourceContent`, `ResourceNotification`), the `*Entry` handles, `RunOutcome`,
-`Event` / `EventEnvelope`, `AgentContext` (`name()` only), `Secret`, `Shutdown`,
-`run_agents` / `loop_agents`, the `Watcher` / `Scripts` watcher types, plus the
-`register_*` macros. The macros are also `#[macro_export]` at the crate root
-(`omw::register_providers!`, …).
+`ResourceContent`, `ResourceNotification`, `ToolCallResult`), the `*Entry`
+handles, `RunOutcome`, `Event` / `EventEnvelope`, `AgentContext` (`name()`
+only), `Secret`, `Shutdown`, `run_agents` / `loop_agents`, the `Watcher` /
+`Scripts` watcher types, plus the `register_*` macros. The macros are also
+`#[macro_export]` at the crate root (`omw::register_providers!`, …).

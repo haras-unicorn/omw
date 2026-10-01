@@ -73,12 +73,15 @@ impl Tooling for EchoTooling {
     &self,
     name: &str,
     args: serde_json::Value,
-  ) -> anyhow::Result<String> {
+  ) -> anyhow::Result<ToolCallResult> {
     self.calls.lock().await.push(EchoCall {
       name: name.to_string(),
       arguments: args,
     });
-    Ok(self.value.clone())
+    Ok(ToolCallResult {
+      content: serde_json::json!([{ "type": "text", "text": self.value }]),
+      structured_content: None,
+    })
   }
 
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
@@ -146,8 +149,15 @@ value = "hi from echo"
   let args = serde_json::json!({ "input": "hi" });
   let result = tooling.call_tool("echo", args.clone()).await?;
   anyhow::ensure!(
-    result == "hi from echo",
-    "unexpected call_tool result: {result:?}"
+    result.content
+      == serde_json::json!([{ "type": "text", "text": "hi from echo" }]),
+    "unexpected call_tool content: {:?}",
+    result.content
+  );
+  anyhow::ensure!(
+    result.structured_content.is_none(),
+    "unexpected structured content: {:?}",
+    result.structured_content
   );
 
   let calls = tooling.calls().await;

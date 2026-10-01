@@ -18,13 +18,11 @@
       "default": null
     },
     "memory": {
-      "description": "Per-agent seeded memory, keyed by agent name then key. Seeded into the\nagent's memory before its brain first runs, so a test (or a deployment)\ncan fast-forward an agent to a state. Seeded values persist like any\nother memory, including across hot reloads.",
+      "description": "Per-agent seeded memory, keyed by agent name then key. Seeded into the\nagent's memory before its brain first runs, so a test (or a deployment)\ncan fast-forward an agent to a state. Seeded values persist like any\nother memory, including across hot reloads.\n\nA value that is a string is stored verbatim; anything else (object,\narray, number, bool) is JSON-stringified, mirroring `memory-set`. Read it\nback with `memory-get` (raw) or `memory-get-as` (parsed).",
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "additionalProperties": {
-          "type": "string"
-        }
+        "additionalProperties": true
       },
       "default": {}
     },
@@ -728,7 +726,7 @@
       }
     },
     "ScriptedToolCall": {
-      "description": "One scripted `call-tool` result.",
+      "description": "One scripted `call-tool` result. `result` is a text convenience that\nbecomes a single MCP text content block; `structured_content` is passed\nthrough verbatim.",
       "type": "object",
       "properties": {
         "after": {
@@ -740,6 +738,9 @@
         "result": {
           "type": "string",
           "default": ""
+        },
+        "structured_content": {
+          "default": null
         }
       },
       "required": ["name"]

@@ -5,6 +5,14 @@
 
 use crate::omw::omw::provider as raw;
 use crate::omw::omw::types::{ChatMessage, ChatResult, Tool};
+use serde_json::Value;
+
+/// JSON-encode optional generation `params`, if any.
+fn encode_params(params: Option<Value>) -> Result<Option<String>, String> {
+  params
+    .map(|value| serde_json::to_string(&value).map_err(|e| e.to_string()))
+    .transpose()
+}
 
 /// One configured provider instance, looked up by name.
 pub struct Provider {
@@ -35,7 +43,7 @@ impl Provider {
 
   /// Run a chat conversation to completion, in-band.
   ///
-  /// `params` is an optional opaque JSON object of generation settings
+  /// `params` is an optional JSON object of generation settings
   /// (temperature, max_tokens, reasoning_effort, …) forwarded to the provider
   /// and merged over its configured defaults.
   pub fn chat(
@@ -43,9 +51,10 @@ impl Provider {
     model: &str,
     messages: &[ChatMessage],
     tools: &[Tool],
-    params: Option<&str>,
+    params: Option<Value>,
   ) -> Result<ChatResult, String> {
-    self.inner.chat(model, messages, tools, params)
+    let params = encode_params(params)?;
+    self.inner.chat(model, messages, tools, params.as_deref())
   }
 
   /// Open a streaming chat response. Deltas arrive in the inbox as
@@ -55,10 +64,14 @@ impl Provider {
     model: &str,
     messages: &[ChatMessage],
     tools: &[Tool],
-    params: Option<&str>,
+    params: Option<Value>,
   ) -> Result<StreamGuard, String> {
+    let params = encode_params(params)?;
     let name = self.inner.name();
-    let uuid = self.inner.chat_stream(model, messages, tools, params)?;
+    let uuid =
+      self
+        .inner
+        .chat_stream(model, messages, tools, params.as_deref())?;
     Ok(StreamGuard {
       provider: name,
       uuid,

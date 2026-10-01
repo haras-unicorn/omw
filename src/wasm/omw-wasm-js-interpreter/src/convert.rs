@@ -10,6 +10,22 @@ pub(crate) fn string_of(value: &JsValue) -> Option<String> {
   value.as_string().map(|s| s.to_std_string_escaped())
 }
 
+/// Parse an opaque JSON string into a JSON value, falling back to the raw
+/// string when it is not valid JSON.
+pub(crate) fn json_or_string(raw: &str) -> serde_json::Value {
+  serde_json::from_str(raw)
+    .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()))
+}
+
+/// Coerce an opaque JSON string field from JS-land into the string the host
+/// expects: a string is passed through, any other JSON value is serialized.
+fn opaque_json(value: &serde_json::Value) -> Result<String, JsError> {
+  match value {
+    serde_json::Value::String(s) => Ok(s.clone()),
+    other => serde_json::to_string(other).map_err(|e| js_err(e.to_string())),
+  }
+}
+
 pub(crate) fn str_arg(
   args: &[JsValue],
   index: usize,
@@ -72,10 +88,13 @@ fn tool_call_from_json(
   let obj = v
     .as_object()
     .ok_or_else(|| js_err("tool_call must be an object"))?;
+  let arguments = obj
+    .get("arguments")
+    .ok_or_else(|| js_err("tool_call missing arguments"))?;
   Ok(types::ToolCall {
     id: req_str(obj, "id")?,
     name: req_str(obj, "name")?,
-    arguments: req_str(obj, "arguments")?,
+    arguments: opaque_json(arguments)?,
   })
 }
 
@@ -109,12 +128,12 @@ pub(crate) fn tool_from_json(
     .as_object()
     .ok_or_else(|| js_err("tool must be an object"))?;
   let input_schema = match obj.get("input_schema") {
-    Some(serde_json::Value::String(s)) => s.clone(),
-    _ => "{}".to_string(),
+    Some(value) => opaque_json(value)?,
+    None => "{}".to_string(),
   };
   let output_schema = match obj.get("output_schema") {
-    Some(serde_json::Value::String(s)) => Some(s.clone()),
-    _ => None,
+    None | Some(serde_json::Value::Null) => None,
+    Some(value) => Some(opaque_json(value)?),
   };
   Ok(provider::Tool {
     name: req_str(obj, "name")?,
@@ -240,7 +259,7 @@ fn tool_call_to_json(tc: types::ToolCall) -> serde_json::Value {
   serde_json::json!({
     "id": tc.id,
     "name": tc.name,
-    "arguments": tc.arguments,
+    "arguments": json_or_string(&tc.arguments),
   })
 }
 
@@ -274,15 +293,9 @@ fn tool_to_json(t: types::Tool) -> serde_json::Value {
       serde_json::Value::String(description),
     );
   }
-  o.insert(
-    "input_schema".to_string(),
-    serde_json::Value::String(t.input_schema),
-  );
+  o.insert("input_schema".to_string(), json_or_string(&t.input_schema));
   if let Some(output_schema) = t.output_schema {
-    o.insert(
-      "output_schema".to_string(),
-      serde_json::Value::String(output_schema),
-    );
+    o.insert("output_schema".to_string(), json_or_string(&output_schema));
   }
   serde_json::Value::Object(o)
 }
@@ -377,11 +390,17 @@ pub(crate) fn delta_from_js(
 }
 
 fn tool_result_to_json(r: types::ToolResult) -> serde_json::Value {
-  serde_json::json!({
-    "name": r.name,
-    "arguments": r.arguments,
-    "value": r.value,
-  })
+  let mut o = serde_json::Map::new();
+  o.insert("name".to_string(), serde_json::Value::String(r.name));
+  o.insert("arguments".to_string(), json_or_string(&r.arguments));
+  o.insert("content".to_string(), json_or_string(&r.content));
+  if let Some(structured) = r.structured_content {
+    o.insert(
+      "structured_content".to_string(),
+      json_or_string(&structured),
+    );
+  }
+  serde_json::Value::Object(o)
 }
 
 pub(crate) fn chat_result_to_json(r: types::ChatResult) -> serde_json::Value {
@@ -485,7 +504,7 @@ pub(crate) fn envelope_to_js(
         serde_json::Value::Array(tools.collect()),
       );
       if let Some(params) = message.params {
-        o.insert("params".to_string(), serde_json::Value::String(params));
+        o.insert("params".to_string(), json_or_string(&params));
       }
       ("endpoint-message", serde_json::Value::Object(o))
     }

@@ -51,10 +51,11 @@ pub(crate) fn msg_from_dynamic(
         .get("name")
         .and_then(|v| v.clone().try_cast::<String>())
         .ok_or_else(|| "tool_call missing name".to_string())?;
-      let arguments = tc
-        .get("arguments")
-        .and_then(|v| v.clone().try_cast::<String>())
-        .ok_or_else(|| "tool_call missing arguments".to_string())?;
+      let arguments =
+        tc.get("arguments")
+          .map(arguments_to_json)
+          .transpose()?
+          .ok_or_else(|| "tool_call missing arguments".to_string())?;
       Some(provider::ToolCall {
         id,
         name,
@@ -82,13 +83,14 @@ pub(crate) fn tool_from_dynamic(d: Dynamic) -> Result<provider::Tool, String> {
   let description = map
     .get("description")
     .and_then(|d| d.clone().try_cast::<String>());
-  let input_schema = map
-    .get("input_schema")
-    .and_then(|s| s.clone().try_cast::<String>())
-    .unwrap_or_else(|| "{}".to_string());
-  let output_schema = map
-    .get("output_schema")
-    .and_then(|s| s.clone().try_cast::<String>());
+  let input_schema = match map.get("input_schema") {
+    Some(schema) => arguments_to_json(schema)?,
+    None => "{}".to_string(),
+  };
+  let output_schema = match map.get("output_schema") {
+    Some(schema) => Some(arguments_to_json(schema)?),
+    None => None,
+  };
   Ok(provider::Tool {
     name,
     description,
@@ -102,6 +104,24 @@ pub(crate) fn to_error(e: impl std::fmt::Display) -> Box<EvalAltResult> {
     e.to_string().into(),
     Position::NONE,
   ))
+}
+
+/// Parse a JSON string into a rhai value, falling back to the raw string when
+/// it is not valid JSON.
+pub(crate) fn json_to_dynamic(raw: &str) -> Dynamic {
+  match serde_json::from_str::<serde_json::Value>(raw) {
+    Ok(json) => rhai_rt::serde::to_dynamic(json).unwrap_or_else(|_| raw.into()),
+    Err(_) => raw.into(),
+  }
+}
+
+/// Coerce a rhai value into the opaque JSON string the host expects: a string
+/// is passed through verbatim, anything else is JSON-serialized.
+pub(crate) fn arguments_to_json(value: &Dynamic) -> Result<String, String> {
+  if let Some(text) = value.clone().try_cast::<String>() {
+    return Ok(text);
+  }
+  dynamic_to_json(value)
 }
 
 pub(crate) fn json_from_map(map: &Map) -> Result<String, String> {

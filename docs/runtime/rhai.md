@@ -67,8 +67,8 @@ sub-modules that expose the WIT interfaces to the script:
   `unsubscribe_agent`, `subscribe_lifecycle`, `unsubscribe_lifecycle`,
   `subscribe_endpoint`, `unsubscribe_endpoint`, `stream_endpoint`, `send_agent`,
   `recv`, `try_recv`, `new_uuid`, `base64_encode`, `base64_decode`,
-  `memory_get`, `memory_set`, `memory_remove`, `sleep_for`, `sleep_until`, and
-  `sleep_cron`.
+  `memory_get`, `memory_get_as`, `memory_set`, `memory_set_as`, `memory_remove`,
+  `sleep_for`, `sleep_until`, and `sleep_cron`.
 
 Handles are Rhai maps. Methods are `FnPtr`s stored on them, so scripts call them
 method-style (`provider.chat_stream(...)`, `tooling.call-tool(...)`). The time
@@ -87,18 +87,25 @@ Events come back as maps shaped `#{ id, kind, payload }`:
   `content`, `reasoning`, `tool_call` `{ id, name, arguments }`,
   `finish_reason`, and `usage`
   `{ prompt_tokens?, completion_tokens?, total_tokens? }`), a map for
-  `tool-result` (`{ name, arguments, value }`), a list of resource maps
-  (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
-  resource-content map (`{ uri, mime_type?, content }`) for `resource-updated`,
-  a map for `endpoint-message` (`{ session, messages, tools, params? }`, with
-  `messages` a list of `{ role, content?, reasoning?, tool_call? }` maps,
-  `tools` a list of `{ name, description?, input_schema, output_schema? }`, and
-  `params` the opaque JSON string the client submitted), a map for
-  `endpoint-session-end` (`{ session, error? }`), and unit otherwise. The
-  `content` field holds actual text for textual formats and base64 for anything
-  else — match on `mime_type` to tell which. Decode binary payloads with
-  `omw::host::base64_decode` (which returns a blob) and encode back with
-  `omw::host::base64_encode`.
+  `tool-result` (`{ name, arguments, content, structured_content? }`), a list of
+  resource maps (`{ uri, name, description?, mime_type? }`) for
+  `resource-list-updated`, a resource-content map
+  (`{ uri, mime_type?, content }`) for `resource-updated`, a map for
+  `endpoint-message` (`{ session, messages, tools, params? }`, with `messages` a
+  list of `{ role, content?, reasoning?, tool_call? }` maps, `tools` a list of
+  `{ name, description?, input_schema, output_schema? }`, and `params` the
+  generation params the client submitted), a map for `endpoint-session-end`
+  (`{ session, error? }`), and unit otherwise. The `content` field holds actual
+  text for textual formats and base64 for anything else — match on `mime_type`
+  to tell which. Decode binary payloads with `omw::host::base64_decode` (which
+  returns a blob) and encode back with `omw::host::base64_encode`.
+
+Opaque JSON fields are parsed in place: `arguments`, `input_schema`,
+`output_schema`, `params`, and a tool result's `content`/`structured_content`
+surface as maps/arrays when the stored text is valid JSON and as the raw string
+otherwise. `content` is the MCP content-block array, so a text result's text is
+`result.content[0].text`. Passing one of these values back into
+`chat`/`chat_stream`/`call_tool` re-serializes it, so events round-trip.
 
 ## Example brain
 
@@ -122,11 +129,15 @@ The script's final value becomes its terminal message when it is not unit.
 
 ## Memory
 
-`memory_get` returns the value or unit when absent; `memory_set` stores;
-`memory_remove` returns true when a value was present:
+`memory_get` returns the raw string or unit when absent; `memory_set` stores a
+string verbatim; `memory_remove` returns true when a value was present. The
+`_as` pair handles structured values: `memory_set_as` stores any serializable
+value (a string is JSON-encoded), and `memory_get_as` parses the stored value
+back into a map/array/scalar, falling back to the raw string:
 
 ```rhai
-omw::host::memory_set("timer", omw::host::wait_for(1000));
+omw::host::memory_set_as("state", #{ step: 3, waiting: true });
 // ... after a reload, the same context still has it:
-let timer = omw::host::memory_get("timer");
+let state = omw::host::memory_get_as("state");
+let step = state.step;
 ```

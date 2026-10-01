@@ -49,14 +49,16 @@ pub fn spawn_pump(
       res = &mut call => {
         match res {
           Ok(result) => {
-            tracing::trace!(agent = %name, uuid = %uuid, tool = %tool, result_bytes = result.len(), "tool call delivered");
+            let content = result.content.to_string();
+            tracing::trace!(agent = %name, uuid = %uuid, tool = %tool, result_bytes = content.len(), "tool call delivered");
             bus.deliver(
               &name,
               &uuid,
               Event::ToolResult(ToolResult {
                 name: tool,
                 arguments,
-                result,
+                content,
+                structured_content: result.structured_content.map(|v| v.to_string()),
               }),
             );
           }
@@ -107,14 +109,18 @@ mod tests {
 
     let envelope = bus.recv("alice", Duration::from_secs(5))?;
     assert_eq!(envelope.id, uuid);
-    assert_eq!(
-      envelope.event,
-      Event::ToolResult(ToolResult {
-        name: "some-tool".to_string(),
-        arguments: r#"{"a":1}"#.to_string(),
-        result: "ok".to_string(),
-      })
-    );
+    match envelope.event {
+      Event::ToolResult(result) => {
+        assert_eq!(result.name, "some-tool");
+        assert_eq!(result.arguments, r#"{"a":1}"#);
+        assert_eq!(
+          serde_json::from_str::<serde_json::Value>(&result.content)?,
+          serde_json::json!([{ "type": "text", "text": "ok" }])
+        );
+        assert!(result.structured_content.is_none());
+      }
+      other => assert!(false, "unexpected event: {other:?}"),
+    }
     assert!(
       calls.wait_for(&uuid, false, Duration::from_secs(5)),
       "tool call should deregister after delivery"

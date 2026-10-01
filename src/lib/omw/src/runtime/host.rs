@@ -325,16 +325,18 @@ impl tooling_bindings::HostTooling for Host {
     let tool_for_call = tool.clone();
     let call = async move { tooling.call_tool(&tool_for_call, args).await };
     let result = self.ctx.block_on_reload(call)?.map_err(|e| e.to_string())?;
+    let content = result.content.to_string();
     tracing::trace!(
       agent = %agent,
       tooling = %tooling_name,
-      result_bytes = result.len(),
+      result_bytes = content.len(),
       "tool call returned"
     );
     Ok(tooling_bindings::ToolResult {
       name: tool,
       arguments,
-      value: result,
+      content,
+      structured_content: result.structured_content.map(|v| v.to_string()),
     })
   }
 
@@ -872,7 +874,8 @@ fn out_event(event: Event) -> types_bindings::Event {
       types_bindings::Event::ToolResult(types_bindings::ToolResult {
         name: r.name,
         arguments: r.arguments,
-        value: r.result,
+        content: r.content,
+        structured_content: r.structured_content,
       })
     }
     Event::ResourceListUpdated(resources) => {

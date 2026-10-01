@@ -6,6 +6,8 @@
 
 use crate::omw::omw::host as raw;
 use crate::omw::omw::types::{ChatDelta, EventEnvelope};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Log at `trace` level.
 pub fn trace(message: &str) {
@@ -194,9 +196,37 @@ pub fn memory_get(key: &str) -> Option<String> {
   raw::memory_get(key)
 }
 
+/// Read a memory value by key and parse it as JSON into `T`.
+///
+/// `None` when the key is absent. When present, `Ok` is the parsed value and
+/// `Err` is the raw string when it does not deserialize into `T` (for example
+/// a plain, non-JSON string).
+pub fn memory_get_as<T: DeserializeOwned>(
+  key: &str,
+) -> Option<Result<T, String>> {
+  raw::memory_get(key).map(|raw| match serde_json::from_str::<T>(&raw) {
+    Ok(value) => Ok(value),
+    Err(_) => Err(raw),
+  })
+}
+
 /// Store a memory value under a key.
 pub fn memory_set(key: &str, value: &str) {
   raw::memory_set(key, value);
+}
+
+/// Store a memory value under a key, JSON-encoding `value`.
+///
+/// Unlike [`memory_set`], which stores a string verbatim, this always stores
+/// the JSON encoding, so it round-trips through [`memory_get_as`]. Errors when
+/// `value` cannot be serialized.
+pub fn memory_set_as<T: Serialize + ?Sized>(
+  key: &str,
+  value: &T,
+) -> Result<(), String> {
+  let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
+  raw::memory_set(key, &json);
+  Ok(())
 }
 
 /// Delete a memory value. `true` when a value was present.

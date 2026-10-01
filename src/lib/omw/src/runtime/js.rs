@@ -316,7 +316,7 @@ mod tests {
       let t = omw.tooling.get("mock-tooling");
       let tool_res = t.callToolBlocking("some-tool", { a: 1 });
       omw.host.log("info", "hello from test");
-      out + "|" + tool_res.value
+      out + "|" + tool_res.content[0].text
     "#;
     let dir = tempdir()?;
     let path = dir.path().join("brain.js");
@@ -361,8 +361,8 @@ mod tests {
       r#"
         let t = omw.tooling.get("mock-tooling");
         let tid = t.callTool("some-tool", { a: 1 });
-        let e = omw.host.recv();
-        (e.id === tid) + "|" + e.kind + "|" + e.payload.value
+        const e = omw.host.recv();
+        (e.id === tid) + "|" + e.kind + "|" + e.payload.content[0].text
       "#,
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
@@ -668,7 +668,7 @@ mod tests {
         let t = e.payload.tools[0];
         (e.id === sub) + "|" + e.kind + "|" + e.payload.session + "|"
           + m.role + "|" + m.content + "|" + t.name + "|"
-          + t.description + "|" + t.input_schema
+          + t.description + "|" + t.input_schema.type
       "#,
     )?;
     let ctx = test_endpoint_ctx(path, Arc::clone(&bus), Arc::clone(&registry))?;
@@ -726,7 +726,7 @@ mod tests {
         );
         assert!(msg.contains(&session));
         assert!(msg.contains("user|hi|get_weather|weather"));
-        assert!(msg.contains(r#"{"type":"object"}"#));
+        assert!(msg.contains("object"));
       }
       other => anyhow::bail!("expected an exited message, got {other:?}"),
     }
@@ -817,6 +817,30 @@ mod tests {
       outcome,
       RunOutcome::Exited("v1|v2|true|none|false".to_string()),
     );
+    Ok(())
+  }
+
+  #[test]
+  fn host_memory_as_roundtrips_objects_through_script() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("memory_as.js");
+    std::fs::write(
+      &path,
+      r#"
+        omw.host.memorySetAs("state", { step: 3, waiting: true });
+        const state = omw.host.memoryGetAs("state");
+        omw.host.memorySet("raw", "v1");
+        const raw = omw.host.memoryGetAs("raw");
+        const missing = omw.host.memoryGetAs("missing");
+        const flag = state.waiting ? "y" : "n";
+        state.step + "|" + flag + "|" + raw + "|" + (missing === undefined)
+      "#,
+    )?;
+    let ctx = test_ctx(path, HashMap::new(), HashMap::new())?;
+
+    let runtime = JsWasmRuntime::new("".to_owned(), Config::default())?;
+    let outcome = run(&runtime, &ctx)?;
+    assert_eq!(outcome, RunOutcome::Exited("3|y|v1|true".to_string()));
     Ok(())
   }
 

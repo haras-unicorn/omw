@@ -4,9 +4,15 @@
 //! additive WIT changes keep compiling against the raw structs.
 
 use crate::omw::omw::types::{
-  ChatDelta, ChatMessage, ChatResult, Event, EventEnvelope, Tool, ToolCall,
-  Usage,
+  ChatDelta, ChatMessage, ChatResult, EndpointMessage, Event, EventEnvelope,
+  Tool, ToolCall, ToolResult, Usage,
 };
+use serde::de::DeserializeOwned;
+
+/// Parse one opaque JSON string field, surfacing the underlying error.
+fn parse_json<T: DeserializeOwned>(raw: &str) -> Result<T, String> {
+  serde_json::from_str(raw).map_err(|e| e.to_string())
+}
 
 impl crate::omw::omw::types::Role {
   /// The role as the lowercase string the docs use.
@@ -209,6 +215,53 @@ impl EventEnvelope {
   /// The kind string of the wrapped event.
   pub fn kind(&self) -> &'static str {
     self.event.kind()
+  }
+}
+
+impl ToolCall {
+  /// Parse the tool call's opaque JSON `arguments` into `T`.
+  pub fn arguments_as<T: DeserializeOwned>(&self) -> Result<T, String> {
+    parse_json(&self.arguments)
+  }
+}
+
+impl Tool {
+  /// Parse the tool's JSON-schema `input_schema` into `T`.
+  pub fn input_schema_as<T: DeserializeOwned>(&self) -> Result<T, String> {
+    parse_json(&self.input_schema)
+  }
+
+  /// Parse the tool's optional JSON-schema `output_schema` into `T`.
+  pub fn output_schema_as<T: DeserializeOwned>(
+    &self,
+  ) -> Option<Result<T, String>> {
+    self.output_schema.as_deref().map(parse_json)
+  }
+}
+
+impl ToolResult {
+  /// Parse the tool's opaque JSON `arguments` into `T`.
+  pub fn arguments_as<T: DeserializeOwned>(&self) -> Result<T, String> {
+    parse_json(&self.arguments)
+  }
+
+  /// Parse the tool's `content` (an MCP content-block array) into `T`.
+  pub fn content_as<T: DeserializeOwned>(&self) -> Result<T, String> {
+    parse_json(&self.content)
+  }
+
+  /// Parse the tool's optional `structured_content` into `T`.
+  pub fn structured_content_as<T: DeserializeOwned>(
+    &self,
+  ) -> Option<Result<T, String>> {
+    self.structured_content.as_deref().map(parse_json)
+  }
+}
+
+impl EndpointMessage {
+  /// Parse the endpoint request's optional opaque JSON `params` into `T`.
+  pub fn params_as<T: DeserializeOwned>(&self) -> Option<Result<T, String>> {
+    self.params.as_deref().map(parse_json)
   }
 }
 

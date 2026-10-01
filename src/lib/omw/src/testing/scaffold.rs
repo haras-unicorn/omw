@@ -217,13 +217,24 @@ fn runtime_map(
   Ok(toml::Value::Table(table))
 }
 
-/// Copy the seeded memory through verbatim.
+/// Copy the seeded memory through verbatim, converting each JSON value to its
+/// TOML shape. A value TOML cannot represent (notably `null`) falls back to
+/// its JSON text so nothing is dropped.
 fn memory_map(
-  memory: &BTreeMap<String, BTreeMap<String, String>>,
+  memory: &BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 ) -> toml::Value {
   let mut table = toml::Table::new();
   for (agent, entries) in memory {
-    table.insert(agent.clone(), string_map(entries));
+    let mut inner = toml::Table::new();
+    for (key, value) in entries {
+      let converted = json_to_toml(value).unwrap_or_else(|_| {
+        toml::Value::String(
+          serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+        )
+      });
+      inner.insert(key.clone(), converted);
+    }
+    table.insert(agent.clone(), toml::Value::Table(inner));
   }
   toml::Value::Table(table)
 }
@@ -362,7 +373,8 @@ mod tests {
     ChatDelta, ChatMessage, Factory as ProviderFactory, Provider,
   };
   use crate::tooling::{
-    Factory as ToolingFactory, ResourceContent, ResourceInfo, Tool, Tooling,
+    Factory as ToolingFactory, ResourceContent, ResourceInfo, Tool,
+    ToolCallResult, Tooling,
   };
 
   struct FakeProvider;
@@ -460,8 +472,11 @@ mod tests {
       &self,
       _name: &str,
       _args: serde_json::Value,
-    ) -> anyhow::Result<String> {
-      Ok(String::new())
+    ) -> anyhow::Result<ToolCallResult> {
+      Ok(ToolCallResult {
+        content: json!([]),
+        structured_content: None,
+      })
     }
 
     async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
@@ -534,7 +549,7 @@ mod tests {
       &self,
       _name: &str,
       _args: serde_json::Value,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<ToolCallResult> {
       anyhow::bail!("nope")
     }
 
@@ -618,6 +633,7 @@ mod tests {
 
         [memory.alice]
         handle = "seed-42"
+        state = { step = 3, waiting = true }
 
         [agents.alice]
         runtime = "rhai"
@@ -662,7 +678,9 @@ mod tests {
       Some("mock")
     );
     assert_eq!(parsed.agents["alice"].runtime, "rhai");
-    assert_eq!(parsed.memory["alice"]["handle"], "seed-42");
+    assert_eq!(parsed.memory["alice"]["handle"], json!("seed-42"));
+    assert_eq!(parsed.memory["alice"]["state"]["step"], json!(3));
+    assert_eq!(parsed.memory["alice"]["state"]["waiting"], json!(true));
     assert_eq!(parsed.tunables.recv_timeout_secs, 30);
 
     assert!(out.contains("[agents.alice]"), "{out}");

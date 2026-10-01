@@ -2,6 +2,12 @@
 
 use crate::omw::omw::tooling as raw;
 use crate::omw::omw::types::{ResourceContent, ResourceInfo, Tool, ToolResult};
+use serde_json::Value;
+
+/// JSON-encode tool `arguments`.
+fn encode_args(arguments: Value) -> Result<String, String> {
+  serde_json::to_string(&arguments).map_err(|e| e.to_string())
+}
 
 /// One configured tooling instance, looked up by name.
 pub struct Tooling {
@@ -34,10 +40,10 @@ impl Tooling {
   pub fn call_tool(
     &self,
     name: &str,
-    arguments: &str,
+    arguments: Value,
   ) -> Result<CallGuard, String> {
     let tooling = self.inner.name();
-    let uuid = self.inner.call_tool(name, arguments)?;
+    let uuid = self.inner.call_tool(name, &encode_args(arguments)?)?;
     Ok(CallGuard { tooling, uuid })
   }
 
@@ -45,9 +51,11 @@ impl Tooling {
   pub fn call_tool_blocking(
     &self,
     name: &str,
-    arguments: &str,
+    arguments: Value,
   ) -> Result<ToolResult, String> {
-    self.inner.call_tool_blocking(name, arguments)
+    self
+      .inner
+      .call_tool_blocking(name, &encode_args(arguments)?)
   }
 
   /// Enumerate every resource this tooling exposes.

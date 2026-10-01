@@ -50,7 +50,7 @@ rmcp = { version = "3.1.4", optional = true, features = [
   "transport-child-process",
   "transport-streamable-http-client-reqwest",
 ] }
-serde = { version = "1.0.229", features = ["derive"] }
+serde.workspace = true
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }

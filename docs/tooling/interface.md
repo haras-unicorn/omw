@@ -19,8 +19,8 @@ A tooling exposes, through the WIT `tooling` interface:
   result delivery.
 - `call-tool-blocking(name, arguments)` — invoke a tool by name with opaque JSON
   arguments, blocking until the result is ready. Returns the tool's result as a
-  `tool-result` (`name`, `arguments`, `value`) in-band (errors are surfaced as
-  the `err`).
+  `tool-result` (`name`, `arguments`, `content`, optional `structured-content`)
+  in-band (errors are surfaced as the `err`).
 - `list-resources()` — every URI-addressed resource the tooling exposes.
 - `read-resource(uri)` — block and read one resource's _current_ content — it
   returns a `resource-content` (`uri`, optional `mime-type`, and `content` which
@@ -47,6 +47,22 @@ Schema describing the arguments the model must supply — and an optional
 it is absent when the tool declares no output shape. The guest hands the
 signature to a provider so the model can emit a `tool-call` for it, then invokes
 it with `call-tool`, or synchronously with `call-tool-blocking`.
+
+## Tool results
+
+A `tool-result` carries the tool's `name`, the opaque JSON `arguments` it was
+invoked with, its `content`, and an optional `structured-content`:
+
+- `content` mirrors MCP `content`: a JSON array of content blocks, so a text
+  result's text is `content[0].text` (in a typed client, parse `content` into a
+  list of blocks).
+- `structured-content` mirrors MCP `structuredContent` when the tool declares
+  and produces one; absent otherwise.
+
+Both are opaque JSON strings on the wire. The rhai and js guests parse them in
+place (objects/arrays when the text is valid JSON, else the raw string), and the
+Rust SDK exposes `content_as<T>()` / `structured_content_as<T>()` accessors.
+`arguments` is parsed the same way.
 
 ## Resources
 

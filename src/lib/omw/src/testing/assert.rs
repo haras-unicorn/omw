@@ -1211,7 +1211,8 @@ mod tests {
     let events = vec![inbound(Event::ToolResult(ToolResult {
       name: "get_weather".to_string(),
       arguments: "{}".to_string(),
-      result: "sunny".to_string(),
+      content: "sunny".to_string(),
+      structured_content: None,
     }))];
     assert_check(
       "alice",
@@ -1220,7 +1221,7 @@ mod tests {
           {
             kind = "inbound",
             event = "tool-result",
-            payload = { data = { name = "get_weather", result = "sunny" } },
+            payload = { data = { name = "get_weather", content = "sunny" } },
           },
         ]
       "#,

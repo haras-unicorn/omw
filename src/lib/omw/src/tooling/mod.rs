@@ -72,6 +72,20 @@ pub enum ResourceNotification {
   Updated { uri: String },
 }
 
+/// The result of a single tool invocation, as returned by a tooling.
+///
+/// `content` mirrors MCP `content` (an array of content blocks);
+/// `structured_content` mirrors MCP `structuredContent` when the tool produced
+/// one. Both are kept as JSON so callers can inspect them without a shared
+/// content model.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolCallResult {
+  /// MCP `content`: a JSON array of content blocks.
+  pub content: Value,
+  /// MCP `structuredContent`, when the tool produced one.
+  pub structured_content: Option<Value>,
+}
+
 /// A configured tooling instance: the impl plus its config-derived name and
 /// static kind. This is what the host stores in its registry and hands the
 /// guest as a `tooling` resource.
@@ -132,7 +146,11 @@ pub trait Tooling: Send + Sync {
   /// Every tool visible on this instance.
   async fn list_tools(&self) -> anyhow::Result<Vec<Tool>>;
   /// Invoke a single tool on this instance.
-  async fn call_tool(&self, name: &str, args: Value) -> anyhow::Result<String>;
+  async fn call_tool(
+    &self,
+    name: &str,
+    args: Value,
+  ) -> anyhow::Result<ToolCallResult>;
   /// Every resource visible on this instance.
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>>;
   /// Read one resource's current content by URI.

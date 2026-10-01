@@ -66,8 +66,9 @@ the WIT interfaces to the script:
   `waitFor`, `waitCron`, `cancelTimer`, `subscribeAgent`, `unsubscribeAgent`,
   `subscribeLifecycle`, `unsubscribeLifecycle`, `subscribeEndpoint`,
   `unsubscribeEndpoint`, `streamEndpoint`, `sendAgent`, `recv`, `tryRecv`,
-  `newUuid`, `base64Encode`, `base64Decode`, `memoryGet`, `memorySet`,
-  `memoryRemove`, `sleepFor`, `sleepUntil`, and `sleepCron`.
+  `newUuid`, `base64Encode`, `base64Decode`, `memoryGet`, `memoryGetAs`,
+  `memorySet`, `memorySetAs`, `memoryRemove`, `sleepFor`, `sleepUntil`, and
+  `sleepCron`.
 
 Handles are plain objects holding the configured `name` plus native methods, so
 scripts call them method-style (`p.chatStream(...)`, `t.callTool(...)`). Method
@@ -106,19 +107,26 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `content`, `reasoning`, `tool_call` `{ id, name, arguments }`,
   `finish_reason`, and `usage`
   `{ prompt_tokens?, completion_tokens?, total_tokens? }`), an object for
-  `tool-result` (`{ name, arguments, value }`), a list of resource objects
-  (`{ uri, name, description?, mime_type? }`) for `resource-list-updated`, a
-  resource-content object (`{ uri, mime_type?, content }`) for
-  `resource-updated`, an object for `endpoint-message`
-  (`{ session, messages, tools, params? }`, with `messages` a list of
-  `{ role, content?, reasoning?, tool_call? }` objects, `tools` a list of
-  `{ name, description?, input_schema, output_schema? }`, and `params` the
-  opaque JSON string the client submitted), an object for `endpoint-session-end`
+  `tool-result` (`{ name, arguments, content, structured_content? }`), a list of
+  resource objects (`{ uri, name, description?, mime_type? }`) for
+  `resource-list-updated`, a resource-content object
+  (`{ uri, mime_type?, content }`) for `resource-updated`, an object for
+  `endpoint-message` (`{ session, messages, tools, params? }`, with `messages` a
+  list of `{ role, content?, reasoning?, tool_call? }` objects, `tools` a list
+  of `{ name, description?, input_schema, output_schema? }`, and `params` the
+  generation params the client submitted), an object for `endpoint-session-end`
   (`{ session, error? }`), and `null` otherwise. The `content` field holds
   actual text for textual formats and base64 for anything else — match on
   `mime_type` to tell which. Decode binary payloads with `omw.host.base64Decode`
   (which returns an array of bytes) and encode back with
   `omw.host.base64Encode`.
+
+Opaque JSON fields are parsed in place: `arguments`, `input_schema`,
+`output_schema`, `params`, and a tool result's `content`/`structured_content`
+surface as objects/arrays when the stored text is valid JSON and as the raw
+string otherwise. `content` is the MCP content-block array, so a text result's
+text is `result.content[0].text`. Passing one of these values back into
+`chat`/`chatStream`/`callTool` re-serializes it, so events round-trip.
 
 Tool and resource shapes additionally carry camelCase aliases (`inputSchema`,
 `outputSchema`, `mimeType`) alongside the snake_case keys.
@@ -154,11 +162,15 @@ The script's final value becomes its terminal message when it is not
 
 ## Memory
 
-`memoryGet` returns the value or `undefined` when absent; `memorySet` stores;
-`memoryRemove` returns true when a value was present:
+`memoryGet` returns the raw string or `undefined` when absent; `memorySet`
+stores a string verbatim; `memoryRemove` returns true when a value was present.
+The `_as` pair handles structured values: `memorySetAs` stores any
+JSON-serializable value (a string is JSON-encoded), and `memoryGetAs` parses the
+stored value back into an object/array/scalar, falling back to the raw string:
 
 ```js
-omw.host.memorySet("timer", omw.host.waitFor(1000));
+omw.host.memorySetAs("state", { step: 3, waiting: true });
 // ... after a reload, the same context still has it:
-let timer = omw.host.memoryGet("timer");
+let state = omw.host.memoryGetAs("state");
+let step = state.step;
 ```

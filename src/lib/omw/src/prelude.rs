@@ -35,7 +35,7 @@ pub use crate::testing::{
 };
 pub use crate::tooling::{
   Factory as ToolingFactory, ResourceContent, ResourceInfo,
-  ResourceNotification, Tool, Tooling, ToolingEntry,
+  ResourceNotification, Tool, ToolCallResult, Tooling, ToolingEntry,
 };
 pub use crate::watch::{RecursiveMode, Scripts, Watcher, scope};
 pub use crate::{

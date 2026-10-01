@@ -4,7 +4,8 @@ use boa_engine::{
 };
 
 use crate::convert::{
-  bytes_from_js, bytes_to_js, delta_from_js, envelope_to_js, str_arg, u64_arg,
+  bytes_from_js, bytes_to_js, delta_from_js, envelope_to_js, js_err, str_arg,
+  u64_arg,
 };
 
 pub(crate) fn host_log(
@@ -242,6 +243,24 @@ pub(crate) fn host_memory_get(
   }
 }
 
+/// Read a memory value by key, parsing it as JSON when possible. `undefined`
+/// when absent; otherwise the parsed object/array/scalar, or the raw string
+/// when the stored value is not JSON.
+pub(crate) fn host_memory_get_as(
+  _this: &JsValue,
+  args: &[JsValue],
+  ctx: &mut Context,
+) -> JsResult<JsValue> {
+  let key = str_arg(args, 0, "key")?;
+  match crate::omw::omw::host::memory_get(&key) {
+    Some(value) => match serde_json::from_str::<serde_json::Value>(&value) {
+      Ok(json) => JsValue::from_json(&json, ctx),
+      Err(_) => Ok(JsValue::from(js_string!(value.as_str()))),
+    },
+    None => Ok(JsValue::undefined()),
+  }
+}
+
 pub(crate) fn host_memory_set(
   _this: &JsValue,
   args: &[JsValue],
@@ -250,6 +269,23 @@ pub(crate) fn host_memory_set(
   let key = str_arg(args, 0, "key")?;
   let value = str_arg(args, 1, "value")?;
   crate::omw::omw::host::memory_set(&key, &value);
+  Ok(JsValue::undefined())
+}
+
+/// Store a memory value under a key, JSON-encoding it. Errors when the value
+/// is `undefined` (not JSON-serializable).
+pub(crate) fn host_memory_set_as(
+  _this: &JsValue,
+  args: &[JsValue],
+  ctx: &mut Context,
+) -> JsResult<JsValue> {
+  let key = str_arg(args, 0, "key")?;
+  let json = args
+    .get_or_undefined(1)
+    .to_json(ctx)?
+    .ok_or_else(|| js_err("value must be JSON-serializable"))?;
+  let text = serde_json::to_string(&json).map_err(|e| js_err(e.to_string()))?;
+  crate::omw::omw::host::memory_set(&key, &text);
   Ok(JsValue::undefined())
 }
 
@@ -336,7 +372,9 @@ pub(crate) fn register_host(
   set(host, ctx, "base64Encode", host_base64_encode)?;
   set(host, ctx, "base64Decode", host_base64_decode)?;
   set(host, ctx, "memoryGet", host_memory_get)?;
+  set(host, ctx, "memoryGetAs", host_memory_get_as)?;
   set(host, ctx, "memorySet", host_memory_set)?;
+  set(host, ctx, "memorySetAs", host_memory_set_as)?;
   set(host, ctx, "memoryRemove", host_memory_remove)?;
   set(host, ctx, "subscribeEndpoint", host_subscribe_endpoint)?;
   set(host, ctx, "unsubscribeEndpoint", host_unsubscribe_endpoint)?;

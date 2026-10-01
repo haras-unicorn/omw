@@ -29,11 +29,12 @@ A Cargo workspace with six crates plus a single WIT contract.
     `OMW__`-prefixed environment variables: global provider/tooling/runtime maps
     (each an impl-agnostic `kind` + opaque params), an optional singular
     `[endpoint]` entry of the same shape, plus per-agent wiring and per-agent
-    seeded `[memory.<agent>]` values (inserted into the agent's memory before
-    its brain runs, so they persist across hot reloads like any other memory).
-    `Config::schema_json` emits the machine-readable schema; each impl category
-    contributes a `pub(crate)` implementation `JsonSchema` that unions the
-    built-in kinds enabled in the build (openai/mcp/openai-endpoint/wasm for
+    seeded `[memory.<agent>]` values (a string seed is stored verbatim and
+    anything else is JSON-stringified, then inserted into the agent's memory
+    before its brain runs, so they persist across hot reloads like any other
+    memory). `Config::schema_json` emits the machine-readable schema; each impl
+    category contributes a `pub(crate)` implementation `JsonSchema` that unions
+    the built-in kinds enabled in the build (openai/mcp/openai-endpoint/wasm for
     `omw-cli`, plus the `mock` doubles and any script runtimes for `omw-test`)
     with the generic `ImplConfig` escape hatch, so the schema follows the
     crate's features (`schema.rs` holds the shared `kind_variant` helper).
@@ -58,11 +59,13 @@ A Cargo workspace with six crates plus a single WIT contract.
     implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature)
     with a `transport`-tagged config enum (`stdio` / `http`), and as a scripted
     in-memory double in `mock.rs` (behind `any(test, feature = "mock")`: static
-    `tools`, an ordered name-verified `tool_calls` list, `initial_resource_*`
-    plus ordered `resource_*_updates`, each step gated by a shared `after` and
-    paced by `delay_ms`; it learns the trace through `Tooling::attach_trace`, a
-    default no-op the supervisor calls after building entries). The `build`
-    factory dispatches on the configured `kind`.
+    `tools`, an ordered name-verified `tool_calls` list (each a text `result`
+    convenience plus optional `structured_content`), `initial_resource_*` plus
+    ordered `resource_*_updates`, each step gated by a shared `after` and paced
+    by `delay_ms`; it learns the trace through `Tooling::attach_trace`, a
+    default no-op the supervisor calls after building entries). `call_tool`
+    returns a `ToolCallResult` (`content` + optional `structured_content`, both
+    JSON). The `build` factory dispatches on the configured `kind`.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
     `bindings.rs` (the single `bindgen!` for the `omw` world, mapped onto host
@@ -147,7 +150,9 @@ A Cargo workspace with six crates plus a single WIT contract.
       `tool-result` events into inboxes.
 
     - `memory.rs` is the per-agent string store (`DashMap`) that survives hot
-      reloads via the reused `AgentContext`.
+      reloads via the reused `AgentContext`; guests expose a raw `memory_get` /
+      `memory_set` pair plus a JSON-parsing `memory_get_as` / `memory_set_as`
+      pair over it.
 
     - `endpoint.rs` is the per-process endpoint session registry (`open` /
       `push` / `abort`) that buffers an agent's streamed deltas non-blocking,
@@ -204,8 +209,13 @@ A Cargo workspace with six crates plus a single WIT contract.
 - `src/lib/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
   (published to crates.io): re-exports the generated `omw` world bindings plus
   small builders, typed `Provider`/`Tooling` handles, `host` helpers and
-  lifetime guards. Vendors the WIT contract under `wit/` (kept in sync with
-  `src/lib/omw/wit/`).
+  lifetime guards, and re-exports `serde`/`serde_json`. Provides `_as` helpers
+  for opaque JSON: `host::memory_get_as` / `memory_set_as`, and record accessors
+  (`ToolCall::arguments_as`, `ToolResult::content_as`,
+  `EndpointMessage::params_as`, …). JSON inputs to the typed handles take a
+  `serde_json::Value` directly (`Provider::chat`/`chat_stream` `params`,
+  `Tooling::call_tool`/`call_tool_blocking` `arguments`). Vendors the WIT
+  contract under `wit/` (kept in sync with `src/lib/omw/wit/`).
 
 - `src/wasm/omw-wasm-mock` — the test-only wasm mock brain, cross-compiled by
   the `mock` feature for the engine/wasm runtime tests (not shipped to
@@ -317,7 +327,7 @@ plumbing (`pub(crate)`) or per-module private. The `omw-cli` binary crate
 | `agent`              | `Registries`, `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced`                                                                                                                                 | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                                          |
 | `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`, `Format`                                                                                                                                                          | default fns private                                                                                                                                                                                           |
 | `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `Usage`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                         |
-| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`), `register_toolings!`                                                                     | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                      |
+| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`, `ToolCallResult`), `register_toolings!`                                                   | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                      |
 | `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                                                                                            |
 | `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                                                                                            | `openai` still `pub mod` (impl detail)                                                                                                                                                                        |
 | `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`, `trace` types (`TraceEvent`, `TraceSender`, `AgentTrace`, `group`))                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `trace` is a `pub` mod (`memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`)                                                    |

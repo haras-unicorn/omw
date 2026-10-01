@@ -17,27 +17,28 @@ with two fields:
 - `id` — the UUID handle of the subscribed source the event came from, and
 - `event` — one of the following variant payloads:
 
-| variant                                      | payload                                 | meaning                                                           |
-| -------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
-| `message(string)`                            | the text                                | a message from a subscribed agent                                 |
-| `error(string)`                              | the error text                          | a failed I/O surfaced to the guest                                |
-| `timer`                                      | —                                       | a timestamp / duration / cron timer fired                         |
-| `reload`                                     | —                                       | the brain script changed; exit so the run restarts                |
-| `shutdown`                                   | —                                       | the process is shutting down; exit terminally                     |
-| `chat-delta(chat-delta)`                     | a stream chunk                          | a chat-stream delta                                               |
-| `chat-end`                                   | —                                       | an open chat stream finished                                      |
-| `tool-result(tool-result)`                   | `{ name, arguments, value }`            | a queued tool invocation returned                                 |
-| `resource-list-updated`                      | `list<resource-info>`                   | a subscribed resource _list_ changed, with the new list           |
-| `resource-updated`                           | `resource-content`                      | a subscribed resource updated in place, with freshly read content |
-| `endpoint-message(endpoint-message)`         | `{ session, messages, tools, params? }` | an inbound endpoint chat request routed to a subscribed agent     |
-| `endpoint-session-end(endpoint-session-end)` | `{ session, error? }`                   | an endpoint session ended: normal or abrupt                       |
+| variant                                      | payload                                             | meaning                                                           |
+| -------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------- |
+| `message(string)`                            | the text                                            | a message from a subscribed agent                                 |
+| `error(string)`                              | the error text                                      | a failed I/O surfaced to the guest                                |
+| `timer`                                      | —                                                   | a timestamp / duration / cron timer fired                         |
+| `reload`                                     | —                                                   | the brain script changed; exit so the run restarts                |
+| `shutdown`                                   | —                                                   | the process is shutting down; exit terminally                     |
+| `chat-delta(chat-delta)`                     | a stream chunk                                      | a chat-stream delta                                               |
+| `chat-end`                                   | —                                                   | an open chat stream finished                                      |
+| `tool-result(tool-result)`                   | `{ name, arguments, content, structured-content? }` | a queued tool invocation returned                                 |
+| `resource-list-updated`                      | `list<resource-info>`                               | a subscribed resource _list_ changed, with the new list           |
+| `resource-updated`                           | `resource-content`                                  | a subscribed resource updated in place, with freshly read content |
+| `endpoint-message(endpoint-message)`         | `{ session, messages, tools, params? }`             | an inbound endpoint chat request routed to a subscribed agent     |
+| `endpoint-session-end(endpoint-session-end)` | `{ session, error? }`                               | an endpoint session ended: normal or abrupt                       |
 
 A `chat-delta` carries `content`, `reasoning`, a `tool-call`, a `finish-reason`,
 and a `usage` block, all optional, so a chunk may carry text, reasoning, a
 partial tool call, token counts, or a terminal reason.
 
-A `tool-result` event's payload carries the tool's `name`, its `arguments`, and
-its `value` — the text result queued `call-tool` returned.
+A `tool-result` event's payload carries the tool's `name`, its `arguments`, its
+`content` (the MCP content-block array as JSON), and an optional
+`structured-content` — all opaque JSON the guests parse in place.
 
 A `resource-updated` event's `resource-content` carries the resource's `uri`, an
 optional `mime-type`, and the `content` itself — actual text for textual
@@ -45,10 +46,9 @@ formats, base64 for anything else (match on `mime-type` to tell which).
 
 An `endpoint-message` event payload carries the endpoint session's `session` id,
 the chat history as `messages` (a `chat-message` per entry), `tools` the tools
-the client advertised, and `params` — the opaque JSON string of any extra
-generation settings the client submitted. An `endpoint-session-end` payload
-carries the `session` id and an optional `error` when the session was
-interrupted.
+the client advertised, and `params` — the generation settings the client
+submitted (parsed from JSON in place). An `endpoint-session-end` payload carries
+the `session` id and an optional `error` when the session was interrupted.
 
 The guest correlates an envelope with a specific source by matching `id` against
 the UUID the opening call returned — for example the UUID from
@@ -154,12 +154,21 @@ is reported in-band).
 
 ## Memory
 
-Per-agent string store that survives hot reloads:
+Per-agent store that survives hot reloads:
 
 - `memory-get(key)` — read a value; none when absent.
-- `memory-set(key, value)` — store a value, overwriting.
+- `memory-set(key, value)` — store a string verbatim, overwriting.
+- `memory-get-as(key)` — read a value and parse it as JSON when possible; none
+  when absent. Returns the parsed object/array/scalar, or the raw string when
+  the stored value is not JSON.
+- `memory-set-as(key, value)` — store a JSON-serializable value, overwriting (a
+  string is JSON-encoded). Errors when the value cannot be serialized.
 - `memory-remove(key)` — delete; true when a value was present.
 
-Scoped to the calling agent, so agents cannot race each other. Treat entries
-like variables: subscription handles, state-machine state, small checkpoints.
-Not a database — keep values small.
+The same store backs seeded `[memory.<agent>]` values: a string seed is stored
+verbatim and anything else (table, array, number, bool) is JSON-stringified, so
+read a seeded table back with `memory-get-as`. The `_as` pair is symmetric:
+`memory-set-as` always JSON-encodes, `memory-get-as` always parses. Scoped to
+the calling agent, so agents cannot race each other. Treat entries like
+variables: subscription handles, state-machine state, small checkpoints. Not a
+database — keep values small.

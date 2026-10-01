@@ -155,7 +155,7 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
       let tool_res = "";
       loop {
         let e = omw::host::recv();
-        if e.id == tid && e.kind == "tool-result" { tool_res = e.payload.value; break; }
+        if e.id == tid && e.kind == "tool-result" { tool_res = e.payload.content[0].text; break; }
         if e.kind == "error" { throw e.payload; }
       }
       out + "|" + tool_res
