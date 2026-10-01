@@ -49,5 +49,5 @@ kind = "stub"
   let cfg: Config = toml::from_str(raw)?;
   let mut registries = Registries::new();
   omw::register_endpoints!(registries.endpoints, StubEndpoint);
-  run_agents(&cfg, false, &registries).await
+  run_agents(&cfg, false, &registries, Shutdown::new()).await
 }

@@ -4,3 +4,4 @@ version: "0.2"
 language: en
 ignoreWords:
   - extensionless
+  - unistd

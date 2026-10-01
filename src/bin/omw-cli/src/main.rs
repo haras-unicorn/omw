@@ -11,6 +11,8 @@
 
 mod cli;
 mod log;
+mod shutdown;
+mod stdio;
 mod tls;
 
 #[tokio::main]

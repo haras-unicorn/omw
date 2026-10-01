@@ -59,7 +59,8 @@ async fn main() -> anyhow::Result<()> {
   });
 
   // `run_agents_traced` drives the run and returns everything observed.
-  let events = run_agents_traced(&config, false, &registries, tx).await?;
+  let events =
+    run_agents_traced(&config, false, &registries, Shutdown::new(), tx).await?;
   let _ = observer.await;
   println!("collected {} trace events", events.len());
 

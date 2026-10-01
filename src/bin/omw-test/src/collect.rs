@@ -46,7 +46,7 @@ impl Test {
 /// recursive walk for `omw.test.toml` / `*.omw.test.toml` (hidden directories
 /// are skipped).
 pub fn discover(path: &Path) -> Result<Vec<Test>> {
-  if !path.exists() {
+  if !crate::stdio::is_stdin(path) && !path.exists() {
     anyhow::bail!("path {} does not exist", path.display());
   }
   let base = root(path);
@@ -104,8 +104,7 @@ pub fn load(
   path: &Path,
   format: Option<Format>,
 ) -> Result<(Config, Assertions)> {
-  let raw = std::fs::read_to_string(path)
-    .with_context(|| format!("failed to read config {}", path.display()))?;
+  let raw = crate::stdio::read_to_string(path)?;
   let format =
     format
       .or_else(|| Format::from_path(path))
@@ -171,12 +170,17 @@ pub fn env_tunables() -> Result<omw::config::Tunables> {
 
 /// Resolve each agent's relative `script` against the config's directory, so a
 /// config can point at the brain next to it regardless of the process CWD.
-/// Absolute script paths are left untouched.
+/// Absolute script paths are left untouched. A config read from a standard
+/// stream has no meaningful directory, so its scripts resolve against the CWD.
 pub fn resolve_scripts(config: &mut Config, path: &Path) {
-  let base = path
-    .parent()
-    .filter(|parent| !parent.as_os_str().is_empty())
-    .unwrap_or(Path::new("."));
+  let base = if crate::stdio::is_stdin(path) {
+    Path::new(".")
+  } else {
+    path
+      .parent()
+      .filter(|parent| !parent.as_os_str().is_empty())
+      .unwrap_or(Path::new("."))
+  };
   for agent in config.agents.values_mut() {
     let script = Path::new(&agent.script);
     if script.is_relative() {

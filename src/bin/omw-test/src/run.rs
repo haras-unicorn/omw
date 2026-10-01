@@ -4,9 +4,9 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use omw::config::Format;
-use omw::watch::{RecursiveMode, Watcher, scope};
+use omw::watch::{RecursiveMode, Watcher};
 
 #[cfg(feature = "compile-wasm")]
 use crate::cli::CompileWasmArgs;
@@ -18,7 +18,7 @@ pub async fn run() -> Result<()> {
   crate::log::init();
   crate::tls::init();
 
-  let cli = Cli::load()?;
+  let cli = Cli::load();
   tracing::info!(command = ?cli.command, "omw-test starting");
 
   let result = match cli.command {
@@ -37,15 +37,7 @@ pub async fn run() -> Result<()> {
 /// Generate the JSON schema for the test configuration and write it to `path`.
 fn generate_schema(path: &Path) -> Result<()> {
   let contents = omw::config::Config::schema_json()?;
-  if let Some(parent) = path.parent()
-    && !parent.as_os_str().is_empty()
-  {
-    std::fs::create_dir_all(parent).with_context(|| {
-      format!("failed to create directory {}", parent.display())
-    })?;
-  }
-  std::fs::write(path, contents)
-    .with_context(|| format!("failed to write schema to {}", path.display()))?;
+  crate::stdio::write(path, &contents)?;
   tracing::info!("wrote configuration schema to {}", path.display());
   Ok(())
 }
@@ -61,8 +53,11 @@ async fn run_tests(args: RunArgs) -> Result<()> {
   }
   // Hold one watcher across reruns so a change between passes is not missed.
   let debounce = collect::env_tunables()?.watch_debounce();
-  let mut watcher =
-    Watcher::watch(&scope(&args.path), RecursiveMode::Recursive, debounce)?;
+  let mut watcher = Watcher::watch(
+    collect::root(&args.path),
+    RecursiveMode::Recursive,
+    debounce,
+  )?;
   loop {
     let tests = collect::filter(
       collect::discover(&args.path)?,

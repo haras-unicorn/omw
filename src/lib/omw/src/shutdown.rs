@@ -1,9 +1,12 @@
-//! Process-level shutdown latch: one OS signal subscription per
-//! process, awaited by every agent iteration, the endpoint server, and
-//! the `loop` backoff. Agents observe it through the existing
-//! cooperative tiers (`recv` slices, `block_on_reload`, grace +
-//! interrupt); this latch only decides *when* the supervisor asks them
-//! to stop.
+//! Cooperative shutdown latch, awaited by every agent iteration, the endpoint
+//! server, and the `loop` backoff. Agents observe it through the existing
+//! cooperative tiers (`recv` slices, `block_on_reload`, grace + interrupt);
+//! this latch only decides *when* the supervisor asks them to stop.
+//!
+//! Installing a process-global signal subscription is the binary's job: this
+//! module is the mechanism only. `omw-cli` owns the SIGTERM/SIGINT handler and
+//! requests the latch; embedders drive [`Shutdown::request`] themselves (or
+//! never, if they do not want a shutdown path).
 
 use tokio::sync::watch;
 
@@ -52,29 +55,5 @@ impl Shutdown {
 impl Default for Shutdown {
   fn default() -> Self {
     Self::new()
-  }
-}
-
-/// Resolve on SIGTERM/SIGINT so the supervisor can shut agents down
-/// terminally. Pending forever when no signal arrives.
-pub(crate) async fn shutdown_signal() {
-  #[cfg(unix)]
-  {
-    let term =
-      tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-    let int =
-      tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
-    let (Ok(mut term), Ok(mut int)) = (term, int) else {
-      std::future::pending::<()>().await;
-      return;
-    };
-    tokio::select! {
-      _ = term.recv() => {},
-      _ = int.recv() => {},
-    }
-  }
-  #[cfg(not(unix))]
-  {
-    let _ = tokio::signal::ctrl_c().await;
   }
 }

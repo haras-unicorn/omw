@@ -32,5 +32,5 @@ async fn main() -> anyhow::Result<()> {
   let raw: String = std::fs::read_to_string(&path)?;
   let cfg: Config = toml::from_str(&raw)?;
   let registries = Registries::default();
-  run_agents(&cfg, false, &registries).await
+  run_agents(&cfg, false, &registries, Shutdown::new()).await
 }

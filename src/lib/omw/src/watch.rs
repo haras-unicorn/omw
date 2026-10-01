@@ -205,21 +205,6 @@ impl Scripts {
   }
 }
 
-/// The directory watched recursively for `path`: the directory itself, or a
-/// file's parent. Convenience for [`Watcher::watch`] with
-/// [`RecursiveMode::Recursive`].
-pub fn scope(path: &Path) -> PathBuf {
-  if path.is_dir() {
-    path.to_path_buf()
-  } else {
-    path
-      .parent()
-      .filter(|parent| !parent.as_os_str().is_empty())
-      .unwrap_or(Path::new("."))
-      .to_path_buf()
-  }
-}
-
 /// Absolute form of `path`, resolved against the current directory.
 fn absolute(path: &Path) -> anyhow::Result<PathBuf> {
   if path.is_absolute() {
@@ -289,28 +274,6 @@ mod tests {
       file_name: OsString::from(name),
       agents: agents.iter().map(ToString::to_string).collect(),
     })
-  }
-
-  #[test]
-  fn scope_of_a_directory_is_itself() -> anyhow::Result<()> {
-    let dir = tempfile::tempdir()?;
-    assert_eq!(scope(dir.path()), dir.path().to_path_buf());
-    Ok(())
-  }
-
-  #[test]
-  fn scope_of_a_file_is_its_parent() -> anyhow::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let file = dir.path().join("case/omw.test.toml");
-    std::fs::create_dir_all(dir.path().join("case"))?;
-    std::fs::write(&file, "")?;
-    assert_eq!(scope(&file), dir.path().join("case"));
-    Ok(())
-  }
-
-  #[test]
-  fn scope_of_a_bare_file_is_the_current_directory() {
-    assert_eq!(scope(Path::new("omw.test.toml")), PathBuf::from("."));
   }
 
   #[test]

@@ -30,7 +30,7 @@ use crate::host::events::Event;
 use crate::host::streams::{CancelRegistry, StreamRegistry};
 use crate::host::trace::{TraceEvent, TraceSender};
 use crate::runtime::RunOutcome;
-use crate::shutdown::{Shutdown, shutdown_signal};
+use crate::shutdown::Shutdown;
 use crate::watch::Scripts;
 
 /// The back-end registries the supervisor builds entries from. Owned by
@@ -96,18 +96,24 @@ impl StopRegistry {
 ///
 /// With `watch`, a reload of an agent's script ends its current run early and
 /// starts it again immediately, so `run` keeps agents up until they complete
-/// without a pending reload. A shutdown (SIGTERM/SIGINT) is terminal but
+/// without a pending reload. A shutdown request on `shutdown` is terminal but
 /// graceful: every in-flight iteration aborts through the same tiers as a
 /// reload, then `run` returns `Ok` (exit 0). Only a genuine failure without a
 /// shutdown request collects as an error. A reload that outlives `run`'s
 /// patience restarts the agent in place (same as `loop` treating reload as
 /// `continue`).
+///
+/// `shutdown` is caller-owned: the library never installs an OS signal
+/// subscription. A binary that wants SIGTERM/SIGINT handling requests this
+/// latch from its own handler; an embedder can request it directly or pass a
+/// fresh, never-requested one.
 pub async fn run_agents(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
 ) -> anyhow::Result<()> {
-  run_once(cfg, watch, registries, None).await
+  run_once(cfg, watch, registries, shutdown, None).await
 }
 
 /// Like [`run_agents`] but with an active trace channel: every agent's inbox
@@ -121,6 +127,7 @@ pub async fn run_agents_traced(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
   tx: TraceSender,
 ) -> anyhow::Result<Vec<TraceEvent>> {
   let tx_for_run = tx.clone();
@@ -132,7 +139,7 @@ pub async fn run_agents_traced(
   let collector_lagged = Arc::clone(&lagged);
   let collector =
     tokio::spawn(collect_trace(rx, stop_rx, collected_tx, collector_lagged));
-  let run = run_once(cfg, watch, registries, Some(tx_for_run)).await;
+  let run = run_once(cfg, watch, registries, shutdown, Some(tx_for_run)).await;
   let _ = stop_tx.send(());
   let collected_tx = collector.await?;
   run?;
@@ -157,11 +164,10 @@ async fn run_once(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
   trace: Option<TraceSender>,
 ) -> anyhow::Result<()> {
-  let shutdown = Shutdown::new();
-  let signal = spawn_signal(&shutdown);
-  let result = run_agents_inner(
+  run_agents_inner(
     cfg,
     watch,
     registries,
@@ -169,9 +175,7 @@ async fn run_once(
     shutdown,
     StopRegistry::default(),
   )
-  .await;
-  signal.abort();
-  result
+  .await
 }
 
 /// The testing harness's controlled entry point: like [`run_once`] but with a
@@ -297,12 +301,16 @@ async fn collect_trace(
 ///
 /// With `watch`, a script change restarts the agent immediately (without
 /// backoff) instead of waiting for the current iteration to finish.
+///
+/// `shutdown` is caller-owned (see [`run_agents`]): the library installs no OS
+/// signal subscription.
 pub async fn loop_agents(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
 ) -> anyhow::Result<()> {
-  loop_once(cfg, watch, registries, None).await
+  loop_once(cfg, watch, registries, shutdown, None).await
 }
 
 /// Like [`loop_agents`] but with an active trace channel. Every iteration's
@@ -312,22 +320,22 @@ pub async fn loop_agents_traced(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
   tx: TraceSender,
 ) -> anyhow::Result<()> {
-  loop_once(cfg, watch, registries, Some(tx)).await
+  loop_once(cfg, watch, registries, shutdown, Some(tx)).await
 }
 
 async fn loop_once(
   cfg: &Config,
   watch: bool,
   registries: &Registries,
+  shutdown: Shutdown,
   trace: Option<TraceSender>,
 ) -> anyhow::Result<()> {
-  let shutdown = Shutdown::new();
   let shared = Arc::new(
     Shared::build(cfg, registries, shutdown.clone(), trace.clone()).await?,
   );
-  let signal = spawn_signal(&shutdown);
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   join_all(cfg.agents.iter().map(|(name, agent)| {
     let config = cfg.clone();
@@ -392,7 +400,6 @@ async fn loop_once(
     })
   }))
   .await;
-  signal.abort();
   if let Some(watcher) = watcher {
     watcher.abort();
   }
@@ -717,18 +724,6 @@ where
       }
     }
   }
-}
-
-/// Spawn the single OS signal subscription for this process: on the first
-/// SIGTERM/SIGINT request the shared latch, which every agent iteration,
-/// the endpoint server, and the `loop` backoff await.
-fn spawn_signal(shutdown: &Shutdown) -> tokio::task::JoinHandle<()> {
-  let shutdown = shutdown.clone();
-  tokio::spawn(async move {
-    shutdown_signal().await;
-    tracing::info!("shutdown signal received");
-    shutdown.request();
-  })
 }
 
 /// Drop any reload signals that arrived while the run was unwinding, so one
@@ -1058,8 +1053,14 @@ mod tests {
     })?;
     let (tx, _rx) =
       tokio::sync::broadcast::channel(crate::host::trace::DEFAULT_TRACE_BUFFER);
-    let events =
-      run_agents_traced(&probe_config(), false, &registries, tx).await?;
+    let events = run_agents_traced(
+      &probe_config(),
+      false,
+      &registries,
+      Shutdown::new(),
+      tx,
+    )
+    .await?;
     let grouped = crate::host::trace::group(events);
     let alice = grouped
       .get("alice")
@@ -1160,7 +1161,9 @@ mod tests {
     ]));
     let (tx, _rx) =
       tokio::sync::broadcast::channel(crate::host::trace::DEFAULT_TRACE_BUFFER);
-    let events = run_agents_traced(&config, false, &registries, tx).await?;
+    let events =
+      run_agents_traced(&config, false, &registries, Shutdown::new(), tx)
+        .await?;
     let grouped = crate::host::trace::group(events);
     assert_eq!(
       grouped

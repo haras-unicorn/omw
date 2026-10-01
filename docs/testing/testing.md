@@ -23,6 +23,10 @@ omw-test run examples            # every discovered config
 - `<path>` is a **directory** → recursively find every test config and run each,
   printing `PASS` / `FAIL <root-relative path>` and a tally. It exits non-zero
   if any failed.
+- `<path>` is a **standard stream** (`-`, `/dev/stdin`) → read a single config
+  from stdin and run it; pass `--format` since a stream has no extension to
+  infer from. Relative brain `script` paths resolve against the current
+  directory.
 - `--include <glob>` / `--exclude <glob>` (repeatable, OR within each) match the
   test's root-relative path including its file name (`*` does not cross `/`,
   `**` does); include is applied first, then exclude. A missing `script` is
@@ -38,12 +42,14 @@ omw-test run examples            # every discovered config
 
 ```sh
 omw-test schema --output schema.test.json
+omw-test schema --output -             # or /dev/stdout
 ```
 
 Writes the JSON schema for the test config, describing exactly the back ends the
 `omw-test` build enables — the `mock` provider/tooling/endpoint doubles and the
 `wasm`/`rhai`/`js` runtimes — so an editor can complete and validate an
-`omw.test.toml`. The deployment counterpart is `omw schema` (see
+`omw.test.toml`. `-` (or `/dev/stdout`) streams it to stdout. The deployment
+counterpart is `omw schema` (see
 [Configuration schema](../introduction.md#configuration-schema)).
 
 Discovery skips hidden directories and collects any file whose stem is
@@ -63,9 +69,16 @@ where possible.
 omw scaffold omw.toml                 # writes ./omw.test.toml
 omw scaffold omw.yaml --format yaml   # explicit input format
 omw scaffold omw.toml --output t.toml # explicit output
+omw scaffold omw.toml --output -      # or /dev/stdout, stream to stdout
+omw scaffold - --format toml          # read the config from stdin
 omw scaffold omw.toml --no-resources  # skip listing/reading tooling resources
 omw scaffold omw.toml --force         # overwrite an existing output
 ```
+
+A standard stream is never treated as an existing file, so `--output -` (or
+`/dev/stdout`) needs no `--force`, and the informational path line is omitted so
+only the config reaches stdout. A config read from stdin (`-`, `/dev/stdin`)
+needs `--format`.
 
 - the **provider** mock gets the models the endpoint reported (`GET /models`,
   empty if the request fails), with an empty `turns` script;

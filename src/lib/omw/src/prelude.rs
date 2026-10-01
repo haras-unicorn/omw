@@ -37,7 +37,7 @@ pub use crate::tooling::{
   Factory as ToolingFactory, ResourceContent, ResourceInfo,
   ResourceNotification, Tool, ToolCallResult, Tooling, ToolingEntry,
 };
-pub use crate::watch::{RecursiveMode, Scripts, Watcher, scope};
+pub use crate::watch::{RecursiveMode, Scripts, Watcher};
 pub use crate::{
   register_endpoints, register_providers, register_runtimes, register_toolings,
 };
