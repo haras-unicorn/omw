@@ -11,6 +11,6 @@ const reply = provider.chat(
 const event = omw.host.recv();
 const session = event.payload.session;
 omw.host.streamEndpoint(session, { content: reply.content });
-omw.host.streamEndpoint(session, { finish_reason: "stop" });
+omw.host.streamEndpoint(session, { finishReason: "stop" });
 omw.host.unsubscribeEndpoint(subscription);
 omw.host.log("info", "done");

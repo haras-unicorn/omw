@@ -75,10 +75,8 @@ fn tool_to_json(t: crate::omw::omw::types::Tool) -> serde_json::Value {
     );
   }
   o.insert("inputSchema".to_string(), json_or_string(&t.input_schema));
-  o.insert("input_schema".to_string(), json_or_string(&t.input_schema));
   if let Some(output_schema) = t.output_schema {
     o.insert("outputSchema".to_string(), json_or_string(&output_schema));
-    o.insert("output_schema".to_string(), json_or_string(&output_schema));
   }
   serde_json::Value::Object(o)
 }
@@ -120,10 +118,7 @@ fn tool_result_to_json(
   o.insert("arguments".to_string(), json_or_string(&r.arguments));
   o.insert("content".to_string(), json_or_string(&r.content));
   if let Some(structured) = r.structured_content {
-    o.insert(
-      "structured_content".to_string(),
-      json_or_string(&structured),
-    );
+    o.insert("structuredContent".to_string(), json_or_string(&structured));
   }
   serde_json::Value::Object(o)
 }
@@ -192,14 +187,7 @@ fn resource_to_json(
     );
   }
   if let Some(mime_type) = r.mime_type {
-    o.insert(
-      "mimeType".to_string(),
-      serde_json::Value::String(mime_type.clone()),
-    );
-    o.insert(
-      "mime_type".to_string(),
-      serde_json::Value::String(mime_type),
-    );
+    o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
   }
   serde_json::Value::Object(o)
 }
@@ -210,14 +198,7 @@ fn resource_content_to_json(
   let mut o = serde_json::Map::new();
   o.insert("uri".to_string(), serde_json::Value::String(c.uri));
   if let Some(mime_type) = c.mime_type {
-    o.insert(
-      "mimeType".to_string(),
-      serde_json::Value::String(mime_type.clone()),
-    );
-    o.insert(
-      "mime_type".to_string(),
-      serde_json::Value::String(mime_type),
-    );
+    o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
   }
   o.insert("content".to_string(), serde_json::Value::String(c.content));
   serde_json::Value::Object(o)

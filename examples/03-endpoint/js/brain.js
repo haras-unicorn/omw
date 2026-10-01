@@ -8,7 +8,7 @@ for (let i = 0; i < 2; i += 1) {
   const session = event.payload.session;
   const reply = provider.chat("gpt-test", event.payload.messages, []);
   omw.host.streamEndpoint(session, { content: reply.content });
-  omw.host.streamEndpoint(session, { finish_reason: "stop" });
+  omw.host.streamEndpoint(session, { finishReason: "stop" });
 }
 omw.host.unsubscribeEndpoint(subscription);
 omw.host.log("info", "done");

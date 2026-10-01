@@ -4,6 +4,10 @@
 // completion and checking inside `brain.js`. Scripts are evaluated as plain
 // scripts, so nothing is imported: `omw` is a global.
 //
+// This is the hand-written "bindings" declaration. `omw.all.d.ts` is the
+// generated concatenation of the deployment/testing config types and this file,
+// and is what you should vendor next to a `brain.js`.
+//
 // See docs/runtime/js.md for the prose reference.
 
 /** A sender role in a chat conversation. */
@@ -39,19 +43,19 @@ interface ChatMessage {
   reasoning?: string;
 
   /** Optional tool call attached to this message. */
-  tool_call?: ToolCall;
+  toolCall?: ToolCall;
 }
 
 /** Token accounting for one chat response. */
 interface Usage {
   /** Tokens in the prompt/request. */
-  prompt_tokens?: number;
+  promptTokens?: number;
 
   /** Tokens generated in the response. */
-  completion_tokens?: number;
+  completionTokens?: number;
 
   /** Total tokens, when the provider reports it. */
-  total_tokens?: number;
+  totalTokens?: number;
 }
 
 /** One incremental chunk of a streaming chat response. */
@@ -63,10 +67,10 @@ interface ChatDelta {
   reasoning?: string;
 
   /** Optional tool call announced by this chunk. */
-  tool_call?: ToolCall;
+  toolCall?: ToolCall;
 
   /** Optional terminal reason the stream stopped (`"stop"`, `"length"`, …). */
-  finish_reason?: string;
+  finishReason?: string;
 
   /** Optional token accounting reported by this chunk. */
   usage?: Usage;
@@ -81,13 +85,13 @@ interface ChatTool {
   description?: string;
 
   /** The tool's JSON-schema document; defaults to `{}` when omitted. */
-  input_schema?: unknown;
+  inputSchema?: unknown;
 
   /** Optional JSON-schema document; absent when omitted. */
-  output_schema?: unknown;
+  outputSchema?: unknown;
 }
 
-/** A tool as returned by `listTools`, carrying both key spellings. */
+/** A tool as returned by `listTools`. */
 interface Tool {
   /** The tool's name. */
   name: string;
@@ -98,14 +102,8 @@ interface Tool {
   /** The tool's JSON-schema document (camelCase alias), parsed from JSON. */
   inputSchema: unknown;
 
-  /** The tool's JSON-schema document, parsed from JSON. */
-  input_schema: unknown;
-
-  /** The tool's optional output JSON-schema document (camelCase alias). */
+  /** The tool's optional output JSON-schema document, parsed from JSON. */
   outputSchema?: unknown;
-
-  /** The tool's optional output JSON-schema document. */
-  output_schema?: unknown;
 }
 
 /** The full result of a blocking `chat` call. */
@@ -117,10 +115,10 @@ interface ChatResult {
   reasoning?: string;
 
   /** The reassembled tool calls the model made, in first-seen order. */
-  tool_calls: ToolCall[];
+  toolCalls: ToolCall[];
 
   /** Optional terminal reason the response stopped (`"stop"`, …). */
-  finish_reason?: string;
+  finishReason?: string;
 
   /** Optional token accounting for the response. */
   usage?: Usage;
@@ -147,7 +145,7 @@ interface ToolResult {
    * The tool's structured output (MCP `structuredContent`), parsed from JSON
    * when possible; absent when the tool produced none.
    */
-  structured_content?: unknown;
+  structuredContent?: unknown;
 }
 
 /** A tooling resource as returned by `listResources`. */
@@ -161,27 +159,21 @@ interface ResourceInfo {
   /** Optional description of what this resource represents. */
   description?: string;
 
-  /** The MIME type of the resource, if known (camelCase alias). */
-  mimeType?: string;
-
   /** The MIME type of the resource, if known. */
-  mime_type?: string;
+  mimeType?: string;
 }
 
 /**
  * The content of a single resource. `content` holds actual text for textual
- * formats and base64-encoded bytes for anything else; match on `mime_type` to
+ * formats and base64-encoded bytes for anything else; match on `mimeType` to
  * tell the two apart.
  */
 interface ResourceContent {
   /** The URI of the resource the content belongs to. */
   uri: string;
 
-  /** The MIME type of the resource, if known (camelCase alias). */
-  mimeType?: string;
-
   /** The MIME type of the resource, if known. */
-  mime_type?: string;
+  mimeType?: string;
 
   /** The resource's content: plain text, or base64 for binary formats. */
   content: string;
@@ -230,13 +222,33 @@ type OmwEvent =
   | { id: string; kind: "endpoint-message"; payload: EndpointMessage }
   | { id: string; kind: "endpoint-session-end"; payload: EndpointSessionEnd };
 
-/** A configured provider instance, returned by `omw.provider.get`. */
-interface ProviderHandle {
+/** The `kind` string an implementation's config declares, or `string`. */
+type KindOf<Impl> = Impl extends { kind: infer K extends string } ? K : string;
+
+/** The configured `params` of an implementation, or an open object/string. */
+type ParamsOf<Impl> = Impl extends { params: infer P } ? P : object | string;
+
+/** The named providers of a config, or an open map. */
+type ProvidersOf<Config> = Config extends { providers: infer Providers }
+  ? Providers
+  : Record<string, unknown>;
+
+/** The named tooling of a config, or an open map. */
+type ToolingOf<Config> = Config extends { tooling: infer Tooling }
+  ? Tooling
+  : Record<string, unknown>;
+
+/**
+ * A configured provider instance, returned by `omw.provider.get`. Parameterized
+ * over the config entry that declared it so `kind()` and `params` stay precise
+ * when you instantiate `Omw` with a config type.
+ */
+interface ProviderHandle<Impl = unknown> {
   /** The configured name of this instance. */
   name: string;
 
   /** Which implementation this is. */
-  kind(): string;
+  kind(): KindOf<Impl>;
 
   /** Model names this provider exposes. */
   listModels(): string[];
@@ -252,7 +264,7 @@ interface ProviderHandle {
     model: string,
     messages: ChatMessage[],
     tools: ChatTool[],
-    params?: object | string,
+    params?: ParamsOf<Impl>,
   ): ChatResult;
 
   /**
@@ -264,7 +276,7 @@ interface ProviderHandle {
     model: string,
     messages: ChatMessage[],
     tools: ChatTool[],
-    params?: object | string,
+    params?: ParamsOf<Impl>,
   ): string;
 
   /** Whether a chat stream is still open. */
@@ -274,13 +286,17 @@ interface ProviderHandle {
   cancel(uuid: string): void;
 }
 
-/** A configured tooling instance, returned by `omw.tooling.get`. */
-interface ToolingHandle {
+/**
+ * A configured tooling instance, returned by `omw.tooling.get`. Parameterized
+ * over the config entry that declared it so `kind()` stays precise when you
+ * instantiate `Omw` with a config type.
+ */
+interface ToolingHandle<Impl = unknown> {
   /** The configured name of this instance. */
   name: string;
 
   /** Which implementation this is. */
-  kind(): string;
+  kind(): KindOf<Impl>;
 
   /** Every tool this tooling exposes, callable via `callTool`. */
   listTools(): Tool[];
@@ -420,16 +436,40 @@ interface Host {
   streamEndpoint(session: string, delta: ChatDelta): void;
 }
 
-/** The `omw` global. */
-interface Omw {
+/**
+ * The shape `Omw` needs from a config to constrain lookups. The default `Omw`
+ * is instantiated with this, so untyped scripts accept any name.
+ */
+interface AnyConfig {
+  providers: Record<string, unknown>;
+  tooling: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  endpoint: unknown;
+}
+
+/**
+ * The `omw` global. Instantiate it with your config type to constrain the names
+ * accepted by `provider.get`/`tooling.get` and to carry each entry's `kind`:
+ *
+ * ```js
+ * import config from "./omw.test.json";
+ * const typed = omw as Omw<typeof config>;
+ * typed.provider.get("openai"); // only configured providers type-check
+ * ```
+ */
+interface Omw<Config = AnyConfig> {
   /** Look up configured provider instances by name. */
   provider: {
-    get(name: string): ProviderHandle;
+    get<Name extends keyof ProvidersOf<Config> & string>(
+      name: Name,
+    ): ProviderHandle<ProvidersOf<Config>[Name]>;
   };
 
   /** Look up configured tooling instances by name. */
   tooling: {
-    get(name: string): ToolingHandle;
+    get<Name extends keyof ToolingOf<Config> & string>(
+      name: Name,
+    ): ToolingHandle<ToolingOf<Config>[Name]>;
   };
 
   /** The static host helpers. */

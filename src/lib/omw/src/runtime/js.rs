@@ -426,7 +426,7 @@ mod tests {
     let script = r#"
       let p = omw.provider.get("mock-provider");
       let r = p.chat("gpt-test", [], []);
-      r.content + "|" + r.tool_calls.length
+      r.content + "|" + r.toolCalls.length
     "#;
     let dir = tempdir()?;
     let path = dir.path().join("chat.js");
@@ -668,7 +668,7 @@ mod tests {
         let t = e.payload.tools[0];
         (e.id === sub) + "|" + e.kind + "|" + e.payload.session + "|"
           + m.role + "|" + m.content + "|" + t.name + "|"
-          + t.description + "|" + t.input_schema.type
+          + t.description + "|" + t.inputSchema.type
       "#,
     )?;
     let ctx = test_endpoint_ctx(path, Arc::clone(&bus), Arc::clone(&registry))?;
@@ -756,7 +756,7 @@ mod tests {
       format!(
         r#"
         omw.host.streamEndpoint("{session}", {{ content: "Hello" }});
-        omw.host.streamEndpoint("{session}", {{ finish_reason: "stop" }});
+        omw.host.streamEndpoint("{session}", {{ finishReason: "stop" }});
         "streamed"
       "#
       ),
