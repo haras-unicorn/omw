@@ -25,7 +25,8 @@ assertions work, and [Testing](../docs/testing/testing.md) for the binary.
   `send_agent` plus per-agent memory.
 - `05-patterns` — assertion patterns: regex `detail` leaves, `$while`, `$until`,
   and a subsequence over a multi-turn provider script.
-- `06-memory` — `[memory.alice]` seeds a value the brain reads and branches on.
+- `06-memory` — `[memory.alice]` seeds a table the brain reads back parsed and
+  branches on.
 - `07-asserted` — `outcome = "asserted"` stops a brain that would otherwise loop
   forever.
 - `08-endpoint-order` — the endpoint mock's `after` gate asserts a request

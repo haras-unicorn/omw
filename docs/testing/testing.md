@@ -174,11 +174,14 @@ of walking it there:
 ```toml
 [memory.alice]
 handle = "seed-42"
+state = { step = 3, waiting = true }
 ```
 
-The brain reads it with `memory_get` like any other value, and seeded entries
-persist exactly like memory written at runtime (including across hot reloads).
-This is a first-class `omw` feature, not a test-only one.
+A string seed is stored verbatim; a table, array, number or bool is
+JSON-stringified. The brain reads a string with `memory_get` or a structured
+value with `memory_get_as` (which parses it back), like any other value. Seeded
+entries persist exactly like memory written at runtime (including across hot
+reloads). This is a first-class `omw` feature, not a test-only one.
 
 ## `outcome = "asserted"`
 

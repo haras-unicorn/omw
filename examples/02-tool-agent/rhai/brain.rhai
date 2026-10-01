@@ -14,7 +14,7 @@ let second = provider.chat(
   [
     #{ role: "user", content: "use echo" },
     #{ role: "assistant", tool_call: invocation },
-    #{ role: "tool", content: result.value },
+    #{ role: "tool", content: result.content[0].text },
   ],
   []
 );

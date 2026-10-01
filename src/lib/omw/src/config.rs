@@ -117,8 +117,12 @@ pub struct Config {
   /// agent's memory before its brain first runs, so a test (or a deployment)
   /// can fast-forward an agent to a state. Seeded values persist like any
   /// other memory, including across hot reloads.
+  ///
+  /// A value that is a string is stored verbatim; anything else (object,
+  /// array, number, bool) is JSON-stringified, mirroring `memory-set`. Read it
+  /// back with `memory-get` (raw) or `memory-get-as` (parsed).
   #[serde(default)]
-  pub memory: BTreeMap<String, BTreeMap<String, String>>,
+  pub memory: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 
   /// Global runtime tunables.
   #[serde(default)]
@@ -140,6 +144,18 @@ impl Config {
       .context("failed to serialize config schema")?;
     json.push('\n');
     Ok(json)
+  }
+}
+
+/// Normalize one seeded memory value into the string the store holds: a JSON
+/// string stays verbatim, anything else is JSON-stringified. The inverse is a
+/// guest's `memory-get-as` / `memoryGetAs`.
+pub(crate) fn memory_string(value: &serde_json::Value) -> String {
+  match value {
+    serde_json::Value::String(s) => s.clone(),
+    other => {
+      serde_json::to_string(other).unwrap_or_else(|_| "null".to_string())
+    }
   }
 }
 
@@ -401,6 +417,40 @@ mod schema_tests {
       json.contains("ImplConfig"),
       "schema is missing the escape hatch"
     );
+    Ok(())
+  }
+}
+
+#[cfg(test)]
+mod memory_tests {
+  use super::memory_string;
+
+  #[test]
+  fn strings_are_stored_verbatim() {
+    assert_eq!(memory_string(&serde_json::json!("handle-1")), "handle-1");
+  }
+
+  #[test]
+  fn non_strings_are_json_stringified() {
+    assert_eq!(memory_string(&serde_json::json!({ "a": 1 })), r#"{"a":1}"#);
+    assert_eq!(memory_string(&serde_json::json!([1, 2])), "[1,2]");
+    assert_eq!(memory_string(&serde_json::json!(42)), "42");
+    assert_eq!(memory_string(&serde_json::json!(true)), "true");
+  }
+
+  #[test]
+  fn parses_into_the_structured_config() -> anyhow::Result<()> {
+    let config: crate::config::Config = toml::from_str(
+      r#"
+        [memory.alice]
+        handle = "seed-42"
+        state = { step = 3, waiting = true }
+      "#,
+    )?;
+    let alice = &config.memory["alice"];
+    assert_eq!(alice["handle"], serde_json::json!("seed-42"));
+    assert_eq!(alice["state"]["step"], serde_json::json!(3));
+    assert_eq!(alice["state"]["waiting"], serde_json::json!(true));
     Ok(())
   }
 }

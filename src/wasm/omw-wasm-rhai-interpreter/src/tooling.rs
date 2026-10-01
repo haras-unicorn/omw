@@ -1,7 +1,7 @@
 use rhai_rt::{Array, EvalAltResult, Map};
 
 use crate::{
-  convert::{handle_name, json_from_map, method, to_error},
+  convert::{handle_name, json_from_map, json_to_dynamic, method, to_error},
   omw::omw::{tooling, types},
 };
 
@@ -61,9 +61,9 @@ pub(crate) fn tooling_list_tools(
     if let Some(desc) = t.description {
       m.insert("description".into(), desc.into());
     }
-    m.insert("input_schema".into(), t.input_schema.into());
+    m.insert("input_schema".into(), json_to_dynamic(&t.input_schema));
     if let Some(output_schema) = t.output_schema {
-      m.insert("output_schema".into(), output_schema.into());
+      m.insert("output_schema".into(), json_to_dynamic(&output_schema));
     }
     arr.push(m.into());
   }
@@ -158,12 +158,16 @@ pub(crate) fn resource_to_map(r: types::ResourceInfo) -> Map {
 }
 
 /// Map one `types::ToolResult` into a rhai map so scripts can read `name`,
-/// `arguments` and `value` off a tool-call result.
+/// `arguments`, `content` and `structured_content` off a tool-call result.
+/// `arguments`/`content`/`structured_content` are parsed as JSON when possible.
 pub(crate) fn tool_result_to_map(r: types::ToolResult) -> Map {
   let mut m = Map::new();
   m.insert("name".into(), r.name.into());
-  m.insert("arguments".into(), r.arguments.into());
-  m.insert("value".into(), r.value.into());
+  m.insert("arguments".into(), json_to_dynamic(&r.arguments));
+  m.insert("content".into(), json_to_dynamic(&r.content));
+  if let Some(structured) = r.structured_content {
+    m.insert("structured_content".into(), json_to_dynamic(&structured));
+  }
   m
 }
 
@@ -180,11 +184,7 @@ pub(crate) fn chat_result_to_map(r: types::ChatResult) -> Map {
   }
   let mut calls = Array::new();
   for tc in r.tool_calls {
-    let mut t = Map::new();
-    t.insert("id".into(), tc.id.into());
-    t.insert("name".into(), tc.name.into());
-    t.insert("arguments".into(), tc.arguments.into());
-    calls.push(t.into());
+    calls.push(crate::host::tool_call_to_map(tc).into());
   }
   m.insert("tool_calls".into(), calls.into());
   if let Some(finish_reason) = r.finish_reason {

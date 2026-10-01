@@ -462,9 +462,11 @@ async fn run_agent(
   )?;
   ctx.set_stop_flag(stop);
   if let Some(seed) = config.memory.get(name) {
-    ctx
-      .memory()
-      .seed(seed.iter().map(|(key, value)| (key.clone(), value.clone())));
+    ctx.memory().seed(
+      seed
+        .iter()
+        .map(|(key, value)| (key.clone(), crate::config::memory_string(value))),
+    );
   }
   // Startup gate: a broken script never produces a first iteration.
   // Without `--watch` this fails fast, same as today. With `--watch` the
@@ -1099,7 +1101,7 @@ mod tests {
   fn memory_config(
     memory: std::collections::BTreeMap<
       String,
-      std::collections::BTreeMap<String, String>,
+      std::collections::BTreeMap<String, serde_json::Value>,
     >,
   ) -> Config {
     Config {
@@ -1146,11 +1148,14 @@ mod tests {
     let config = memory_config(BTreeMap::from([
       (
         "alice".to_string(),
-        BTreeMap::from([("handle".to_string(), "alice-uuid".to_string())]),
+        BTreeMap::from([(
+          "handle".to_string(),
+          serde_json::json!("alice-uuid"),
+        )]),
       ),
       (
         "bob".to_string(),
-        BTreeMap::from([("handle".to_string(), "bob-uuid".to_string())]),
+        BTreeMap::from([("handle".to_string(), serde_json::json!("bob-uuid"))]),
       ),
     ]));
     let (tx, _rx) =

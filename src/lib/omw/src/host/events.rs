@@ -10,7 +10,10 @@ use crate::tooling::ResourceContent;
 pub struct ToolResult {
   pub name: String,
   pub arguments: String,
-  pub result: String,
+  /// MCP `content`: a JSON array of content blocks.
+  pub content: String,
+  /// MCP `structuredContent` as JSON, when the tool produced one.
+  pub structured_content: Option<String>,
 }
 
 /// An inbound endpoint request routed to a subscribed agent. `session`

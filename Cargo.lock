@@ -3024,6 +3024,7 @@ name = "omw-wasm-rhai-interpreter"
 version = "0.1.0"
 dependencies = [
  "rhai",
+ "serde_json",
  "wit-bindgen 0.61.1",
 ]
 
@@ -3031,6 +3032,8 @@ dependencies = [
 name = "omw-wasm-rust"
 version = "0.1.2"
 dependencies = [
+ "serde",
+ "serde_json",
  "wit-bindgen 0.61.1",
 ]
 
@@ -3785,6 +3788,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "rhai_codegen",
+ "serde",
  "smallvec",
  "smartstring",
  "thin-vec",

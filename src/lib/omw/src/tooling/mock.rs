@@ -29,7 +29,8 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use super::{
-  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
+  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool,
+  ToolCallResult, Tooling,
 };
 use crate::host::trace::TraceSender;
 use crate::testing::{After, TraceLog};
@@ -70,14 +71,23 @@ pub(crate) struct Config {
   pub delay_ms: u64,
 }
 
-/// One scripted `call-tool` result.
+/// One scripted `call-tool` result. `result` is a text convenience that
+/// becomes a single MCP text content block; `structured_content` is passed
+/// through verbatim.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(crate) struct ScriptedToolCall {
   name: String,
   #[serde(default)]
   result: String,
   #[serde(default)]
+  structured_content: Option<Value>,
+  #[serde(default)]
   after: After,
+}
+
+/// Build an MCP-style content array holding a single text block.
+fn text_content(text: &str) -> Value {
+  serde_json::json!([{ "type": "text", "text": text }])
 }
 
 /// One scripted, full-replacement resource-list update.
@@ -132,7 +142,7 @@ impl Tooling for PendingTooling {
     &self,
     _name: &str,
     _args: Value,
-  ) -> anyhow::Result<String> {
+  ) -> anyhow::Result<ToolCallResult> {
     std::future::pending().await
   }
 
@@ -177,7 +187,7 @@ impl Tooling for FailingTooling {
     &self,
     _name: &str,
     _args: Value,
-  ) -> anyhow::Result<String> {
+  ) -> anyhow::Result<ToolCallResult> {
     anyhow::bail!("mock failure")
   }
 
@@ -259,6 +269,7 @@ impl MockTooling {
       tool_calls: vec![ScriptedToolCall {
         name: name.to_string(),
         result: result.to_string(),
+        structured_content: None,
         after: After::Start,
       }],
       ..Self::noop_owned()
@@ -353,7 +364,11 @@ impl Tooling for MockTooling {
     Ok(self.tools.clone())
   }
 
-  async fn call_tool(&self, name: &str, args: Value) -> anyhow::Result<String> {
+  async fn call_tool(
+    &self,
+    name: &str,
+    args: Value,
+  ) -> anyhow::Result<ToolCallResult> {
     self.calls.lock().await.push(ToolCall {
       name: name.to_string(),
       arguments: args,
@@ -375,7 +390,10 @@ impl Tooling for MockTooling {
     }
     gate(&self.trace, &step.after).await;
     tokio::time::sleep(self.delay).await;
-    Ok(step.result)
+    Ok(ToolCallResult {
+      content: text_content(&step.result),
+      structured_content: step.structured_content,
+    })
   }
 
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
@@ -491,16 +509,47 @@ mod tests {
       crate::config::Tunables::default(),
     )?;
     assert_eq!(
-      tooling.call_tool("echo", serde_json::json!({})).await?,
-      "hi"
+      tooling
+        .call_tool("echo", serde_json::json!({}))
+        .await?
+        .content,
+      text_content("hi")
     );
-    assert_eq!(tooling.call_tool("add", serde_json::json!({})).await?, "3");
+    assert_eq!(
+      tooling
+        .call_tool("add", serde_json::json!({}))
+        .await?
+        .content,
+      text_content("3")
+    );
     // A name mismatch is an error, not a silent wrong result.
     let error = tooling
       .call_tool("echo", serde_json::json!({}))
       .await
       .expect_err("exhausted script should error");
     assert!(error.to_string().contains("exhausted"), "{error}");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn structured_content_is_passed_through() -> anyhow::Result<()> {
+    let tooling = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{
+          "name": "echo",
+          "result": "hi",
+          "structured_content": { "echoed": "hi" },
+        }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let result = tooling.call_tool("echo", serde_json::json!({})).await?;
+    assert_eq!(result.content, text_content("hi"));
+    assert_eq!(
+      result.structured_content,
+      Some(serde_json::json!({ "echoed": "hi" }))
+    );
     Ok(())
   }
 

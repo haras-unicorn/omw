@@ -137,7 +137,9 @@ fn install_omw(engine: &mut Engine) {
   host.set_native_fn("base64_encode", host_base64_encode);
   host.set_native_fn("base64_decode", host_base64_decode);
   host.set_native_fn("memory_get", host_memory_get);
+  host.set_native_fn("memory_get_as", host_memory_get_as);
   host.set_native_fn("memory_set", host_memory_set);
+  host.set_native_fn("memory_set_as", host_memory_set_as);
   host.set_native_fn("memory_remove", host_memory_remove);
 
   host.set_native_fn("subscribe_endpoint", host_subscribe_endpoint);

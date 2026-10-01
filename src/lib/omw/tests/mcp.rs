@@ -101,13 +101,17 @@ async fn list_tools_parses_rmcp_tools() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn call_tool_joins_text_content() -> anyhow::Result<()> {
+async fn call_tool_returns_content_blocks() -> anyhow::Result<()> {
   let entry = in_memory_tooling().await?;
   let result = entry
     .inner()
     .call_tool("echo", serde_json::json!({ "input": "hello" }))
     .await?;
-  assert_eq!(result, "hello");
+  assert_eq!(
+    result.content,
+    serde_json::json!([{ "type": "text", "text": "hello" }])
+  );
+  assert!(result.structured_content.is_none());
   Ok(())
 }
 
@@ -120,6 +124,9 @@ async fn call_tool_without_object_arguments_sends_no_arguments()
     .inner()
     .call_tool("echo", serde_json::json!(42))
     .await?;
-  assert_eq!(result, "");
+  assert_eq!(
+    result.content,
+    serde_json::json!([{ "type": "text", "text": "" }])
+  );
   Ok(())
 }

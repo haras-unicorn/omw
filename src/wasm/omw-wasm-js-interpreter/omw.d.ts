@@ -17,8 +17,11 @@ interface ToolCall {
   /** Tool name. */
   name: string;
 
-  /** Tool arguments as an opaque JSON string. */
-  arguments: string;
+  /**
+   * Tool arguments, parsed from JSON when possible (otherwise the raw string).
+   * Passing it back into `chat`/`chatStream` re-serializes it.
+   */
+  arguments: unknown;
 }
 
 /** A single message in a chat conversation. */
@@ -77,11 +80,11 @@ interface ChatTool {
   /** Optional human-readable description of what the tool does. */
   description?: string;
 
-  /** The tool's JSON-schema document; defaults to `"{}"` when omitted. */
-  input_schema?: string;
+  /** The tool's JSON-schema document; defaults to `{}` when omitted. */
+  input_schema?: unknown;
 
-  /** Optional JSON-schema document; defaults to absent when omitted. */
-  output_schema?: string;
+  /** Optional JSON-schema document; absent when omitted. */
+  output_schema?: unknown;
 }
 
 /** A tool as returned by `listTools`, carrying both key spellings. */
@@ -92,17 +95,17 @@ interface Tool {
   /** Optional human-readable description of what the tool does. */
   description?: string;
 
-  /** The tool's JSON-schema document (camelCase alias). */
-  inputSchema: string;
+  /** The tool's JSON-schema document (camelCase alias), parsed from JSON. */
+  inputSchema: unknown;
 
-  /** The tool's JSON-schema document. */
-  input_schema: string;
+  /** The tool's JSON-schema document, parsed from JSON. */
+  input_schema: unknown;
 
   /** The tool's optional output JSON-schema document (camelCase alias). */
-  outputSchema?: string;
+  outputSchema?: unknown;
 
   /** The tool's optional output JSON-schema document. */
-  output_schema?: string;
+  output_schema?: unknown;
 }
 
 /** The full result of a blocking `chat` call. */
@@ -128,11 +131,23 @@ interface ToolResult {
   /** The tool's name. */
   name: string;
 
-  /** The tool's arguments, as the opaque JSON passed to `callTool`. */
-  arguments: string;
+  /**
+   * The tool's arguments as passed to `callTool`, parsed from JSON when
+   * possible (otherwise the raw string).
+   */
+  arguments: unknown;
 
-  /** The tool's JSON result. */
-  value: string;
+  /**
+   * The tool's content blocks (MCP `content`), parsed from JSON when possible
+   * (otherwise the raw string). A text block is `{ type: "text", text }`.
+   */
+  content: unknown;
+
+  /**
+   * The tool's structured output (MCP `structuredContent`), parsed from JSON
+   * when possible; absent when the tool produced none.
+   */
+  structured_content?: unknown;
 }
 
 /** A tooling resource as returned by `listResources`. */
@@ -184,10 +199,11 @@ interface EndpointMessage {
   tools: ChatTool[];
 
   /**
-   * The generation params the endpoint client submitted (temperature, …), as
-   * an opaque JSON string. `JSON.parse` it to read fields; absent when none.
+   * The generation params the endpoint client submitted (temperature, …),
+   * parsed from JSON when possible (otherwise the raw string). Absent when
+   * none.
    */
-  params?: string;
+  params?: unknown;
 }
 
 /** An endpoint session ended, normally or abruptly. */
@@ -375,8 +391,21 @@ interface Host {
   /** Read a memory value by key; `undefined` when absent. */
   memoryGet(key: string): string | undefined;
 
+  /**
+   * Read a memory value by key, parsing it as JSON when possible. `undefined`
+   * when absent; otherwise the parsed object/array/scalar, or the raw string
+   * when the stored value is not JSON.
+   */
+  memoryGetAs(key: string): unknown;
+
   /** Store a memory value under a key, overwriting. */
   memorySet(key: string, value: string): void;
+
+  /**
+   * Store a JSON-serializable value under a key, overwriting. Strings are
+   * JSON-encoded, so `memoryGetAs` round-trips. Errors on `undefined`.
+   */
+  memorySetAs(key: string, value: unknown): void;
 
   /** Delete a memory value by key; `true` when a value was present. */
   memoryRemove(key: string): boolean;

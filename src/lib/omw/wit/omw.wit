@@ -124,8 +124,12 @@ interface types {
     /// The tool's arguments, as opaque JSON passed to `call-tool`.
     arguments: string,
 
-    /// The tool's JSON result.
-    value: string,
+    /// The tool's content blocks (MCP `content`) as a JSON array.
+    content: string,
+
+    /// The tool's structured output (MCP `structuredContent`) as JSON, when
+    /// the tool declared and produced one.
+    structured-content: option<string>,
   }
 
   /// Token accounting for one chat response, as reported by the provider.
@@ -333,8 +337,8 @@ interface tooling {
     cancel: func(uuid: string);
 
     /// Invoke a tool by name with opaque JSON arguments, blocking until the
-    /// result is ready; returns the tool result in-band (errors are surfaced
-    /// as the `result` string).
+    /// result is ready; returns the tool result in-band (failures are surfaced
+    /// as an error string).
     call-tool-blocking: func(name: string, arguments: string) -> result<tool-result, string>;
 
     /// Enumerate every resource this tooling exposes.

@@ -87,6 +87,20 @@ runtime = "wasm"
 script = "target/wasm32-wasip2/debug/brain.wasm"
 ```
 
+The SDK's `host` module mirrors the WIT host interface with typed helpers.
+Memory has a raw and a structured pair: `host::memory_get` / `host::memory_set`
+store strings verbatim, while `host::memory_get_as::<T>` parses the stored JSON
+into `T` (returning `Some(Err(raw))` when it is not JSON for `T`) and
+`host::memory_set_as(key, &value)` JSON-encodes any `Serialize` value. Opaque
+JSON fields on the generated records have `_as<T>()` accessors — for example
+`ToolCall::arguments_as`, `Tool::input_schema_as`, `ToolResult::content_as` /
+`structured_content_as`, and `EndpointMessage::params_as`. The typed handles
+take a `serde_json::Value` directly for JSON inputs (`Provider::chat` /
+`chat_stream`'s `params`, `Tooling::call_tool` / `call_tool_blocking`'s
+`arguments`), so there is no separate string form. The SDK re-exports `serde`
+and `serde_json` so brains can build values with `json!` and derive
+`Deserialize` for the accessors.
+
 ## The engine
 
 The shared `WasmEngine` (in `runtime::engine`) is deliberately generic: it has

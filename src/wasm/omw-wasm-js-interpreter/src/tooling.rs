@@ -3,7 +3,8 @@ use boa_engine::{
 };
 
 use crate::convert::{
-  handle_name, js_err, json_string_from_js, str_arg, value_from_json,
+  handle_name, js_err, json_or_string, json_string_from_js, str_arg,
+  value_from_json,
 };
 
 pub(crate) fn tooling_get(
@@ -73,23 +74,11 @@ fn tool_to_json(t: crate::omw::omw::types::Tool) -> serde_json::Value {
       serde_json::Value::String(description),
     );
   }
-  o.insert(
-    "inputSchema".to_string(),
-    serde_json::Value::String(t.input_schema.clone()),
-  );
-  o.insert(
-    "input_schema".to_string(),
-    serde_json::Value::String(t.input_schema),
-  );
+  o.insert("inputSchema".to_string(), json_or_string(&t.input_schema));
+  o.insert("input_schema".to_string(), json_or_string(&t.input_schema));
   if let Some(output_schema) = t.output_schema {
-    o.insert(
-      "outputSchema".to_string(),
-      serde_json::Value::String(output_schema.clone()),
-    );
-    o.insert(
-      "output_schema".to_string(),
-      serde_json::Value::String(output_schema),
-    );
+    o.insert("outputSchema".to_string(), json_or_string(&output_schema));
+    o.insert("output_schema".to_string(), json_or_string(&output_schema));
   }
   serde_json::Value::Object(o)
 }
@@ -126,11 +115,17 @@ fn tooling_call_tool(
 fn tool_result_to_json(
   r: crate::omw::omw::types::ToolResult,
 ) -> serde_json::Value {
-  serde_json::json!({
-    "name": r.name,
-    "arguments": r.arguments,
-    "value": r.value,
-  })
+  let mut o = serde_json::Map::new();
+  o.insert("name".to_string(), serde_json::Value::String(r.name));
+  o.insert("arguments".to_string(), json_or_string(&r.arguments));
+  o.insert("content".to_string(), json_or_string(&r.content));
+  if let Some(structured) = r.structured_content {
+    o.insert(
+      "structured_content".to_string(),
+      json_or_string(&structured),
+    );
+  }
+  serde_json::Value::Object(o)
 }
 
 fn tooling_call_tool_blocking(

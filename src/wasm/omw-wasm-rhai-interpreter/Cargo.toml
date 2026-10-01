@@ -13,5 +13,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rhai_rt = { package = "rhai", version = "1.26.0" }
+rhai_rt = { package = "rhai", version = "1.26.0", features = ["serde"] }
+serde_json.workspace = true
 wit-bindgen.workspace = true

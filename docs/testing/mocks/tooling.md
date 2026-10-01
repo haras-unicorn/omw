@@ -13,7 +13,12 @@ tools = [{ name = "echo", description = "echo back", input_schema = {} }]
 
 tool_calls = [
   { name = "echo", result = "hi" },
-  { name = "add", result = "3", after = { kind = "call", op = "call_tool" } },
+  {
+    name = "add",
+    result = "3",
+    structured_content = { sum = 3 },
+    after = { kind = "call", op = "call_tool" },
+  },
 ]
 
 initial_resource_list = [
@@ -48,6 +53,9 @@ resource_content_updates = [
   the next entry and verifies the invoked name matches; a mismatch, running past
   the end, or a call with no script at all is a tool-call error (delivered to
   the brain, which can react to it), so the mock stays honest about call order.
+  `result` is a text convenience that becomes a single MCP text content block;
+  an optional `structured_content` is passed through as the tool's MCP
+  `structuredContent`.
 - `initial_resource_list` — the resources `list-resources` starts from.
 - `initial_resource_contents` — `read-resource` content keyed by URI. Reading a
   URI with no content (initial or applied) errors.

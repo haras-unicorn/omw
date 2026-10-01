@@ -66,10 +66,17 @@ async fn calls_add_tool_and_gets_the_sum() -> anyhow::Result<()> {
   }
 
   let entry = everything_tooling()?;
-  let sum = entry
+  let result = entry
     .inner()
     .call_tool("add", json!({ "a": 2, "b": 3 }))
     .await?;
-  assert_eq!(sum.trim(), "The sum of 2 and 3 is 5.");
+  let text = result
+    .content
+    .as_array()
+    .and_then(|blocks| blocks.first())
+    .and_then(|block| block.get("text"))
+    .and_then(|text| text.as_str())
+    .unwrap_or_default();
+  assert_eq!(text.trim(), "The sum of 2 and 3 is 5.");
   Ok(())
 }

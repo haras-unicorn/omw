@@ -2,7 +2,14 @@
 // result back for a final answer.
 #![no_main]
 
+use omw_wasm_rust::serde_json::json;
 use omw_wasm_rust::{host, prelude::*};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ContentBlock {
+  text: Option<String>,
+}
 
 omw_wasm_rust::brain!(|| {
   let provider = Provider::get("openai")?;
@@ -14,7 +21,12 @@ omw_wasm_rust::brain!(|| {
     .into_iter()
     .next()
     .ok_or_else(|| "the model returned no tool call".to_string())?;
-  let result = tooling.call_tool_blocking(&call.name, r#"{"input":"hi"}"#)?;
+  let result = tooling.call_tool_blocking(&call.name, json!({ "input": "hi" }))?;
+  let blocks: Vec<ContentBlock> = result.content_as()?;
+  let text = blocks
+    .into_iter()
+    .find_map(|block| block.text)
+    .unwrap_or_default();
   let second = provider.chat(
     "gpt-test",
     &[
@@ -22,7 +34,7 @@ omw_wasm_rust::brain!(|| {
       ChatMessage::assistant("").with_tool_call(call),
       ChatMessage {
         role: Role::Tool,
-        content: Some(result.value),
+        content: Some(text),
         reasoning: None,
         tool_call: None,
       },

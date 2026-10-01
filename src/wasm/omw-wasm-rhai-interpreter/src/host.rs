@@ -1,7 +1,7 @@
 use rhai_rt::{Array, Blob, Dynamic, EvalAltResult, Map};
 
 use crate::{
-  convert::to_error,
+  convert::{arguments_to_json, json_to_dynamic, to_error},
   omw::omw::{host, types},
   resource_content_to_map, resource_to_map, tool_result_to_map, usage_to_map,
 };
@@ -141,11 +141,35 @@ pub(crate) fn host_memory_get(
   Ok(value)
 }
 
+/// Read a memory value by key, parsing it as JSON when possible. Unit when
+/// absent; otherwise the parsed map/array/scalar, or the raw string when the
+/// stored value is not JSON.
+pub(crate) fn host_memory_get_as(
+  key: &str,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+  let value: Dynamic = match host::memory_get(key) {
+    Some(value) => json_to_dynamic(&value),
+    None => ().into(),
+  };
+  Ok(value)
+}
+
 pub(crate) fn host_memory_set(
   key: &str,
   value: &str,
 ) -> Result<(), Box<EvalAltResult>> {
   host::memory_set(key, value);
+  Ok(())
+}
+
+/// Store a memory value under a key, JSON-encoding it. Errors when the value
+/// cannot be serialized.
+pub(crate) fn host_memory_set_as(
+  key: &str,
+  value: Dynamic,
+) -> Result<(), Box<EvalAltResult>> {
+  let json = crate::convert::dynamic_to_json(&value).map_err(to_error)?;
+  host::memory_set(key, &json);
   Ok(())
 }
 
@@ -225,7 +249,7 @@ pub(crate) fn envelope_to_map(envelope: host::EventEnvelope) -> Map {
       }
       payload.insert("tools".into(), tools.into());
       if let Some(params) = message.params {
-        payload.insert("params".into(), params.into());
+        payload.insert("params".into(), json_to_dynamic(&params));
       }
       ("endpoint-message", payload.into())
     }
@@ -255,11 +279,7 @@ pub(crate) fn delta_to_map(delta: types::ChatDelta) -> Map {
     m.insert("reasoning".into(), reasoning.into());
   }
   if let Some(tc) = delta.tool_call {
-    let mut t = Map::new();
-    t.insert("id".into(), tc.id.into());
-    t.insert("name".into(), tc.name.into());
-    t.insert("arguments".into(), tc.arguments.into());
-    m.insert("tool_call".into(), t.into());
+    m.insert("tool_call".into(), tool_call_to_map(tc).into());
   }
   if let Some(finish_reason) = delta.finish_reason {
     m.insert("finish_reason".into(), finish_reason.into());
@@ -294,10 +314,11 @@ pub(crate) fn delta_from_map(delta: &Map) -> Result<types::ChatDelta, String> {
         .get("name")
         .and_then(|v| v.clone().try_cast::<String>())
         .ok_or_else(|| "tool_call missing name".to_string())?;
-      let arguments = tc
-        .get("arguments")
-        .and_then(|v| v.clone().try_cast::<String>())
-        .ok_or_else(|| "tool_call missing arguments".to_string())?;
+      let arguments =
+        tc.get("arguments")
+          .map(arguments_to_json)
+          .transpose()?
+          .ok_or_else(|| "tool_call missing arguments".to_string())?;
       Some(types::ToolCall {
         id,
         name,
@@ -373,19 +394,20 @@ pub(crate) fn tool_to_map(t: types::Tool) -> Map {
     m.insert("description".into(), desc.into());
   }
   m.insert("name".into(), t.name.into());
-  m.insert("input_schema".into(), t.input_schema.into());
+  m.insert("input_schema".into(), json_to_dynamic(&t.input_schema));
   if let Some(output_schema) = t.output_schema {
-    m.insert("output_schema".into(), output_schema.into());
+    m.insert("output_schema".into(), json_to_dynamic(&output_schema));
   }
   m
 }
 
 /// Map a `types::ToolCall` into a rhai map so scripts can read `id`/
-/// `name`/`arguments` off a tool call.
+/// `name`/`arguments` off a tool call. `arguments` is parsed as JSON when
+/// possible.
 pub(crate) fn tool_call_to_map(tc: types::ToolCall) -> Map {
   let mut m = Map::new();
   m.insert("id".into(), tc.id.into());
   m.insert("name".into(), tc.name.into());
-  m.insert("arguments".into(), tc.arguments.into());
+  m.insert("arguments".into(), json_to_dynamic(&tc.arguments));
   m
 }

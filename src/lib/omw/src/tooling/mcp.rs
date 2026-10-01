@@ -7,8 +7,8 @@
 //!   (`StreamableHttpClientTransport`).
 //!
 //! The transport owns the wire protocol and lifecycle (`initialize`); this
-//! module only maps rmcp's typed results onto our [`Tool`] and text-joined
-//! results.
+//! module only maps rmcp's typed results onto our [`Tool`] and
+//! content/structured-content results.
 //!
 //! The connection is established lazily on first tool or resource use, so
 //! construction only parses config and never touches the network. The first use
@@ -37,7 +37,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool, Tooling,
+  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool,
+  ToolCallResult, Tooling,
 };
 use crate::config::Tunables;
 use crate::secret::Secret;
@@ -227,7 +228,11 @@ impl Tooling for MCPTooling {
     Ok(out)
   }
 
-  async fn call_tool(&self, name: &str, args: Value) -> anyhow::Result<String> {
+  async fn call_tool(
+    &self,
+    name: &str,
+    args: Value,
+  ) -> anyhow::Result<ToolCallResult> {
     tracing::trace!(name, arg_bytes = args.to_string().len(), "mcp tools/call");
     let arguments = args.as_object().cloned();
     let params = match arguments {
@@ -241,18 +246,19 @@ impl Tooling for MCPTooling {
       .call_tool(params)
       .await
       .context("MCP tools/call failed")?;
-    let text: Vec<String> = result
-      .content
-      .iter()
-      .filter_map(|c| c.as_text().map(|t| t.text.clone()))
-      .collect();
-    let joined = text.join("\n");
+    let content = serde_json::to_value(&result.content)
+      .context("serializing MCP tool content")?;
+    let structured_content = result.structured_content.clone();
     tracing::trace!(
       name,
-      result_bytes = joined.len(),
+      result_bytes = content.to_string().len(),
+      structured = structured_content.is_some(),
       "mcp tools/call returned"
     );
-    Ok(joined)
+    Ok(ToolCallResult {
+      content,
+      structured_content,
+    })
   }
 
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
