@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/haras-unicorn/omw/compare/omw-wasm-rust-v0.1.2...omw-wasm-rust-v0.1.3) - 2026-10-01
+
+### Added
+
+- object memory ([#84](https://github.com/haras-unicorn/omw/pull/84))
+- tool spec output schema ([#83](https://github.com/haras-unicorn/omw/pull/83))
+- better config schema ([#81](https://github.com/haras-unicorn/omw/pull/81))
+- json and yaml config support ([#79](https://github.com/haras-unicorn/omw/pull/79))
+
+### Fixed
+
+- stdin/stdout cli io works ([#85](https://github.com/haras-unicorn/omw/pull/85))
+- agents to map ([#78](https://github.com/haras-unicorn/omw/pull/78))
+
 ## [0.1.2](https://github.com/haras-unicorn/omw/compare/omw-wasm-rust-v0.1.1...omw-wasm-rust-v0.1.2) - 2026-09-29
 
 ### Added

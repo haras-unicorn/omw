@@ -1,6 +1,6 @@
 [package]
 name = "omw-cli"
-version = "0.1.3"
+version = "0.1.4"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -30,7 +30,7 @@ rustls.workspace = true
 clap.workspace = true
 config.workspace = true
 toml.workspace = true
-omw = { version = "0.1.3", path = "../../lib/omw", default-features = false }
+omw = { version = "0.1.4", path = "../../lib/omw", default-features = false }
 
 [dev-dependencies]
 nix.workspace = true

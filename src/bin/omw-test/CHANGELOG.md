@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.3...omw-test-v0.1.4) - 2026-10-01
+
+### Added
+
+- object memory ([#84](https://github.com/haras-unicorn/omw/pull/84))
+- better config schema ([#81](https://github.com/haras-unicorn/omw/pull/81))
+- json and yaml config support ([#79](https://github.com/haras-unicorn/omw/pull/79))
+
+### Fixed
+
+- stdin/stdout cli io works ([#85](https://github.com/haras-unicorn/omw/pull/85))
+- agents to map ([#78](https://github.com/haras-unicorn/omw/pull/78))
+
 ## [0.1.2](https://github.com/haras-unicorn/omw/releases/tag/omw-test-v0.1.2) - 2026-09-26
 
 ### Added
