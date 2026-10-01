@@ -8,12 +8,13 @@ use crate::host::ctx::AgentContext;
 use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{Factory, RunOutcome, Runtime};
 use anyhow::Context as _;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 use serde_json::Value;
 
-#[derive(Clone, Debug, Default, Deserialize)]
-struct Config {
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   #[serde(default, flatten)]
   wasi: WasiConfig,
 }

@@ -14,14 +14,7 @@
     },
     "endpoint": {
       "description": "Optional endpoint implementation.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ImplConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
+      "$ref": "#/$defs/EndpointImpls",
       "default": null
     },
     "memory": {
@@ -37,26 +30,17 @@
     },
     "providers": {
       "description": "Named provider implementations.",
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/ImplConfig"
-      },
+      "$ref": "#/$defs/ProviderImpls",
       "default": {}
     },
     "runtime": {
       "description": "Named runtime implementations.",
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/ImplConfig"
-      },
+      "$ref": "#/$defs/RuntimeImpls",
       "default": {}
     },
     "tooling": {
       "description": "Named tooling implementations.",
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/ImplConfig"
-      },
+      "$ref": "#/$defs/ToolingImpls",
       "default": {}
     },
     "tunables": {
@@ -97,6 +81,225 @@
       },
       "required": ["runtime", "script"]
     },
+    "Config": {
+      "description": "Impl-specific configuration for the OpenAI-family provider.",
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "base_url": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "model": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "params": {
+          "description": "Default generation params merged into every request body (temperature,\nmax_tokens, reasoning_effort, …). Per-call params override these.",
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "default": null
+        }
+      }
+    },
+    "Config2": {
+      "description": "Impl-specific configuration for a single MCP server, selected by\ntransport.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "command": {
+              "type": "string"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Secret"
+              },
+              "default": {}
+            },
+            "transport": {
+              "type": "string",
+              "const": "stdio"
+            }
+          },
+          "required": ["transport", "command"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "auth_token": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Secret"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "transport": {
+              "type": "string",
+              "const": "http"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": ["transport", "url"]
+        }
+      ]
+    },
+    "Config3": {
+      "description": "WASI context configuration for wasm-based runtimes, flattened into each\nruntime's own config. Deny-by-default, mirroring\n`WasiCtxBuilder::default()`: no stdio inheritance, no env, no args, no\npreopens, no network.",
+      "type": "object",
+      "properties": {
+        "allow_blocking_current_thread": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_ip_name_lookup": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_tcp": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_udp": {
+          "type": "boolean",
+          "default": false
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "default": {}
+        },
+        "inherit_args": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdio": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdout": {
+          "type": "boolean",
+          "default": false
+        },
+        "initial_cwd": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "insecure_random_seed": {
+          "type": ["integer", "null"],
+          "format": "uint128",
+          "default": null,
+          "minimum": 0
+        },
+        "max_random_size": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "preopens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Preopen"
+          }
+        }
+      }
+    },
+    "Config4": {
+      "description": "Impl-specific configuration for the OpenAI-compatible endpoint.",
+      "type": "object",
+      "properties": {
+        "listen": {
+          "description": "Socket address to listen on, e.g. `\"127.0.0.1:8080\"` or\n`\"0.0.0.0:8080\"`. Hostnames (e.g. `\"localhost:8080\"`) are rejected at\nstartup.",
+          "type": "string"
+        }
+      },
+      "required": ["listen"]
+    },
+    "EndpointImpls": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/Config4"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "openai"
+                    }
+                  },
+                  "required": ["kind"]
+                }
+              ]
+            },
+            {
+              "$ref": "#/$defs/ImplConfig"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "FsPerms": {
+      "description": "Filesystem permissions for one [`Preopen`].",
+      "type": "string",
+      "enum": ["read_only", "read_write"]
+    },
     "ImplConfig": {
       "description": "A single configured implementation: which kind plus opaque params.",
       "type": "object",
@@ -108,6 +311,103 @@
       },
       "additionalProperties": true,
       "required": ["kind"]
+    },
+    "Preopen": {
+      "description": "One preopened directory: `host_path` on the host, visible to the guest\nas `guest_path`.",
+      "type": "object",
+      "properties": {
+        "guest_path": {
+          "type": "string"
+        },
+        "host_path": {
+          "type": "string"
+        },
+        "perms": {
+          "$ref": "#/$defs/FsPerms"
+        }
+      },
+      "required": ["host_path", "guest_path"]
+    },
+    "ProviderImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openai"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
+    },
+    "RuntimeImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config3"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "wasm"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
+    },
+    "Secret": {
+      "type": "string"
+    },
+    "ToolingImpls": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config2"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "mcp"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ImplConfig"
+          }
+        ]
+      }
     },
     "Tunables": {
       "description": "Runtime tunables: channel sizes, timeouts, and backoffs. All optional;\nomitted values fall back to the built-in defaults.",

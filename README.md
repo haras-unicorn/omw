@@ -169,10 +169,12 @@ To write a pure Rust brain, depend on the `omw-wasm-rust` guest SDK crate
 instead of running `wit-bindgen` yourself; see [Rust brains].
 
 Configuration can also be layered from the environment (`OMW__` prefix) or
-generated as a JSON schema:
+generated as a JSON schema (describing the built-in kinds compiled into the
+binary):
 
 ```sh
-omw schema --output config.schema.json
+omw schema --output config.schema.json            # deployment kinds
+omw-test schema --output config.test.schema.json  # testing kinds (mocks)
 ```
 
 See the [docs] for the full reference.

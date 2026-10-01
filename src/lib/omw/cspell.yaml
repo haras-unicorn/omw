@@ -49,3 +49,4 @@ ignoreWords:
   - rustflags
   - pageable
   - behaviour
+  - subschema

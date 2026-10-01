@@ -34,6 +34,18 @@ omw-test run examples            # every discovered config
   parent directory; directory mode watches the root recursively). The library
   hot-reload watch is always off.
 
+## Schema
+
+```sh
+omw-test schema --output schema.test.json
+```
+
+Writes the JSON schema for the test config, describing exactly the back ends the
+`omw-test` build enables — the `mock` provider/tooling/endpoint doubles and the
+`wasm`/`rhai`/`js` runtimes — so an editor can complete and validate an
+`omw.test.toml`. The deployment counterpart is `omw schema` (see
+[Configuration schema](../introduction.md#configuration-schema)).
+
 Discovery skips hidden directories and collects any file whose stem is
 `omw.test` or ends with `.omw.test` and whose extension is `toml`, `yaml`, `yml`
 or `json`, so several test configs can live side by side in one directory. The

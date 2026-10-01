@@ -20,6 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::unfold;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -31,8 +32,8 @@ use crate::provider::{ChatDelta, ChatMessage, Role, ToolCall};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-compatible endpoint.
-#[derive(Debug, Clone, Deserialize)]
-struct Config {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   /// Socket address to listen on, e.g. `"127.0.0.1:8080"` or
   /// `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
   /// startup.

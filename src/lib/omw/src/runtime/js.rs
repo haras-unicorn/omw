@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Context as _;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 use serde_json::Value;
@@ -20,8 +21,8 @@ const JS_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
   include_bytes!(env!("OMW_WASM_JS_INTERPRETER_COMPONENT_NATIVE"));
 
 /// Impl-specific configuration for the js runtime.
-#[derive(Debug, Clone, Default, Deserialize)]
-struct Config {
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   #[serde(default)]
   interpreter: Option<PathBuf>,
   #[serde(default, flatten)]

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -23,8 +24,8 @@ use crate::tooling::Tool;
 
 /// One inbound chat message from the scripted client. Kept local so the mock
 /// does not require the provider DTOs to be deserializable.
-#[derive(Debug, Clone, Deserialize)]
-struct InboundMessage {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct InboundMessage {
   #[serde(default = "default_role")]
   role: String,
   #[serde(default)]
@@ -54,8 +55,8 @@ impl InboundMessage {
 }
 
 /// One scripted request the mock routes into a subscribed agent.
-#[derive(Debug, Clone, Deserialize)]
-struct Request {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct Request {
   pub model: String,
   #[serde(default)]
   pub messages: Vec<InboundMessage>,
@@ -75,8 +76,8 @@ struct Request {
 }
 
 /// Impl-specific configuration for the endpoint mock.
-#[derive(Debug, Clone, Deserialize)]
-struct Config {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   #[serde(default)]
   pub requests: Vec<Request>,
   /// How long to wait between polls for a model subscription.

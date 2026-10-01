@@ -227,6 +227,25 @@ impl After {
   }
 }
 
+impl schemars::JsonSchema for After {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("After")
+  }
+
+  fn json_schema(
+    _generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    schemars::json_schema!({
+      "description": "When a scripted step fires: \"start\" (the default) or a \
+        `call`/`inbound` pattern to wait for.",
+      "anyOf": [
+        { "const": "start" },
+        { "type": "object" }
+      ]
+    })
+  }
+}
+
 /// An append-only log of every trace event, with per-gate independent scanning.
 ///
 /// A [`broadcast`] receiver only sees events sent after it subscribes, and a

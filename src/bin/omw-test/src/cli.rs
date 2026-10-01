@@ -28,6 +28,13 @@ pub enum Command {
     args: RunArgs,
   },
 
+  /// Generate the JSON schema for the test configuration
+  Schema {
+    /// Output path
+    #[arg(long)]
+    output: PathBuf,
+  },
+
   /// Compile a Rust brain file or directory into WASM components
   #[cfg(feature = "compile-wasm")]
   #[command(hide = true)]
@@ -95,6 +102,7 @@ mod tests {
   fn run_args(cli: Cli) -> Option<RunArgs> {
     match cli.command {
       Command::Run { args } => Some(args),
+      Command::Schema { .. } => None,
       #[cfg(feature = "compile-wasm")]
       Command::CompileWasm { .. } => None,
     }
@@ -104,7 +112,7 @@ mod tests {
   fn compile_wasm_args(cli: Cli) -> Option<CompileWasmArgs> {
     match cli.command {
       Command::CompileWasm { args } => Some(args),
-      Command::Run { .. } => None,
+      Command::Run { .. } | Command::Schema { .. } => None,
     }
   }
 

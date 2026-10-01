@@ -32,6 +32,7 @@ use rmcp::service::RoleClient;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -43,9 +44,9 @@ use crate::secret::Secret;
 
 /// Impl-specific configuration for a single MCP server, selected by
 /// transport.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "transport", rename_all = "snake_case")]
-enum Config {
+pub(crate) enum Config {
   Stdio {
     command: String,
     #[serde(default)]

@@ -218,6 +218,37 @@ macro_rules! register_endpoints {
   };
 }
 
+/// Schema for the optional `[endpoint]`: the built-in kinds enabled in this
+/// build, the generic opaque escape hatch, or `null`.
+pub(crate) struct EndpointImpls;
+
+impl schemars::JsonSchema for EndpointImpls {
+  fn schema_name() -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Borrowed("EndpointImpls")
+  }
+
+  fn json_schema(
+    generator: &mut schemars::SchemaGenerator,
+  ) -> schemars::Schema {
+    let mut variants: Vec<schemars::Schema> = Vec::new();
+    #[cfg(feature = "endpoint-openai")]
+    variants.push(crate::schema::kind_variant::<openai::Config>(
+      generator, "openai",
+    ));
+    #[cfg(feature = "mock")]
+    variants.push(crate::schema::kind_variant::<mock::Config>(
+      generator, "mock",
+    ));
+    variants.push(generator.subschema_for::<crate::config::ImplConfig>());
+    schemars::json_schema!({
+      "anyOf": [
+        { "anyOf": variants },
+        { "type": "null" }
+      ]
+    })
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use serde_json::json;

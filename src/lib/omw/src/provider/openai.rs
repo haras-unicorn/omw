@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::stream::{BoxStream, Stream, StreamExt};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -19,8 +20,8 @@ use crate::secret::Secret;
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-family provider.
-#[derive(Debug, Clone, Deserialize)]
-struct Config {
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct Config {
   #[serde(default)]
   pub base_url: Option<String>,
   #[serde(default)]
