@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
   // The lower-level `Watcher` watches any path and yields changed paths.
   let mut watcher = Watcher::watch(
-    &scope(dir.path()),
+    dir.path(),
     RecursiveMode::Recursive,
     Duration::from_millis(50),
   )?;

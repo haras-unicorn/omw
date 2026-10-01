@@ -86,8 +86,11 @@ pub struct CompileWasmArgs {
 }
 
 impl Cli {
-  pub fn load() -> anyhow::Result<Self> {
-    Ok(Self::try_parse()?)
+  /// Parse the process arguments. clap handles `--help` and usage errors
+  /// itself (its own exit codes and streams), so they never surface as an
+  /// `anyhow` error from `main`.
+  pub fn load() -> Self {
+    Self::parse()
   }
 }
 

@@ -13,6 +13,7 @@ mod cli;
 mod collect;
 mod log;
 mod run;
+mod stdio;
 mod tls;
 #[cfg(feature = "compile-wasm")]
 mod wasm;

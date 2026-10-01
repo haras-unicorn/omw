@@ -57,7 +57,7 @@ script = "brain.txt"
   let cfg: Config = toml::from_str(raw)?;
   let mut registries = Registries::new();
   omw::register_runtimes!(registries.runtimes, InlineRuntime);
-  run_agents(&cfg, false, &registries).await?;
+  run_agents(&cfg, false, &registries, Shutdown::new()).await?;
   anyhow::ensure!(
     RAN.load(Ordering::Relaxed),
     "expected the inline runtime to run"

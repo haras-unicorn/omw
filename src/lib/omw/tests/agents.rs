@@ -193,7 +193,13 @@ async fn run_agents_over_wiremock_openai_and_mcp_http() -> anyhow::Result<()> {
   };
 
   let registries = omw::agent::Registries::default();
-  omw::agent::run_agents(&config, false, &registries).await?;
+  omw::agent::run_agents(
+    &config,
+    false,
+    &registries,
+    omw::shutdown::Shutdown::new(),
+  )
+  .await?;
 
   provider.verify().await;
   Ok(())
@@ -264,7 +270,13 @@ async fn run_agents_with_watch_restarts_on_script_change() -> anyhow::Result<()>
   };
   let run = tokio::spawn(async move {
     let registries = omw::agent::Registries::default();
-    omw::agent::run_agents(&config, true, &registries).await
+    omw::agent::run_agents(
+      &config,
+      true,
+      &registries,
+      omw::shutdown::Shutdown::new(),
+    )
+    .await
   });
 
   // Startup gate runs `validate` (rhai compile via the interpreter
@@ -358,9 +370,14 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   // Without watch a broken script fails immediately.
   let registries = omw::agent::Registries::default();
   assert!(
-    omw::agent::run_agents(&config, false, &registries)
-      .await
-      .is_err()
+    omw::agent::run_agents(
+      &config,
+      false,
+      &registries,
+      omw::shutdown::Shutdown::new(),
+    )
+    .await
+    .is_err()
   );
 
   // With watch the task parks on the invalid script; a fixing edit starts
@@ -369,7 +386,12 @@ async fn run_agents_with_watch_fails_fast_on_broken_startup()
   let registries = omw::agent::Registries::default();
   tokio::time::timeout(
     std::time::Duration::from_secs(30),
-    omw::agent::run_agents(&config, true, &registries),
+    omw::agent::run_agents(
+      &config,
+      true,
+      &registries,
+      omw::shutdown::Shutdown::new(),
+    ),
   )
   .await??;
   Ok(())

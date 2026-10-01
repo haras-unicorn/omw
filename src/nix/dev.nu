@@ -4,8 +4,8 @@ def "main" [] {
 
 def "main test" [] {
   cd (flake-root)
-  omw test lib examples
   omw test units
+  omw test lib examples
   omw test brain examples
 }
 
@@ -18,8 +18,8 @@ def "main test fast" [] {
     OMW_TEST_MCP_EVERYTHING: "0"
     OMW_TEST_EXAMPLE_WASM: "0"
   } {
-    omw test lib examples
     omw test units
+    omw test lib examples
     omw test brain examples
   }
 }
@@ -145,8 +145,8 @@ def "main lint" [] {
       .release-plz.toml)
   }
   cargo fmt --all -- --check
-  omw test lib examples
   omw test units
+  omw test lib examples
   omw test brain examples
   nix flake check --all-systems --show-trace
 }

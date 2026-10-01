@@ -64,6 +64,8 @@ wasmtime.workspace = true
 
 [dev-dependencies]
 rustls.workspace = true
+serial_test.workspace = true
+tempfile.workspace = true
 async-openai = { version = "0.41.3", features = [
   "chat-completion",
   "model",
@@ -81,7 +83,5 @@ rmcp = { version = "3.1.4", features = [
   "transport-streamable-http-server",
   "tower",
 ] }
-serial_test = "4.0.1"
-tempfile = "3.27.0"
 testcontainers = "0.28.0"
 wiremock = "0.6.5"

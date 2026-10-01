@@ -175,7 +175,12 @@ binary):
 ```sh
 omw schema --output config.schema.json            # deployment kinds
 omw-test schema --output config.test.schema.json  # testing kinds (mocks)
+omw schema --output -                             # stream to stdout
 ```
+
+Config inputs and command outputs accept the usual stream paths: `--config -`
+(or `/dev/stdin`) reads the config from stdin (pass `--format`), and any
+`--output` (including `scaffold`'s) accepts `-` or `/dev/stdout`.
 
 See the [docs] for the full reference.
 
