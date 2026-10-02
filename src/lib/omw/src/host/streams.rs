@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
+use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
 use crate::provider::{ChatMessage, Provider};
 use crate::tooling::Tool;
 
@@ -112,6 +113,11 @@ pub fn spawn_pump(
 ) {
   let mut cancel = streams.open(uuid.clone());
   tracing::info!(agent = %name, uuid = %uuid, model = %model, "chat stream opened");
+  bus.trace_event(TraceEvent::HostOpened {
+    agent: name.clone(),
+    kind: HostKind::ChatStream,
+    uuid: uuid.clone(),
+  });
   rt.spawn(async move {
     let agent = name.clone();
     let mut stream =
@@ -121,16 +127,22 @@ pub fn spawn_pump(
         tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed to open");
         bus.deliver(&name, &uuid, Event::Error(e.to_string()));
         streams.remove(&uuid);
+        bus.trace_event(TraceEvent::HostClosed {
+          agent: name.clone(),
+          kind: HostKind::ChatStream,
+          uuid: uuid.clone(),
+          reason: HostCloseReason::Failed,
+        });
         return;
       }
     };
-    loop {
+    let reason = loop {
       tokio::select! {
         biased;
 
         _ = &mut cancel => {
           tracing::debug!(agent, uuid = %uuid, "chat stream pump cancelled");
-          break;
+          break HostCloseReason::Cancelled;
         }
 
         next = stream.next() => match next {
@@ -148,17 +160,23 @@ pub fn spawn_pump(
           Some(Err(e)) => {
             tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
-            break;
+            break HostCloseReason::Failed;
           }
           None => {
             tracing::debug!(agent, uuid = %uuid, "chat stream ended");
             bus.deliver(&name,&uuid, Event::ChatEnd);
-            break;
+            break HostCloseReason::Ended;
           }
         },
       }
-    }
+    };
     streams.remove(&uuid);
+    bus.trace_event(TraceEvent::HostClosed {
+      agent: name.clone(),
+      kind: HostKind::ChatStream,
+      uuid: uuid.clone(),
+      reason,
+    });
   });
 }
 
@@ -233,6 +251,61 @@ mod tests {
       streams.wait_for(&uuid, false, Duration::from_secs(5)),
       "stream should deregister after ChatEnd"
     );
+    Ok(())
+  }
+
+  #[test]
+  fn pump_emits_host_opened_and_closed_trace_events() -> anyhow::Result<()> {
+    let rt = Arc::new(
+      tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?,
+    );
+    let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+    let bus = Arc::new(MessageBus::with_trace(
+      crate::config::Tunables::default(),
+      tx,
+    ));
+    let streams = Arc::new(StreamRegistry::new());
+    let entry = crate::provider::Registry::default().build(
+      "mock",
+      "mock",
+      &serde_json::json!({ "turns": [{ "content": "hi" }] }),
+    )?;
+    let uuid = crate::host::bus::new_uuid();
+    spawn_pump(
+      Arc::clone(entry.inner()),
+      Arc::clone(&rt),
+      Arc::clone(&bus),
+      Arc::clone(&streams),
+      "alice".to_string(),
+      uuid.clone(),
+      "mock-model".to_string(),
+      Vec::new(),
+      Vec::new(),
+      None,
+    );
+
+    let mut opened = false;
+    let mut closed = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && !closed {
+      match rx.try_recv() {
+        Ok(TraceEvent::HostOpened {
+          kind: HostKind::ChatStream,
+          ..
+        }) => opened = true,
+        Ok(TraceEvent::HostClosed {
+          kind: HostKind::ChatStream,
+          reason: HostCloseReason::Ended,
+          ..
+        }) => closed = true,
+        Ok(_) => {}
+        Err(_) => std::thread::sleep(Duration::from_millis(5)),
+      }
+    }
+    assert!(opened, "the chat stream should trace a HostOpened");
+    assert!(closed, "the chat stream should trace a HostClosed");
     Ok(())
   }
 }

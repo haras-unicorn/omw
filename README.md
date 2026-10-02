@@ -144,7 +144,7 @@ OpenAI-compatible client can call it:
 ```toml
 [endpoint]
 kind = "openai"
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:37532"
 ```
 
 ```rhai
@@ -230,29 +230,40 @@ against in-process scripted doubles and checks what every agent saw and did
 against an `[assertions]` section; the [testing] pages cover the binary, the
 assertion language, and each mock. See [examples] for the tour.
 
+## Output
+
+`omw` keeps its product on stdout and its diagnostics on stderr. Logs are
+structured JSONL on a pipe (CI, Docker), native fields under systemd's journald
+(`auto` detects `JOURNAL_STREAM`), and a ratatui live view when both streams are
+terminals — tabs per MCP server for `omw run`/`loop`, a test gauge and
+per-verdict pane for `omw-test run`. The level is `RUST_LOG`;
+`--log-format auto|tty|pipe|journald` pins the format. See the [output] page for
+the full policy.
+
 ## Binary cache
 
-Builds are cached on the [haras cachix cache]. When the flake is used directly
-(for example with `nix run github:haras-unicorn/omw`), the cache is configured
-automatically through the flake's `nixConfig`. To use it when the package comes
-from an overlay, add the following to your nix configuration:
+Builds are cached on the [haras-releases cachix cache]. When the flake is used
+directly (for example with `nix run github:haras-unicorn/omw`), the cache is
+configured automatically through the flake's `nixConfig`. To use it when the
+package comes from an overlay, add the following to your nix configuration:
 
 ```nix
 {
   nix.settings = {
-    substituters = [ "https://haras.cachix.org" ];
+    substituters = [ "https://haras-releases.cachix.org" ];
     trusted-public-keys = [
-      "haras.cachix.org-1:/HIo1JYqOIH1Nwk1EGXhuPPvDW0WekxIbY5CiXUZbYw="
+      "haras-releases.cachix.org-1:DK1D4cU3v6GUkdjynBsjk0cCMtLaueSUCD7wJBPxyMM="
     ];
   };
 }
 ```
 
-[haras cachix cache]: https://app.cachix.org/cache/haras
+[haras-releases cachix cache]: https://app.cachix.org/cache/haras-releases
 [docs]: https://haras-unicorn.github.io/omw/
 [Deployment]: https://haras-unicorn.github.io/omw/deployment/deployment.html
 [endpoint]: https://haras-unicorn.github.io/omw/endpoint/interface.html
 [hot reload]: https://haras-unicorn.github.io/omw/hot-reload.html
+[output]: https://haras-unicorn.github.io/omw/output.html
 [Rust brains]: https://haras-unicorn.github.io/omw/runtime/wasm.html#rust-brains
 [The NixOS module]:
   https://haras-unicorn.github.io/omw/deployment/nixos/module.html

@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::host::bus::MessageBus;
 use crate::host::events::{Event, ToolResult};
 use crate::host::streams::CancelRegistry;
+use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
 use crate::tooling::Tooling;
 
 /// Spawn a pump task on `rt` that awaits `tooling.call_tool(name, args)`
@@ -35,16 +36,22 @@ pub fn spawn_pump(
 ) {
   let mut cancel = calls.open(uuid.clone());
   tracing::info!(agent = %name, uuid = %uuid, tool = %tool, "tool call queued");
+  bus.trace_event(TraceEvent::HostOpened {
+    agent: name.clone(),
+    kind: HostKind::ToolCall,
+    uuid: uuid.clone(),
+  });
   rt.spawn(async move {
     let arguments = args.to_string();
     let tool_for_call = tool.clone();
     let call = async move { tooling.call_tool(&tool_for_call, args).await };
     tokio::pin!(call);
-    tokio::select! {
+    let reason = tokio::select! {
       biased;
 
       _ = &mut cancel => {
         tracing::debug!(agent = %name, uuid = %uuid, tool = %tool, "tool call cancelled");
+        HostCloseReason::Cancelled
       }
       res = &mut call => {
         match res {
@@ -61,15 +68,23 @@ pub fn spawn_pump(
                 structured_content: result.structured_content.map(|v| v.to_string()),
               }),
             );
+            HostCloseReason::Ended
           }
           Err(e) => {
             tracing::error!(agent = %name, uuid = %uuid, tool = %tool, error = %e, "tool call failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
+            HostCloseReason::Failed
           }
         }
       }
-    }
+    };
     calls.remove(&uuid);
+    bus.trace_event(TraceEvent::HostClosed {
+      agent: name.clone(),
+      kind: HostKind::ToolCall,
+      uuid: uuid.clone(),
+      reason,
+    });
   });
 }
 

@@ -56,9 +56,12 @@
         "reload_grace_secs": 5,
         "reload_poll_ms": 200,
         "session_buffer": 8192,
+        "test_timeout_secs": 30,
         "tooling_connect_backoff_cap_secs": 30,
         "tooling_connect_backoff_start_ms": 100,
         "trace_buffer": 4096,
+        "tui_tab_capacity": 2000,
+        "tui_tick_ms": 80,
         "watch_debounce_ms": 200
       }
     }
@@ -257,7 +260,7 @@
       "type": "object",
       "properties": {
         "listen": {
-          "description": "Socket address to listen on, e.g. `\"127.0.0.1:8080\"` or\n`\"0.0.0.0:8080\"`. Hostnames (e.g. `\"localhost:8080\"`) are rejected at\nstartup.",
+          "description": "Socket address to listen on, e.g. `\"127.0.0.1:37532\"` or\n`\"0.0.0.0:37532\"`. Hostnames (e.g. `\"localhost:37532\"`) are rejected at\nstartup.",
           "type": "string"
         }
       },
@@ -484,6 +487,13 @@
           "default": 8192,
           "minimum": 0
         },
+        "test_timeout_secs": {
+          "description": "How long a single testing-harness run may take before it is force-stopped\nand every unsettled agent marked timed out, in seconds. `0` disables it.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
         "tooling_connect_backoff_cap_secs": {
           "description": "Backoff cap for tooling reconnects on failure, in seconds.",
           "type": "integer",
@@ -503,6 +513,20 @@
           "type": "integer",
           "format": "uint",
           "default": 4096,
+          "minimum": 0
+        },
+        "tui_tab_capacity": {
+          "description": "How many log lines each live-view tab keeps before the oldest are\ndropped. `0` means unlimited.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2000,
+          "minimum": 0
+        },
+        "tui_tick_ms": {
+          "description": "How long the live view's render loop waits between redraws, in ms. It is\nboth the spinner cadence and the maximum redraw interval.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 80,
           "minimum": 0
         },
         "watch_debounce_ms": {

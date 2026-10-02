@@ -121,10 +121,10 @@ fn build_one(
     .output()
     .with_context(|| format!("failed to run {cargo}"))?;
   if !output.status.success() {
+    emit_captured("cargo", &output.stderr);
     anyhow::bail!(
-      "cross-build of {} for wasm32-wasip2 failed: {}",
-      source.display(),
-      String::from_utf8_lossy(&output.stderr)
+      "cross-build of {} for wasm32-wasip2 failed",
+      source.display()
     );
   }
 
@@ -170,13 +170,20 @@ fn wrap(module: &Path, wasm_tools: Option<&str>) -> Result<PathBuf> {
     .output()
     .context("failed to run wasm-tools")?;
   if !output.status.success() {
-    anyhow::bail!(
-      "wasm-tools component new failed for {}: {}",
-      module.display(),
-      String::from_utf8_lossy(&output.stderr)
-    );
+    emit_captured("wasm-tools", &output.stderr);
+    anyhow::bail!("wasm-tools component new failed for {}", module.display());
   }
   Ok(component)
+}
+
+/// Re-emit a captured subprocess stream as `source`-tagged events, so a
+/// compiler's own diagnostics flow through the output policy instead of being
+/// embedded in an error string.
+fn emit_captured(source: &str, bytes: &[u8]) {
+  let text = String::from_utf8_lossy(bytes);
+  for line in text.lines() {
+    tracing::error!(source, "{line}");
+  }
 }
 
 fn crate_root(source: &Path) -> PathBuf {

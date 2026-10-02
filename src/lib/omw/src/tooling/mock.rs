@@ -490,6 +490,33 @@ impl Tooling for MockTooling {
       tracing::warn!("could not attach the trace to the tooling mock");
     }
   }
+
+  fn snapshot(&self) -> Option<Value> {
+    let consumed = self
+      .tool_call_next
+      .try_lock()
+      .ok()
+      .map(|cursor| (*cursor).min(self.tool_calls.len()))?;
+    let calls = self
+      .calls
+      .try_lock()
+      .ok()
+      .map(|calls| {
+        calls
+          .iter()
+          .map(|call| {
+            serde_json::json!({ "name": call.name, "arguments": call.arguments })
+          })
+          .collect::<Vec<_>>()
+      })?;
+    Some(serde_json::json!({
+      "kind": "tooling",
+      "tool_calls_total": self.tool_calls.len(),
+      "tool_calls_consumed": consumed,
+      "tool_calls_remaining": self.tool_calls.len().saturating_sub(consumed),
+      "calls": calls,
+    }))
+  }
 }
 
 #[cfg(test)]
@@ -642,6 +669,35 @@ mod tests {
     ));
     assert_eq!(tooling.list_resources().await?[0].uri, "mem://b");
     assert!(list.next().await.is_none());
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn snapshot_reports_consumed_and_remaining_tool_calls()
+  -> anyhow::Result<()> {
+    let tooling = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [
+          { "name": "echo", "result": "hi" },
+          { "name": "add", "result": "3" },
+        ],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let snapshot = tooling
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["tool_calls_total"], 2);
+    assert_eq!(snapshot["tool_calls_consumed"], 0);
+
+    tooling.call_tool("echo", serde_json::json!({})).await?;
+    let snapshot = tooling
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["tool_calls_consumed"], 1);
+    assert_eq!(snapshot["tool_calls_remaining"], 1);
+    assert_eq!(snapshot["calls"][0]["name"], "echo");
     Ok(())
   }
 }

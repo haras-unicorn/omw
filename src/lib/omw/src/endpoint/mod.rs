@@ -70,6 +70,13 @@ pub trait Endpoint: Send + Sync {
     registry: Arc<EndpointRegistry>,
     shutdown: crate::shutdown::Shutdown,
   ) -> anyhow::Result<()>;
+
+  /// A machine-readable snapshot of this instance's scripted queue state,
+  /// used by the testing harness to explain a failure. Real back ends return
+  /// `None`; the built-in mock reports how many scripted requests fired.
+  fn snapshot(&self) -> Option<Value> {
+    None
+  }
 }
 
 /// Build an endpoint from opaque params. Implemented per back end; the

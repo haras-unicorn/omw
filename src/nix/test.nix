@@ -296,6 +296,7 @@ in
               enable = true;
               mode = lib.mkDefault "run";
               variant = lib.mkDefault "rhai";
+              package = lib.mkDefault self.packages.${system}.omw-rhai-ci;
             };
           };
         };

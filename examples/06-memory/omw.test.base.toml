@@ -1,7 +1,8 @@
 # 06-memory: seeded memory fast-forwards an agent to a state.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
+# Base config, shared across variants: the provider, the seeded memory, each
+# agent's wiring and the assertions. The per-variant `omw.test.toml` adds only
+# the runtime kind and brain scripts. Run the case with
 # `omw-test run examples/06-memory`.
 
 [providers.openai]
@@ -14,12 +15,8 @@ turns = [{ content = "seeded reply" }]
 [memory.alice]
 state = { model = "seed-42", retries = 3 }
 
-[runtime.runtime]
-kind = "{{RUNTIME}}"
-
 [agents.alice]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.alice]
 outcome = "completed"

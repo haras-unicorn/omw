@@ -225,6 +225,20 @@ impl Provider for MockProvider {
       deltas.into_iter().map(Ok),
     )))
   }
+
+  fn snapshot(&self) -> Option<Value> {
+    let cursor = self.cursor.try_lock().ok().map(|cursor| *cursor)?;
+    let calls = self.calls.try_lock().ok().map(|calls| calls.len())?;
+    let consumed = cursor.min(self.turns.len());
+    Some(serde_json::json!({
+      "kind": "provider",
+      "turns_total": self.turns.len(),
+      "turns_consumed": consumed,
+      "turns_remaining": self.turns.len().saturating_sub(consumed),
+      "chat_calls": calls,
+      "models": self.models,
+    }))
+  }
 }
 
 /// Expand one scripted turn into the deltas the mock streams: reasoning first
@@ -370,6 +384,32 @@ mod tests {
     let configured =
       MockProvider::build("m", &serde_json::json!({ "models": ["a", "b"] }))?;
     assert_eq!(configured.list_models().await?, vec!["a", "b"]);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn snapshot_reports_consumed_and_remaining_turns() -> anyhow::Result<()>
+  {
+    let provider = MockProvider::build(
+      "m",
+      &serde_json::json!({
+        "turns": [{ "content": "a" }, { "content": "b" }],
+        "models": ["m"],
+      }),
+    )?;
+    let snapshot = provider
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["turns_total"], 2);
+    assert_eq!(snapshot["turns_consumed"], 0);
+
+    let _ = provider.chat("m", Vec::new(), Vec::new(), None).await?;
+    let snapshot = provider
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["turns_consumed"], 1);
+    assert_eq!(snapshot["turns_remaining"], 1);
+    assert_eq!(snapshot["chat_calls"], 1);
     Ok(())
   }
 }

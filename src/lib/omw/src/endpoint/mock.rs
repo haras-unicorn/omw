@@ -93,6 +93,8 @@ fn default_poll_ms() -> u64 {
 pub struct MockEndpoint {
   requests: Vec<Request>,
   poll: Duration,
+  /// How many scripted requests have been routed so far.
+  fired: std::sync::atomic::AtomicUsize,
 }
 
 impl Factory for MockEndpoint {
@@ -102,6 +104,7 @@ impl Factory for MockEndpoint {
     Ok(Arc::new(MockEndpoint {
       requests: config.requests,
       poll: Duration::from_millis(config.poll_ms),
+      fired: std::sync::atomic::AtomicUsize::new(0),
     }))
   }
 }
@@ -141,6 +144,9 @@ impl Endpoint for MockEndpoint {
         stream = request.stream,
         "endpoint mock routing a request"
       );
+      self
+        .fired
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
       let open = Arc::clone(&registry).open(&agent, &subscription);
       let session = open.session.clone();
       let messages: Vec<ChatMessage> = request
@@ -163,6 +169,16 @@ impl Endpoint for MockEndpoint {
       drain(&registry, &session, open.rx, &shutdown).await;
     }
     Ok(())
+  }
+
+  fn snapshot(&self) -> Option<Value> {
+    let fired = self.fired.load(std::sync::atomic::Ordering::Relaxed);
+    Some(serde_json::json!({
+      "kind": "endpoint",
+      "requests_total": self.requests.len(),
+      "requests_fired": fired,
+      "requests_remaining": self.requests.len().saturating_sub(fired),
+    }))
   }
 }
 
@@ -379,6 +395,20 @@ mod tests {
       .await?;
     emitter.await?;
     assert!(agent.await?);
+    Ok(())
+  }
+
+  #[test]
+  fn snapshot_reports_request_counts() -> anyhow::Result<()> {
+    let endpoint = MockEndpoint::build(&serde_json::json!({
+      "requests": [{ "model": "a" }, { "model": "b" }],
+    }))?;
+    let snapshot = endpoint
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["requests_total"], 2);
+    assert_eq!(snapshot["requests_fired"], 0);
+    assert_eq!(snapshot["requests_remaining"], 2);
     Ok(())
   }
 }

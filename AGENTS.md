@@ -7,7 +7,7 @@ servers, and runs it for one iteration or loops it.
 
 ## Layout
 
-A Cargo workspace with six crates plus a single WIT contract.
+A Cargo workspace with the crates below plus a single WIT contract.
 
 - `src/lib/omw` — the `omw` library crate: the agent runtime logic, a build
   script (`build.rs`) plus the vendored WIT contract under `wit/`.
@@ -39,7 +39,10 @@ A Cargo workspace with six crates plus a single WIT contract.
     the built-in kinds enabled in the build (openai/mcp/openai-endpoint/wasm for
     `omw-cli`, plus the `mock` doubles and any script runtimes for `omw-test`)
     with the generic `ImplConfig` escape hatch, so the schema follows the
-    crate's features (`schema.rs` holds the shared `kind_variant` helper).
+    crate's features (`schema.rs` holds the shared `kind_variant` helper). The
+    global `[tunables]` (`Tunables`) carries the size/timeout/backoff knobs
+    (plus the live-view `tui_tick_ms` / `tui_tab_capacity`), each with a default
+    fn and accessor.
 
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
@@ -47,10 +50,12 @@ A Cargo workspace with six crates plus a single WIT contract.
   - `watch.rs` — the public file-watching module: the generalized `Watcher`
     (`watch` / `add` / `next_change`, `RecursiveMode`) plus `Scripts`, which
     maps each agent's brain script to the agents using it and reports agent
-    names to restart on change. Enabled per invocation with `--watch` on `run` /
-    `loop`; the supervisor in `agent.rs` keeps the shared bus alive across
-    reloads. (Path-to-directory inference is a CLI concern and lives in the
-    binaries.)
+    names to restart on change. Built on `notify-debouncer-full`; access/read
+    events are ignored and only create/modify/remove (and rescan) events count,
+    so a watcher never reacts to its own directory reads. Enabled per invocation
+    with `--watch` on `run` / `loop`; the supervisor in `agent.rs` keeps the
+    shared bus alive across reloads. (Path-to-directory inference is a CLI
+    concern and lives in the binaries.)
 
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
     implemented for OpenAI in `openai.rs` (behind the `provider-openai` feature)
@@ -123,15 +128,18 @@ A Cargo workspace with six crates plus a single WIT contract.
     the `[assertions]` model, parser (`parse(source, Format)`, format-aware),
     and ordered-subsequence pattern matcher (`Matcher`); `harness.rs` drives a
     run through the controlled path, consumes the trace live, stops
-    `outcome = "asserted"` agents as their assertions settle, force-stops
-    stragglers, and returns a `Report`. `assert.rs` also holds the `pub(crate)`
-    `TraceLog` (an append-only trace log with independent per-gate scanning)
-    that the endpoint and tooling mocks gate `after` on. `scaffold.rs` holds the
-    best-effort `scaffold` function that converts a deployment `Config` into a
-    structured `toml::Table` test config whose provider/tooling/endpoint are the
-    in-config mocks, introspecting the real back ends through the registries to
-    pre-populate models/tools/resources; rendering it (pretty-printing, the
-    provenance banner, the output path) is the `omw` binary's job. Exposed as
+    `outcome = "asserted"` agents as their assertions settle (logging a settle
+    line), bounds the run by `tunables.test_timeout_secs` (marking unsettled
+    agents timed out), snapshots the mock back ends' scripted queues, and
+    returns a `Report` whose `AgentReport`s carry the observed events, cursor
+    and diff. `assert.rs` also holds the `pub(crate)` `TraceLog` (an append-only
+    trace log with independent per-gate scanning) that the endpoint and tooling
+    mocks gate `after` on. `scaffold.rs` holds the best-effort `scaffold`
+    function that converts a deployment `Config` into a structured `toml::Table`
+    test config whose provider/tooling/endpoint are the in-config mocks,
+    introspecting the real back ends through the registries to pre-populate
+    models/tools/resources; rendering it (pretty-printing, the provenance
+    banner, the output path) is the `omw` binary's job. Exposed as
     `omw::testing` and re-exported from `prelude`; the `omw-test` binary is a
     thin CLI over it.
 
@@ -165,12 +173,36 @@ A Cargo workspace with six crates plus a single WIT contract.
     - `ctx.rs` is `AgentContext`.
 
     - `trace.rs` is the optional broadcast trace channel (`TraceEvent` = inbound
-      / call / outcome, `TraceSender`, `AgentTrace`, `group`) that `omw-test`
+      / call / host-opened / host-closed / outcome, with `HostKind` and a
+      `HostCloseReason`; `TraceSender`, `AgentTrace`, `group`) that `omw-test`
       and embedders use to observe what agents saw and did. Both `MessageBus`
       and `AgentContext` hold an `Option<TraceSender>`, so it is zero-overhead
       when unset; `MessageBus::trace_sender` lets the endpoint and tooling mocks
       build a shared append-only `TraceLog` for `after` gating (one gate path,
       safe across subscriptions and agents).
+
+- `src/lib/omw-output` — the binary-only shared output-policy crate
+  (`publish = false`, picked up by the `src/lib/*` member glob): the `LogFormat`
+  model plus `auto` detection (both stdio terminals → tty, then `JOURNAL_STREAM`
+  → journald, else pipe), `command_line` (the launched `argv` as one string for
+  the info panel), `producer_format` (a data producer never shows the live
+  view), `init_logging` (the journald layer, the JSONL `pipe` layer, or the
+  ratatui/crossterm live view), and the once-only `report_error`. The live view
+  (`live.rs` state + `Live` handle, `layer.rs` tracing layer, `tui.rs` render
+  thread) is driven on stderr so a redirected stdout keeps carrying data; it
+  routes MCP child stderr to `mcp:<name>` sources by the `source`/`tooling`
+  fields, and both views share a rounded-bordered info panel (command +
+  `set_details` facts): the `Agents` view pairs a "Sources" list with a log
+  pane, the `Tests` view pairs a "Tests" list (`✅`/`❌` marks + a spinner) with
+  a "Logs" pane and a bordered gauge. It honours `NO_COLOR`, restores the
+  terminal on drop/panic, and falls back to `pipe` when raw mode cannot be
+  entered. `init_logging` returns `Option<Live>`; the binaries own the handle
+  and select on its quit receiver so Ctrl-C in raw mode requests the library's
+  `Shutdown`. Because the view starts before config load, the binaries push the
+  `tunables.tui_tick_ms` / `tui_tab_capacity` knobs into it with
+  `Live::configure` (crate-local defaults hold until then; `0` capacity is
+  unlimited). This crate depends on `ratatui` + `crossterm`; the `omw` library
+  does not depend on it.
 
 - `src/bin/omw-cli` — the OMW CLI binary crate. It contains a basic run
   function, argument/config parsing and initialization for `tracing` and
@@ -183,34 +215,46 @@ A Cargo workspace with six crates plus a single WIT contract.
   writes an `omw.test.toml` with mock back ends pre-populated from the real
   ones. Config paths default to the first of `omw.{toml,yaml,yml,json}` in the
   current directory and are parsed by extension or a `--format` override (a
-  standard stream needs `--format`). `tests/` holds process-level integration
-  tests (spawned with `assert_cmd`): argv/exit codes, config paths and format
-  inference, the stdio convention, the `OMW__` env overlay, and graceful
-  SIGTERM/SIGINT shutdown (a raw process + `nix`, watching stderr for a ready
-  marker).
+  standard stream needs `--format`). `run`/`loop` install the live view when the
+  resolved format is `tty`, announce a status line, and select on the live
+  view's quit receiver (Ctrl-C in raw mode) to request the library's `Shutdown`;
+  `schema`/`scaffold` are data producers and always log on `pipe`. `tests/`
+  holds process-level integration tests (spawned with `assert_cmd`): argv/exit
+  codes, config paths and format inference, the stdio convention, the `OMW__`
+  env overlay, and graceful SIGTERM/SIGINT shutdown (a raw process + `nix`,
+  watching stderr for a ready marker).
 
 - `src/bin/omw-test` — the deterministic brain-testing binary crate. Mirrors
   `omw-cli` (`cli`, `log`, `tls`, `stdio`) plus `collect.rs` (recursive
   test-config discovery — a file whose stem is `omw.test` or ends with
   `.omw.test` and whose extension is `toml`/`yaml`/`yml`/`json` — plus
   root-relative-path include/exclude filtering and format-aware config/assertion
-  loading), `run.rs` (traced run + assertion check via `omw::testing`) and
-  `wasm.rs` (the hidden `compile-wasm` subcommand that cross-builds a
-  caller-supplied rust brain file or tree for `wasm32-wasip2` into components,
-  gated behind the non-default `compile-wasm` feature that only the dev shell
-  enables). The `[assertions]` model/parser/matcher and the `--watch` debounced
-  watcher live in the `omw` library (`omw::testing`); the binary only discovers,
-  filters, prints and sets the exit code. `omw-test run [path]` (default `.`)
-  recursively runs every discovered config through the `omw::testing` harness
-  against the in-config `kind = "mock"` doubles, printing `PASS`/`FAIL` per test
-  and exiting non-zero with a diff when an assertion mismatches; a
-  standard-stream path (`-`, `/dev/stdin`) is a single config read from stdin
-  (needs `--format`); `--include`/`--exclude` filter the root-relative config
-  paths and `--watch` re-runs on change. Depends on `omw` with
-  `default-features = false, features = ["mock"]` (plus the script runtimes).
-  `tests/` holds process-level integration tests (spawned with `assert_cmd`):
-  argv/exit codes, the stdio convention, the `OMW_TEST__` env overlay, and `run`
-  PASS/FAIL/discovery/filter semantics.
+  loading, attaching each test's inherited `omw.test.base.<ext>` ancestors and
+  layering them under it by deep table merge), `run.rs` (traced run + assertion
+  check via `omw::testing`) and `wasm.rs` (the hidden `compile-wasm` subcommand
+  that cross-builds a caller-supplied rust brain file or tree for
+  `wasm32-wasip2` into components, gated behind the non-default `compile-wasm`
+  feature that only the dev shell enables). The `[assertions]`
+  model/parser/matcher and the `--watch` debounced watcher live in the `omw`
+  library (`omw::testing`); the binary only discovers, filters, prints and sets
+  the exit code. `omw-test run [path]` (default `.`) recursively runs every
+  discovered config through the `omw::testing` harness against the in-config
+  `kind = "mock"` doubles, printing `PASS`/`FAIL` per test and exiting non-zero
+  with a diff when an assertion mismatches; it is fail-fast by default (`--all`
+  keeps going), each test inherits the `omw.test.base.<ext>` configs in its
+  directory and ancestors up to the discovery root, `--dump <path>` writes
+  per-test traces and mock snapshots as JSON, YAML or TOML (`--dump-format`,
+  default JSON), and a standard-stream path (`-`, `/dev/stdin`) is a single
+  config read from stdin (needs `--format`); `--include`/`--exclude` filter the
+  root-relative config paths and `--watch` re-runs on change. On `tty` it drives
+  the live view's `Tests` view (a tests list marked `✅`/`❌`, a logs/failure
+  pane, a bordered gauge) and resets it each `--watch` pass; verdicts go to
+  stdout only when stdout is not the terminal the live view owns, and after the
+  live view tears down the per-test lines and tally are replayed to stdout.
+  Depends on `omw` with `default-features = false, features = ["mock"]` (plus
+  the script runtimes). `tests/` holds process-level integration tests (spawned
+  with `assert_cmd`): argv/exit codes, the stdio convention, the `OMW_TEST__`
+  env overlay, and `run` PASS/FAIL/discovery/filter semantics.
 - `src/wasm/omw-wasm-rhai-interpreter` — the Rhai guest component
   (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
@@ -253,26 +297,33 @@ A Cargo workspace with six crates plus a single WIT contract.
 - `examples/` — runnable brain examples (not a workspace member): `01-hello`,
   `02-tool-agent`, `03-endpoint`, `04-ping-pong`, `05-patterns`, `06-memory`,
   `07-asserted`, `08-endpoint-order` and `09-resources`, each one shared
-  `omw.test.template.toml` (`{{RUNTIME}}` / `{{SCRIPT}}` placeholders),
-  per-variant `rhai/`, `js/` and `wasm/` dirs (`brain.rhai` / `brain.js` /
-  `brain.rs`), a committed generated `<variant>/omw.test.toml` per variant, and
-  a `README.md`. `dev format` regenerates the per-variant configs and `dev lint`
-  regenerates-and-compares them. `dev test example brain <case> <variant>`
-  builds that cell's `brain.rs` to `brain.wasm` (scaffolding a throwaway crate
-  in the system temp dir) and runs one dir; `dev test brain examples` runs every
+  `omw.test.base.toml` (the provider/tooling/endpoint wiring, each agent's
+  `runtime` and the `[assertions]`), per-variant `rhai/`, `js/` and `wasm/` dirs
+  (`brain.rhai` / `brain.js` / `brain.rs`), a committed generated
+  `<variant>/omw.test.toml` (only the runtime `kind` and each agent's `script`),
+  and a `README.md`. `dev format` regenerates the per-variant configs from the
+  base config and `dev lint` regenerates-and-compares them.
+  `dev test example brain <case> <variant>` builds that cell's `brain.rs` to
+  `brain.wasm` (scaffolding a throwaway crate in the system temp dir), then runs
+  the case with only that variant included; `dev test brain examples` runs every
   cell, gating the `wasm` cells on `OMW_TEST_WASM_RUNTIME_NON_NATIVE`, and
-  `dev test` runs it alongside the library examples and unit tests. The
-  templated TOMLs drive the in-config `kind = "mock"` doubles and carry an
-  `[assertions.<agent>]` section.
+  `dev test` runs it alongside the library examples and unit tests. The base
+  configs drive the in-config `kind = "mock"` doubles and carry the
+  `[assertions.<agent>]` sections.
 
 - `docs/` — mdbook documentation, published to GitHub Pages. `docs/testing/`
   (the binary plus per-mock pages) and `docs/examples.md` cover the test and
   example features.
 
 - `src/nix/dev.nix` / `src/nix/dev.nu` — the flake's `dev` wrapper: `dev.nix`
-  builds the dev shells and points the wrapper at `dev.nu`, which defines the
-  `dev` subcommands (`format` / `lint` / `test` / `build` / `release*` /
-  `update`) and the `omw` helpers they share.
+  builds the dev shells, owns the `binaries`/`variants`/`formats` build-matrix
+  axes (also exposed as `flake.lib`, each variant carrying its runtime kind and
+  example `source`/`script`), and points the wrapper at `dev.nu`, which defines
+  the `dev` subcommands (`format` / `lint` / `test` / `build` / `release*` /
+  `update`) and the `omw` helpers they share. `dev.nu` evaluates
+  `flake.lib.{binaries,variants,formats}` (via `omw matrix`) as the single
+  source of truth for builds, tarballs and examples, so adding a runtime is a
+  new entry in `variants`.
 - `src/nix/json-schema-to-typescript.nix` — a flake-parts module that packages
   the `json-schema-to-typescript` CLI (`json2ts`, which is not in nixpkgs) as a
   `buildNpmPackage` from the pinned upstream source
@@ -385,18 +436,46 @@ wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
   compilation, MCP servers or the OpenAI API)
 - `dev test example lib <example>` — run one library example
 - `dev test example brain <case> <variant>` — build that cell's `brain.wasm`
-  when needed and run one example dir
+  when needed and run one example dir with its case's common config
 - `dev update` — `nix flake update` plus `cargo update`
 - `dev release-pr` — `release-plz release-pr` (opens the release PR)
 - `dev release` — vendors the wasm guests first
   (`OMW_WASM_BUILD_VENDORED=1 cargo build --release -p omw --features runtime-rhai,runtime-js,mock`),
   then `release-plz release` (tags + publishes on release PR merge)
-- `dev build` — `nix build`s the
+- `dev build` — builds the
   `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball`/`omw-test-tarball` packages
   (per-arch `omw[-rhai,-js,-test]-<arch>.tar.gz` via `runCommand`) and uploads
-  them to the tag release (`GITHUB_REF_NAME`) with `gh`
-- `dev lint` — prettier/cspell/nixfmt/markdownlint/taplo checks, then
-  `dev test`, then `nix flake check` — CI (`check.yaml`) runs `dev lint`
+  them to the tag release (`GITHUB_REF_NAME`) with `gh`, one artifact at a time
+  so a killed job still leaves the earlier tarballs uploaded; then builds the
+  wrapped/unwrapped flake packages (already warm from the tarball build) and
+  pushes their runtime closure to the public `haras-releases` Cachix cache,
+  pinning each (`<attr>-<system>`, `--keep-days 365`)
+- `dev lint` — the local full CI pass: `dev lint check`, `dev lint test`,
+  `dev lint nix --all-systems`, then `dev lint build`
+- `dev lint check` — the static checks: wit/options/schema/`.d.ts`/per-variant
+  config freshness, prettier, cspell, nixfmt, markdownlint, markdown-link-check,
+  taplo and `cargo fmt --check`
+- `dev lint test` — the same tasks as `dev test`
+- `dev lint nix [--all-systems]` — `nix flake check --show-trace` (optionally
+  across systems)
+- `dev lint build` — `nix build .#omw-tarball`, building the release-profile
+  (fat-LTO) null-variant tarball so a broken release build is caught before the
+  tag `build` workflow
+
+CI (`check.yaml`) runs `dev lint check`, `dev lint test`, `nix flake check` and
+`nix build .#omw-tarball` in parallel jobs; the `nix` and `build` jobs are
+runner matrices (`ubuntu-latest`, `ubuntu-24.04-arm`) so each arch checks
+itself. The PR check builds the `ci` cargo profile (no LTO,
+`codegen-units = 16`, `opt-level = 1`) via the `ci-unwrapped` / `ci-wrapped` Nix
+formats, while shipped Nix packages, `apps` and tarballs keep the `release`
+profile. `ci-wrapped` shares the `wrapped` wrapper function so both stay in
+sync.
+
+There are two Cachix caches: `haras` is the general CI cache (every workflow
+pushes to it, `name: haras`) and `haras-releases` is the curated public cache
+for users. CI jobs pull from both (`extraPullNames: haras-releases`); only
+`dev build` writes to `haras-releases`, and `flake.nix` / `README.md` point
+users there.
 
 Do not use any shell commands other than the ones provided by `dev`. Please
 prefer `dev test fast` over `dev test` if you don't need to test stuff that

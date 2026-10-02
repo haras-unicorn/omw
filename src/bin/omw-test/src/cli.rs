@@ -12,10 +12,14 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use omw::config::Format;
+use omw_output::LogFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "omw-test", about = "Deterministic OMW brain testing")]
 pub struct Cli {
+  /// Log format: `auto`, `tty`, `pipe` or `journald`
+  #[arg(long, global = true, value_enum, default_value = "auto")]
+  pub log_format: LogFormat,
   #[command(subcommand)]
   pub command: Command,
 }
@@ -60,6 +64,16 @@ pub struct RunArgs {
   /// Config format; inferred from each file's extension when omitted
   #[arg(long, value_name = "FORMAT")]
   pub format: Option<Format>,
+  /// Run every discovered test; without this, stop at the first failure
+  #[arg(long)]
+  pub all: bool,
+  /// Write per-test traces and mock snapshots (`-` / `/dev/stdout` streams
+  /// them)
+  #[arg(long, value_name = "PATH")]
+  pub dump: Option<PathBuf>,
+  /// Format of the `--dump` output (`json`, `yaml` or `toml`)
+  #[arg(long, value_name = "FORMAT", default_value = "json")]
+  pub dump_format: Format,
   /// Re-run on change instead of exiting
   #[arg(long)]
   pub watch: bool,
@@ -129,6 +143,9 @@ mod tests {
         include: Vec::new(),
         exclude: Vec::new(),
         format: None,
+        all: false,
+        dump: None,
+        dump_format: Format::Json,
         watch: false,
       })
     );
@@ -155,6 +172,9 @@ mod tests {
         include: vec!["**/rhai".to_owned(), "**/js".to_owned()],
         exclude: vec!["**/wasm".to_owned()],
         format: None,
+        all: false,
+        dump: None,
+        dump_format: Format::Json,
         watch: true,
       })
     );

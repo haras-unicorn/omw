@@ -17,7 +17,10 @@ loop_backoff_cap_secs = 30
 tooling_connect_backoff_start_ms = 100
 tooling_connect_backoff_cap_secs = 30
 watch_debounce_ms = 200
+tui_tick_ms = 80
+tui_tab_capacity = 2000
 trace_buffer = 4096
+test_timeout_secs = 30
 session_buffer = 8192
 cancel_pumps_on_reload = true
 allow_unlocked_secrets = false
@@ -41,7 +44,10 @@ e.g. `OMW__TUNABLES__RECV_TIMEOUT_SECS=30`.
 | `tooling_connect_backoff_start_ms` | ms     | 100     | Backoff start for MCP tooling reconnects.           |
 | `tooling_connect_backoff_cap_secs` | secs   | 30      | Backoff cap for MCP tooling reconnects (doubling).  |
 | `watch_debounce_ms`                | ms     | 200     | How long the watcher coalesces one save's events.   |
+| `tui_tick_ms`                      | ms     | 80      | Live-view redraw interval and spinner cadence.      |
+| `tui_tab_capacity`                 | lines  | 2000    | Per-tab live-view log cap; `0` means unlimited.     |
 | `trace_buffer`                     | events | 4096    | Capacity of the `omw-test` trace broadcast channel. |
+| `test_timeout_secs`                | secs   | 30      | Harness run bound; `0` disables it.                 |
 | `session_buffer`                   | deltas | 8192    | Per-session endpoint reply buffer before drops.     |
 | `cancel_pumps_on_reload`           | bool   | true    | Cancel open pumps on reload; `false` keeps them.    |
 | `allow_unlocked_secrets`           | bool   | false   | Permit secrets to stay unlocked when `mlock` fails. |

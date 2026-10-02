@@ -28,6 +28,7 @@ jobs:
       - uses: cachix/cachix-action@v15
         with:
           name: haras
+          extraPullNames: haras-releases
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - run: nix develop .#ci --command dev release-pr
         env:

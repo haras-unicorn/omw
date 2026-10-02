@@ -20,6 +20,26 @@ fn passing_case_reports_pass_and_exits_zero() {
 }
 
 #[test]
+fn verdicts_go_to_stdout_and_logs_to_stderr() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "case", "chat");
+  let assert = common::omw_test()
+    .args(["run"])
+    .arg(dir.path())
+    .assert()
+    .success();
+  let output = assert.get_output();
+  let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+  let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+  assert!(stdout.contains("PASS"), "got: {stdout}");
+  assert!(stdout.contains("passed"), "got: {stdout}");
+  assert!(
+    stderr.contains("\"level\":\"INFO\""),
+    "logs should be JSONL on stderr, got: {stderr}"
+  );
+}
+
+#[test]
 fn failing_assertion_reports_fail_and_exits_nonzero() {
   let dir = tempdir().unwrap();
   common::write_case(dir.path(), "case", "nope");
@@ -83,4 +103,151 @@ fn run_reads_a_config_from_stdin() {
     .assert()
     .success()
     .stdout(predicate::str::contains("PASS"));
+}
+
+#[test]
+fn base_config_layers_under_discovered_tests() {
+  let dir = tempdir().unwrap();
+  let config = common::write_case(dir.path(), "case", "chat");
+  // Shrink the test config to the variant-local wiring: the runtime kind and
+  // the agent's script. Everything else comes from the base config.
+  std::fs::write(
+    &config,
+    r#"
+[runtime.runtime]
+kind = "rhai"
+
+[agents.alice]
+script = "brain.rhai"
+"#,
+  )
+  .unwrap();
+  // The base config sits at the discovery root, so it reaches the case below.
+  let base = dir.path().join("omw.test.base.toml");
+  std::fs::write(
+    &base,
+    r#"
+[providers.openai]
+kind = "mock"
+turns = [{ content = "hello, world" }]
+
+[agents.alice]
+runtime = "runtime"
+
+[assertions.alice]
+outcome = "completed"
+events = [{ kind = "call", op = "chat" }]
+"#,
+  )
+  .unwrap();
+
+  common::omw_test()
+    .args(["run"])
+    .arg(dir.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("PASS"));
+}
+
+#[test]
+fn forced_tty_falls_back_to_pipe_when_stderr_is_not_a_terminal() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "case", "chat");
+  let assert = common::omw_test()
+    .args(["run", "--log-format", "tty"])
+    .arg(dir.path())
+    .assert()
+    .success();
+  let output = assert.get_output();
+  let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+  assert!(
+    stderr.contains("live view unavailable"),
+    "should fall back to pipe, got: {stderr}"
+  );
+  assert!(
+    stderr.contains("\"level\":\"INFO\""),
+    "logs should be JSONL after the fallback, got: {stderr}"
+  );
+  let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+  assert!(stdout.contains("PASS"), "got: {stdout}");
+}
+
+#[test]
+fn fail_fast_stops_at_the_first_failure_while_all_runs_every_test() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "a", "nope");
+  common::write_case(dir.path(), "b", "nope");
+
+  let assert = common::omw_test()
+    .args(["run"])
+    .arg(dir.path())
+    .assert()
+    .failure();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  assert_eq!(
+    stdout.matches("FAIL").count(),
+    1,
+    "fail-fast should run only the first test, got: {stdout}"
+  );
+
+  let assert = common::omw_test()
+    .args(["run", "--all"])
+    .arg(dir.path())
+    .assert()
+    .failure();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  assert_eq!(
+    stdout.matches("FAIL").count(),
+    2,
+    "--all should run both tests, got: {stdout}"
+  );
+}
+
+#[test]
+fn dump_writes_per_test_traces_and_mock_snapshots() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "case", "chat");
+  let dump = dir.path().join("dump.json");
+  common::omw_test()
+    .args(["run", "--dump"])
+    .arg(&dump)
+    .arg(dir.path())
+    .assert()
+    .success();
+  let json = std::fs::read_to_string(&dump).unwrap();
+  assert!(json.contains("\"tests\""), "{json}");
+  assert!(json.contains("\"test\": \"case/omw.test.toml\""), "{json}");
+  assert!(json.contains("\"observed\""), "{json}");
+  assert!(json.contains("\"turns_total\": 1"), "{json}");
+  assert!(json.contains("\"turns_consumed\": 1"), "{json}");
+}
+
+#[test]
+fn dump_format_yaml_and_toml_are_honored() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "case", "chat");
+
+  let yaml = dir.path().join("dump.yaml");
+  common::omw_test()
+    .args(["run", "--dump"])
+    .arg(&yaml)
+    .args(["--dump-format", "yaml"])
+    .arg(dir.path())
+    .assert()
+    .success();
+  let text = std::fs::read_to_string(&yaml).unwrap();
+  assert!(text.contains("tests:"), "{text}");
+  assert!(text.contains("case/omw.test.toml"), "{text}");
+
+  let toml = dir.path().join("dump.toml");
+  common::omw_test()
+    .args(["run", "--dump"])
+    .arg(&toml)
+    .args(["--dump-format", "toml"])
+    .arg(dir.path())
+    .assert()
+    .success();
+  let text = std::fs::read_to_string(&toml).unwrap();
+  assert!(text.contains("[[tests]]"), "{text}");
+  assert!(text.contains("case/omw.test.toml"), "{text}");
 }

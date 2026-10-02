@@ -6,15 +6,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use glob::Pattern;
 use omw::config::{Config, Format};
-use omw::testing::{Assertions, parse};
+use omw::testing::Assertions;
+use serde_json::Value;
 
 /// A config file is collected when its stem is `omw.test` or ends with
 /// `.omw.test`, and its extension is one of the supported formats, so several
-/// test configs can live side by side in one directory. `omw.test.template.toml`
-/// never matches.
+/// test configs can live side by side in one directory. A shared base config
+/// (`omw.test.base.<ext>`) never matches.
 const CONFIG_STEM: &str = "omw.test";
 const CONFIG_SUFFIX: &str = ".omw.test";
 const CONFIG_EXTENSIONS: [&str; 4] = ["toml", "yaml", "yml", "json"];
+const BASE_STEM: &str = "omw.test.base";
 
 /// Whether `name` names a discoverable test config.
 fn is_test_config(name: &str) -> bool {
@@ -27,12 +29,45 @@ fn is_test_config(name: &str) -> bool {
   stem == CONFIG_STEM || stem.ends_with(CONFIG_SUFFIX)
 }
 
+/// The base configs that apply to `config`, outermost ancestor first: for each
+/// directory from the discovery `root` down to the config's own directory, the
+/// `omw.test.base.<ext>` file it contains (if any). A base only reaches down
+/// the tree, never above the path passed to `discover`.
+fn base_configs(config: &Path, root: &Path) -> Vec<PathBuf> {
+  let mut dirs = Vec::new();
+  let mut current = config.parent();
+  while let Some(dir) = current {
+    let normalized = if dir.as_os_str().is_empty() {
+      PathBuf::from(".")
+    } else {
+      dir.to_path_buf()
+    };
+    dirs.push(normalized.clone());
+    if normalized == root {
+      break;
+    }
+    current = dir.parent().filter(|parent| !parent.as_os_str().is_empty());
+  }
+  dirs.reverse();
+  dirs.iter().filter_map(|dir| base_in(dir)).collect()
+}
+
+/// The base config in `dir`, trying each supported extension in order.
+fn base_in(dir: &Path) -> Option<PathBuf> {
+  CONFIG_EXTENSIONS
+    .iter()
+    .map(|extension| dir.join(format!("{BASE_STEM}.{extension}")))
+    .find(|path| path.is_file())
+}
+
 /// One discovered test: its config file and its path relative to the discovery
-/// root (used as the label and by `--include` / `--exclude`).
+/// root (used as the label and by `--include` / `--exclude`), plus the shared
+/// base configs that apply to it (outermost ancestor first).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Test {
   pub config: PathBuf,
   pub relative: String,
+  pub bases: Vec<PathBuf>,
 }
 
 impl Test {
@@ -44,7 +79,8 @@ impl Test {
 
 /// Discover tests under `path`: a file is a single test, a directory is a
 /// recursive walk for `omw.test.toml` / `*.omw.test.toml` (hidden directories
-/// are skipped).
+/// are skipped). Each test carries the `omw.test.base.<ext>` configs in its
+/// directory and its ancestors up to `path` (outermost first).
 pub fn discover(path: &Path) -> Result<Vec<Test>> {
   if !crate::stdio::is_stdin(path) && !path.exists() {
     anyhow::bail!("path {} does not exist", path.display());
@@ -62,6 +98,7 @@ pub fn discover(path: &Path) -> Result<Vec<Test>> {
       .into_iter()
       .map(|config| Test {
         relative: relative_path(&config, base),
+        bases: base_configs(&config, base),
         config,
       })
       .collect(),
@@ -98,26 +135,48 @@ pub fn filter(
 }
 
 /// Read a test config and parse both the runnable [`Config`] (with the
-/// `OMW_TEST__` environment overlay) and its `[assertions]` section. The
-/// format is `format` when given, else inferred from the path's extension.
+/// `OMW_TEST__` environment overlay) and its `[assertions]` section.
+///
+/// `bases` are ordinary `omw.toml`-shaped files layered *under* the test config
+/// in the order given (outermost ancestor first): later sources override earlier
+/// ones, so the test config overrides the base configs it inherits and the
+/// `OMW_TEST__` environment overrides them all. Merging is a deep table merge —
+/// a test config's `[agents.<name>]` or `[assertions.<agent>]` overrides the
+/// base config's keys for that entry while inheriting the rest. A base config
+/// contributes both the `Config` and `[assertions]`.
+///
+/// Each file's format is `format` when given, else inferred from its extension.
+/// A relative `script` in a base config resolves against that base config's
+/// directory, so it always points where it was written.
 pub fn load(
   path: &Path,
   format: Option<Format>,
+  bases: &[PathBuf],
 ) -> Result<(Config, Assertions)> {
+  let mut merged = Value::Object(serde_json::Map::new());
+  for base_path in bases {
+    let raw = crate::stdio::read_to_string(base_path)?;
+    let base_format = resolve_format(base_path, format)?;
+    let mut value = parse_to_value(&raw, base_format).with_context(|| {
+      format!("failed to parse base config {}", base_path.display())
+    })?;
+    resolve_source_scripts(&mut value, base_path);
+    deep_merge(&mut merged, value);
+  }
   let raw = crate::stdio::read_to_string(path)?;
-  let format =
-    format
-      .or_else(|| Format::from_path(path))
-      .with_context(|| {
-        format!(
-          "cannot infer the config format of {}; pass --format",
-          path.display()
-        )
-      })?;
+  let format = resolve_format(path, format)?;
+  let value = parse_to_value(&raw, format)
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+  deep_merge(&mut merged, value);
+
   let env = ::config::Environment::with_prefix("OMW_TEST").separator("__");
   let source: ::config::Config = ::config::Config::builder()
     .add_source(
-      ::config::File::from_str(&raw, file_format(format)).required(false),
+      ::config::File::from_str(
+        &serde_json::to_string(&merged)?,
+        ::config::FileFormat::Json,
+      )
+      .required(false),
     )
     .add_source(env)
     .build()
@@ -135,16 +194,67 @@ pub fn load(
     "configuration loaded"
   );
   tracing::debug!(config = ?config, "configuration details");
-  let assertions = parse(&raw, format)?;
+  let assertions: Assertions = serde_json::from_value(merged)
+    .context("failed to deserialize [assertions]")?;
   Ok((config, assertions))
 }
 
-/// Map an [`omw::config::Format`] onto the `config` crate's file format.
-fn file_format(format: Format) -> ::config::FileFormat {
-  match format {
-    Format::Toml => ::config::FileFormat::Toml,
-    Format::Yaml => ::config::FileFormat::Yaml,
-    Format::Json => ::config::FileFormat::Json,
+/// Resolve a config value's relative agent `script` paths against `source`'s
+/// directory, so each file's scripts are relative to where the file lives.
+fn resolve_source_scripts(value: &mut Value, source: &Path) {
+  let dir = source
+    .parent()
+    .filter(|parent| !parent.as_os_str().is_empty())
+    .unwrap_or(Path::new("."));
+  let Some(agents) = value.get_mut("agents").and_then(Value::as_object_mut)
+  else {
+    return;
+  };
+  for agent in agents.values_mut() {
+    let Some(script) = agent.get("script").and_then(Value::as_str) else {
+      continue;
+    };
+    if Path::new(script).is_relative() {
+      let resolved = dir.join(script).to_string_lossy().into_owned();
+      if let Some(object) = agent.as_object_mut() {
+        object.insert("script".to_owned(), Value::String(resolved));
+      }
+    }
+  }
+}
+
+/// The format for a config path: `format` when given, else inferred from the
+/// path's extension, erroring when neither is available.
+fn resolve_format(path: &Path, format: Option<Format>) -> Result<Format> {
+  format.or_else(|| Format::from_path(path)).with_context(|| {
+    format!(
+      "cannot infer the config format of {}; pass --format",
+      path.display()
+    )
+  })
+}
+
+/// Parse `source` into a JSON value, so sources of any format can be merged.
+fn parse_to_value(source: &str, format: Format) -> Result<Value> {
+  format.parse(source)
+}
+
+/// Deep-merge `overlay` into `base`: objects merge recursively (an overlay key
+/// that is absent from `base` is inserted; a key present in both is merged or
+/// replaced), while arrays and scalars replace wholesale.
+fn deep_merge(base: &mut Value, overlay: Value) {
+  match (base, overlay) {
+    (Value::Object(base), Value::Object(overlay)) => {
+      for (key, value) in overlay {
+        match base.get_mut(&key) {
+          Some(existing) => deep_merge(existing, value),
+          None => {
+            base.insert(key, value);
+          }
+        }
+      }
+    }
+    (base, overlay) => *base = overlay,
   }
 }
 
@@ -269,8 +379,8 @@ mod tests {
     write(dir.path(), "02-tool-agent/rhai/omw.test.toml", "")?;
     write(dir.path(), "01-hello/wasm/omw.test.toml", "")?;
     write(dir.path(), "01-hello/rhai/omw.test.toml", "")?;
-    // A template and a differently-named config are never collected.
-    write(dir.path(), "01-hello/omw.test.template.toml", "")?;
+    // A base config and a differently-named config are never collected.
+    write(dir.path(), "01-hello/omw.test.base.toml", "")?;
     write(dir.path(), "01-hello/omw.toml", "")?;
 
     let tests = discover(dir.path())?;
@@ -292,8 +402,8 @@ mod tests {
     write(dir.path(), "b/omw.test.yml", "")?;
     write(dir.path(), "c/omw.test.json", "")?;
     write(dir.path(), "d/first.omw.test.json", "")?;
-    // A template in a non-TOML format is still never collected.
-    write(dir.path(), "e/omw.test.template.yaml", "")?;
+    // A base config in a non-TOML format is still never collected.
+    write(dir.path(), "e/omw.test.base.yaml", "")?;
     write(dir.path(), "f/omw.yaml", "")?;
 
     let tests = discover(dir.path())?;
@@ -315,8 +425,8 @@ mod tests {
     write(dir.path(), "omw.test.toml", "")?;
     write(dir.path(), "first.omw.test.toml", "")?;
     write(dir.path(), "second.omw.test.toml", "")?;
-    // Not a test config: it ends in `template.toml`.
-    write(dir.path(), "case.omw.test.template.toml", "")?;
+    // Not a test config: it ends in `base.toml`.
+    write(dir.path(), "case.omw.test.base.toml", "")?;
 
     let tests = discover(dir.path())?;
     assert_eq!(
@@ -465,7 +575,7 @@ mod tests {
       "#,
     )?;
 
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     let provider = cfg
       .providers
       .get("openai")
@@ -506,16 +616,16 @@ mod tests {
       r#"
         [endpoint]
         kind = "openai"
-        listen = "127.0.0.1:8080"
+        listen = "127.0.0.1:37532"
       "#,
     )?;
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     let endpoint = cfg
       .endpoint
       .as_ref()
       .ok_or_else(|| anyhow::anyhow!("missing endpoint"))?;
     assert_eq!(endpoint.kind, "openai");
-    assert_eq!(endpoint.params["listen"], "127.0.0.1:8080");
+    assert_eq!(endpoint.params["listen"], "127.0.0.1:37532");
     assert!(endpoint.params.get("kind").is_none());
     Ok(())
   }
@@ -543,7 +653,7 @@ mod tests {
                 op: chat
       "#,
     )?;
-    let (cfg, assertions) = load(&path, None)?;
+    let (cfg, assertions) = load(&path, None, &[])?;
     assert_eq!(cfg.runtime["rhai"].kind, "rhai");
     assert_eq!(cfg.agents["alice"].script, "brain.rhai");
     assert_eq!(assertions.assertions["alice"].events.len(), 1);
@@ -563,7 +673,7 @@ mod tests {
         "assertions": { "alice": { "outcome": "completed", "events": [] } }
       }"#,
     )?;
-    let (cfg, assertions) = load(&path, None)?;
+    let (cfg, assertions) = load(&path, None, &[])?;
     assert_eq!(cfg.agents["alice"].runtime, "rhai");
     assert!(assertions.assertions.contains_key("alice"));
     Ok(())
@@ -574,7 +684,7 @@ mod tests {
   fn format_override_parses_an_extensionless_file() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let path = write(dir.path(), "omw.test.conf", "{\"agents\":{}}")?;
-    let (cfg, _) = load(&path, Some(Format::Json))?;
+    let (cfg, _) = load(&path, Some(Format::Json), &[])?;
     assert!(cfg.agents.is_empty());
     Ok(())
   }
@@ -584,7 +694,7 @@ mod tests {
   fn endpoint_defaults_to_none() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let path = write(dir.path(), "omw.test.toml", "")?;
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     assert!(cfg.endpoint.is_none());
     Ok(())
   }
@@ -602,7 +712,7 @@ mod tests {
         foo = "bar"
       "#,
     )?;
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     let provider = cfg
       .providers
       .get("custom")
@@ -621,7 +731,7 @@ mod tests {
       "omw.test.toml",
       "[tunables]\nrecv_timeout_secs = 30\n",
     )?;
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     assert_eq!(cfg.tunables.recv_timeout_secs, 30);
     assert_eq!(
       cfg.tunables,
@@ -670,7 +780,7 @@ mod tests {
       "omw.test.toml",
       "[tunables]\ntooling_connect_backoff_start_ms = 50\ntooling_connect_backoff_cap_secs = 5\n",
     )?;
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     assert_eq!(cfg.tunables.tooling_connect_backoff_start_ms, 50);
     assert_eq!(cfg.tunables.tooling_connect_backoff_cap_secs, 5);
     assert_eq!(
@@ -703,7 +813,7 @@ mod tests {
         script = "brain.rhai"
       "#,
     )?;
-    let (mut config, _) = load(&path, None)?;
+    let (mut config, _) = load(&path, None, &[])?;
     resolve_scripts(&mut config, &path);
     let expected = path
       .parent()
@@ -729,7 +839,7 @@ mod tests {
         script = "/absolute/brain.rhai"
       "#,
     )?;
-    let (mut config, _) = load(&path, None)?;
+    let (mut config, _) = load(&path, None, &[])?;
     resolve_scripts(&mut config, &path);
     assert_eq!(config.agents["alice"].script, "/absolute/brain.rhai");
     Ok(())
@@ -756,13 +866,161 @@ mod tests {
     );
     let _vars = EnvSet::new(vars);
 
-    let (cfg, _) = load(&path, None)?;
+    let (cfg, _) = load(&path, None, &[])?;
     let provider = cfg
       .providers
       .get("openai")
       .ok_or_else(|| anyhow::anyhow!("missing openai provider"))?;
     assert_eq!(provider.kind, "openai");
     assert_eq!(provider.params["api_key"], "from-env");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn base_config_layers_under_the_test_config() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(
+      dir.path(),
+      "omw.test.base.toml",
+      r#"
+        [providers.openai]
+        kind = "mock"
+        turns = [{ content = "hello" }]
+
+        [agents.alice]
+        runtime = "runtime"
+
+        [assertions.alice]
+        outcome = "completed"
+        events = [{ kind = "call", op = "chat" }]
+      "#,
+    )?;
+    let path = write(
+      dir.path(),
+      "case/rhai/omw.test.toml",
+      r#"
+        [runtime.runtime]
+        kind = "rhai"
+
+        [agents.alice]
+        script = "brain.rhai"
+      "#,
+    )?;
+
+    let (cfg, assertions) = load(&path, None, &[base])?;
+    // The provider comes from the base config...
+    assert_eq!(cfg.providers["openai"].kind, "mock");
+    // ...while the runtime kind and the agent's script come from the test
+    // config, and the agent inherits its `runtime` from the base config.
+    assert_eq!(cfg.runtime["runtime"].kind, "rhai");
+    assert_eq!(cfg.agents["alice"].runtime, "runtime");
+    assert_eq!(cfg.agents["alice"].script, "brain.rhai");
+    // Assertions are layered too.
+    assert_eq!(assertions.assertions["alice"].events.len(), 1);
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn a_test_config_overrides_base_assertion_keys() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(
+      dir.path(),
+      "omw.test.base.toml",
+      r#"
+        [assertions.alice]
+        outcome = "completed"
+        events = [{ kind = "call", op = "chat" }]
+      "#,
+    )?;
+    let path = write(
+      dir.path(),
+      "omw.test.toml",
+      r#"
+        [assertions.alice]
+        outcome = "asserted"
+        events = [{ kind = "call", op = "list_tools" }]
+      "#,
+    )?;
+    let (_, assertions) = load(&path, None, &[base])?;
+    let alice = &assertions.assertions["alice"];
+    assert_eq!(
+      alice.outcome,
+      Some(omw::testing::OutcomeAssertion::Asserted)
+    );
+    assert_eq!(alice.events.len(), 1);
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn later_base_configs_override_earlier_ones() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(
+      dir.path(),
+      "base.toml",
+      "[tunables]\nrecv_timeout_secs = 10\n[providers.openai]\nkind = \"mock\"\nturns = [{ content = \"base\" }]\n",
+    )?;
+    let overlay = write(
+      dir.path(),
+      "overlay.toml",
+      "[providers.openai]\nturns = [{ content = \"overlay\" }]\n",
+    )?;
+    let path = write(dir.path(), "omw.test.toml", "")?;
+    let (cfg, _) = load(&path, None, &[base, overlay])?;
+    assert_eq!(cfg.tunables.recv_timeout_secs, 10);
+    assert_eq!(
+      cfg.providers["openai"].params["turns"],
+      serde_json::json!([{ "content": "overlay" }])
+    );
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn base_config_resolves_scripts_against_its_own_directory()
+  -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(
+      dir.path(),
+      "shared/omw.test.base.toml",
+      r#"
+        [runtime.runtime]
+        kind = "rhai"
+
+        [agents.alice]
+        runtime = "runtime"
+        script = "brain.rhai"
+      "#,
+    )?;
+    let path = write(dir.path(), "case/omw.test.toml", "")?;
+    let (cfg, _) = load(&path, None, &[base])?;
+    let expected = dir.path().join("shared/brain.rhai");
+    assert_eq!(cfg.agents["alice"].script, expected.to_string_lossy());
+    Ok(())
+  }
+
+  #[test]
+  fn discover_attaches_ancestor_base_configs() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let outer = write(dir.path(), "omw.test.base.toml", "")?;
+    let inner = write(dir.path(), "case/omw.test.base.toml", "")?;
+    write(dir.path(), "case/rhai/omw.test.toml", "")?;
+
+    let tests = discover(dir.path())?;
+    assert_eq!(tests.len(), 1);
+    assert_eq!(tests[0].bases, vec![outer, inner]);
+    Ok(())
+  }
+
+  #[test]
+  fn discover_base_config_is_never_collected() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    write(dir.path(), "case/omw.test.base.toml", "")?;
+    write(dir.path(), "case/omw.test.toml", "")?;
+    let tests = discover(dir.path())?;
+    assert_eq!(relative_paths(&tests), vec!["case/omw.test.toml"]);
     Ok(())
   }
 }

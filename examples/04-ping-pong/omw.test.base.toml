@@ -1,19 +1,14 @@
 # 04-ping-pong: two agents, one shared brain, no provider or tooling.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
-# `omw-test run examples/04-ping-pong`.
-
-[runtime.runtime]
-kind = "{{RUNTIME}}"
+# Base config, shared across variants: each agent's wiring and the assertions.
+# The per-variant `omw.test.toml` adds only the runtime kind and brain scripts.
+# Run the case with `omw-test run examples/04-ping-pong`.
 
 [agents.alice]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [agents.bob]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.alice]
 outcome = "completed"

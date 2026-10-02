@@ -124,8 +124,8 @@ declare namespace OmwConfig {
    */
   export interface Config4 {
     /**
-     * Socket address to listen on, e.g. `"127.0.0.1:8080"` or
-     * `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
+     * Socket address to listen on, e.g. `"127.0.0.1:37532"` or
+     * `"0.0.0.0:37532"`. Hostnames (e.g. `"localhost:37532"`) are rejected at
      * startup.
      */
     listen: string;
@@ -293,6 +293,11 @@ declare namespace OmwConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -304,6 +309,16 @@ declare namespace OmwConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.
@@ -404,6 +419,11 @@ declare namespace OmwConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -415,6 +435,16 @@ declare namespace OmwConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.
@@ -974,6 +1004,11 @@ declare namespace OmwTestConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -985,6 +1020,16 @@ declare namespace OmwTestConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.
@@ -1093,6 +1138,11 @@ declare namespace OmwTestConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -1104,6 +1154,16 @@ declare namespace OmwTestConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.

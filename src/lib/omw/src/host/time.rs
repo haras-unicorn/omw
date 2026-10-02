@@ -13,6 +13,7 @@ use chrono::{TimeZone, Utc};
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
 use crate::host::streams::CancelRegistry;
+use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
 
 /// Milliseconds between the Unix epoch and `now`.
 pub fn now_ticks() -> u64 {
@@ -191,18 +192,31 @@ fn schedule(
     delay_ms = delay.as_millis(),
     "timer registered"
   );
+  bus.trace_event(TraceEvent::HostOpened {
+    agent: name.clone(),
+    kind: HostKind::Timer,
+    uuid: uuid.clone(),
+  });
   rt.spawn(async move {
-    tokio::select! {
+    let reason = tokio::select! {
       biased;
       _ = &mut cancel => {
         tracing::debug!(agent = %name, uuid = %uuid, "timer cancelled");
+        HostCloseReason::Cancelled
       }
       _ = tokio::time::sleep(delay) => {
         timers.remove(&uuid);
         tracing::trace!(agent = %name, uuid = %uuid, "timer fired");
         bus.deliver(&name, &uuid, Event::Timer);
+        HostCloseReason::Ended
       }
-    }
+    };
+    bus.trace_event(TraceEvent::HostClosed {
+      agent: name.clone(),
+      kind: HostKind::Timer,
+      uuid: uuid.clone(),
+      reason,
+    });
   });
 }
 

@@ -21,6 +21,22 @@ fn schema_streams_json_to_stdout() {
 }
 
 #[test]
+fn schema_logs_go_to_stderr_while_data_goes_to_stdout() {
+  let assert = common::omw()
+    .args(["schema", "--output", "-"])
+    .assert()
+    .success();
+  let output = assert.get_output();
+  let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+  let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+  assert!(stdout.trim_start().starts_with('{'), "got: {stdout}");
+  assert!(
+    stderr.contains("\"level\":\"INFO\""),
+    "logs should be JSONL on stderr, got: {stderr}"
+  );
+}
+
+#[test]
 fn config_reads_from_stdin() {
   for path in ["-", "/dev/stdin"] {
     common::omw()

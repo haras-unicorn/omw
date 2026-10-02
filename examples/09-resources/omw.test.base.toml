@@ -1,9 +1,9 @@
 # 09-resources: subscribe to the resource list and one resource, and react to
 # the mock's scripted, `after`-gated updates.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
-# `omw-test run examples/09-resources`.
+# Base config, shared across variants: the tooling, each agent's wiring and the
+# assertions. The per-variant `omw.test.toml` adds only the runtime kind and
+# brain scripts. Run the case with `omw-test run examples/09-resources`.
 
 [tooling.docs]
 kind = "mock"
@@ -43,12 +43,8 @@ resource_content_updates = [
   },
 ]
 
-[runtime.runtime]
-kind = "{{RUNTIME}}"
-
 [agents.reader]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.reader]
 outcome = "completed"

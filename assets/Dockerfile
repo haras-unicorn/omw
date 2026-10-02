@@ -38,6 +38,6 @@ COPY --from=fetch /tmp/omw /usr/local/bin/omw
 # /etc/omw/omw.toml and the workspace at /var/lib/omw (the stateDir
 # equivalent); see assets/omw.example.toml and assets/compose.yaml.
 VOLUME /var/lib/omw
-EXPOSE 8080
+EXPOSE 37532
 USER omw
 ENTRYPOINT ["/usr/local/bin/omw", "loop", "--config", "/etc/omw/omw.toml"]

@@ -240,9 +240,21 @@ pub struct Tunables {
   /// in ms.
   #[serde(default = "default_watch_debounce_ms")]
   pub watch_debounce_ms: u64,
+  /// How long the live view's render loop waits between redraws, in ms. It is
+  /// both the spinner cadence and the maximum redraw interval.
+  #[serde(default = "default_tui_tick_ms")]
+  pub tui_tick_ms: u64,
+  /// How many log lines each live-view tab keeps before the oldest are
+  /// dropped. `0` means unlimited.
+  #[serde(default = "default_tui_tab_capacity")]
+  pub tui_tab_capacity: usize,
   /// How many trace events the `omw-test` broadcast channel buffers.
   #[serde(default = "default_trace_buffer")]
   pub trace_buffer: usize,
+  /// How long a single testing-harness run may take before it is force-stopped
+  /// and every unsettled agent marked timed out, in seconds. `0` disables it.
+  #[serde(default = "default_test_timeout_secs")]
+  pub test_timeout_secs: u64,
   /// How many deltas a single endpoint session buffers before drops.
   #[serde(default = "default_session_buffer")]
   pub session_buffer: usize,
@@ -302,8 +314,20 @@ fn default_watch_debounce_ms() -> u64 {
   200
 }
 
+fn default_tui_tick_ms() -> u64 {
+  80
+}
+
+fn default_tui_tab_capacity() -> usize {
+  2000
+}
+
 fn default_trace_buffer() -> usize {
   crate::host::trace::DEFAULT_TRACE_BUFFER
+}
+
+fn default_test_timeout_secs() -> u64 {
+  30
 }
 
 fn default_session_buffer() -> usize {
@@ -334,7 +358,10 @@ impl Default for Tunables {
       tooling_connect_backoff_cap_secs:
         default_tooling_connect_backoff_cap_secs(),
       watch_debounce_ms: default_watch_debounce_ms(),
+      tui_tick_ms: default_tui_tick_ms(),
+      tui_tab_capacity: default_tui_tab_capacity(),
       trace_buffer: default_trace_buffer(),
+      test_timeout_secs: default_test_timeout_secs(),
       session_buffer: default_session_buffer(),
       cancel_pumps_on_reload: default_cancel_pumps_on_reload(),
       allow_unlocked_secrets: default_allow_unlocked_secrets(),
@@ -382,6 +409,29 @@ impl Tunables {
   pub fn watch_debounce(&self) -> std::time::Duration {
     std::time::Duration::from_millis(self.watch_debounce_ms)
   }
+
+  /// The live view's redraw interval.
+  pub fn tui_tick(&self) -> std::time::Duration {
+    std::time::Duration::from_millis(self.tui_tick_ms)
+  }
+
+  /// The live view's per-tab log cap, or `None` when unlimited (`0`).
+  pub fn tui_tab_capacity(&self) -> Option<usize> {
+    if self.tui_tab_capacity == 0 {
+      None
+    } else {
+      Some(self.tui_tab_capacity)
+    }
+  }
+
+  /// The harness run timeout, or `None` when disabled (`0`).
+  pub fn test_timeout(&self) -> Option<std::time::Duration> {
+    if self.test_timeout_secs == 0 {
+      None
+    } else {
+      Some(std::time::Duration::from_secs(self.test_timeout_secs))
+    }
+  }
 }
 
 #[cfg(test)]
@@ -418,6 +468,29 @@ mod schema_tests {
       "schema is missing the escape hatch"
     );
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tunables_tests {
+  use super::Tunables;
+
+  #[test]
+  fn live_view_defaults() {
+    let tunables = Tunables::default();
+    assert_eq!(tunables.tui_tick_ms, 80);
+    assert_eq!(tunables.tui_tab_capacity, 2000);
+    assert_eq!(tunables.tui_tick(), std::time::Duration::from_millis(80));
+    assert_eq!(tunables.tui_tab_capacity(), Some(2000));
+  }
+
+  #[test]
+  fn zero_tab_capacity_means_unlimited() {
+    let tunables = Tunables {
+      tui_tab_capacity: 0,
+      ..Tunables::default()
+    };
+    assert_eq!(tunables.tui_tab_capacity(), None);
   }
 }
 

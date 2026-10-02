@@ -1,18 +1,15 @@
 # 01-hello: one blocking chat against the mock provider.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with `omw-test run examples/01-hello`.
+# Base config, shared across variants: the provider, each agent's wiring and the
+# assertions. The per-variant `omw.test.toml` adds only the runtime kind and
+# brain scripts. Run the case with `omw-test run examples/01-hello`.
 
 [providers.openai]
 kind = "mock"
 turns = [{ content = "hello, world" }]
 
-[runtime.runtime]
-kind = "{{RUNTIME}}"
-
 [agents.alice]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.alice]
 outcome = "completed"

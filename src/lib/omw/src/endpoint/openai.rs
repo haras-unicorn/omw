@@ -34,8 +34,8 @@ use crate::tooling::Tool;
 /// Impl-specific configuration for the OpenAI-compatible endpoint.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(crate) struct Config {
-  /// Socket address to listen on, e.g. `"127.0.0.1:8080"` or
-  /// `"0.0.0.0:8080"`. Hostnames (e.g. `"localhost:8080"`) are rejected at
+  /// Socket address to listen on, e.g. `"127.0.0.1:37532"` or
+  /// `"0.0.0.0:37532"`. Hostnames (e.g. `"localhost:37532"`) are rejected at
   /// startup.
   pub listen: String,
 }
@@ -926,7 +926,10 @@ mod tests {
     let registry = super::super::Registry::default();
     assert!(
       registry
-        .build("openai", &serde_json::json!({ "listen": "localhost:8080" }))
+        .build(
+          "openai",
+          &serde_json::json!({ "listen": "localhost:37532" })
+        )
         .is_err()
     );
     assert!(registry.build("openai", &serde_json::json!({})).is_err());

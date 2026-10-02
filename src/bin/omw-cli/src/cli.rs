@@ -3,14 +3,19 @@
 //! part of the `omw` library.
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use omw::config::{Config, Format};
+use omw_output::LogFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "omw", about = "OMW = OpenAI + MCP + WASM")]
 pub struct Cli {
+  /// Log format: `auto`, `tty`, `pipe` or `journald`
+  #[arg(long, global = true, value_enum, default_value = "auto")]
+  pub log_format: LogFormat,
   #[command(subcommand)]
   pub command: Command,
 }
@@ -227,41 +232,121 @@ pub fn generate_schema(path: &Path) -> Result<()> {
   Ok(())
 }
 
-pub async fn run() -> anyhow::Result<()> {
-  crate::log::init();
+pub async fn run() -> ExitCode {
+  let cli = Cli::load();
+  let live = crate::log::init(&cli.command, cli.log_format);
+  if let Some(live) = &live {
+    live.set_view(omw_output::View::Agents);
+    live.set_command(omw_output::command_line());
+  }
 
   crate::tls::init();
 
-  let cli = Cli::load();
   tracing::info!(command = ?cli.command, "omw starting");
 
   // The binary owns the OS signal subscription; the library takes the latch.
   let shutdown = omw::shutdown::Shutdown::new();
   let signal = crate::shutdown::install(&shutdown);
 
-  let result = match cli.command {
-    Command::Run { args } => {
-      let config = args.load_config()?;
-      let registries = omw::agent::Registries::default();
-      omw::agent::run_agents(&config, args.watch(), &registries, shutdown).await
-    }
-    Command::Loop { args } => {
-      let config = args.load_config()?;
-      let registries = omw::agent::Registries::default();
-      omw::agent::loop_agents(&config, args.watch(), &registries, shutdown)
-        .await
-    }
-    Command::Schema { output } => generate_schema(&output),
-    Command::Scaffold { args } => scaffold(args).await,
-  };
+  let result = dispatch(cli.command, shutdown.clone(), live.as_ref()).await;
 
   signal.abort();
 
   if let Err(error) = &result {
-    tracing::error!(error = %error, "omw terminated with an error");
+    omw_output::report_error(error);
   }
+  drop(live);
 
-  result
+  match result {
+    Ok(()) => ExitCode::SUCCESS,
+    Err(error) => {
+      eprintln!("omw: {error:#}");
+      ExitCode::FAILURE
+    }
+  }
+}
+
+/// Dispatch a parsed command, returning the run's result for `run` to render.
+async fn dispatch(
+  command: Command,
+  shutdown: omw::shutdown::Shutdown,
+  live: Option<&omw_output::Live>,
+) -> Result<()> {
+  match command {
+    Command::Run { args } => {
+      let path = args.resolve_config_path()?;
+      let config = args.load_config()?;
+      let registries = omw::agent::Registries::default();
+      announce(live, &config, &path);
+      let run = omw::agent::run_agents(
+        &config,
+        args.watch(),
+        &registries,
+        shutdown.clone(),
+      );
+      drive(run, live, &shutdown).await
+    }
+    Command::Loop { args } => {
+      let path = args.resolve_config_path()?;
+      let config = args.load_config()?;
+      let registries = omw::agent::Registries::default();
+      announce(live, &config, &path);
+      let run = omw::agent::loop_agents(
+        &config,
+        args.watch(),
+        &registries,
+        shutdown.clone(),
+      );
+      drive(run, live, &shutdown).await
+    }
+    Command::Schema { output } => generate_schema(&output),
+    Command::Scaffold { args } => scaffold(args).await,
+  }
+}
+
+/// Announce the run in the live view's info panel and status line.
+fn announce(live: Option<&omw_output::Live>, config: &Config, path: &Path) {
+  if let Some(live) = live {
+    live.configure(
+      config.tunables.tui_tick_ms,
+      config.tunables.tui_tab_capacity,
+    );
+    let mut details = vec![
+      ("config".to_owned(), path.display().to_string()),
+      ("agents".to_owned(), config.agents.len().to_string()),
+    ];
+    if let Some(endpoint) = &config.endpoint
+      && let Some(listen) =
+        endpoint.params.get("listen").and_then(|v| v.as_str())
+    {
+      details.push(("endpoint".to_owned(), listen.to_owned()));
+    }
+    live.set_details(details);
+    live.set_busy(true);
+    live.set_status(format!("{} agent(s) running", config.agents.len()));
+  }
+}
+
+/// Await `run`, requesting shutdown when the live view reports a quit.
+///
+/// Without a live view this is just `run.await`.
+async fn drive(
+  run: impl std::future::Future<Output = Result<()>>,
+  live: Option<&omw_output::Live>,
+  shutdown: &omw::shutdown::Shutdown,
+) -> Result<()> {
+  let Some(quit) = live.and_then(omw_output::Live::take_quit_receiver) else {
+    return run.await;
+  };
+  tokio::pin!(run);
+  tokio::select! {
+    result = &mut run => result,
+    _ = tokio::task::spawn_blocking(move || quit.recv()) => {
+      tracing::info!("live view quit requested");
+      shutdown.request();
+      run.await
+    }
+  }
 }
 
 #[cfg(test)]
@@ -384,7 +469,7 @@ mod tests {
       r#"
         [endpoint]
         kind = "openai"
-        listen = "127.0.0.1:8080"
+        listen = "127.0.0.1:37532"
       "#,
     )?;
     let cfg = cli(path).load_config()?;
@@ -393,7 +478,7 @@ mod tests {
       .as_ref()
       .ok_or_else(|| anyhow::anyhow!("missing endpoint"))?;
     assert_eq!(endpoint.kind, "openai");
-    assert_eq!(endpoint.params["listen"], "127.0.0.1:8080");
+    assert_eq!(endpoint.params["listen"], "127.0.0.1:37532");
     assert!(endpoint.params.get("kind").is_none());
     Ok(())
   }

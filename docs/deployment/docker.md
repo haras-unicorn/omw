@@ -19,7 +19,7 @@ docker run -d --name omw --restart unless-stopped \
   -e OMW__TUNABLES__ALLOW_UNLOCKED_SECRETS=true \
   -v ./omw.toml:/etc/omw/omw.toml:ro \
   -v omw-workspace:/var/lib/omw \
-  -p 8080:8080 \
+  -p 37532:37532 \
   omw
 ```
 
@@ -30,8 +30,18 @@ docker-compose.yaml sets `OMW__TUNABLES__ALLOW_UNLOCKED_SECRETS=true` — see
 Secrets travel as `OMW__`-prefixed variables (`--env-file` or `-e`), never baked
 into the image. `/var/lib/omw` is the `stateDir` equivalent: mount a named
 volume or bind mount there for brains and the filesystem MCP workspace. Publish
-`8080` only when `[endpoint]` is configured (`listen = "0.0.0.0:8080"` inside
+`37532` only when `[endpoint]` is configured (`listen = "0.0.0.0:37532"` inside
 containers).
+
+## Logging
+
+A container has no journald socket and Docker captures output to a pipe, so
+omw's `auto` log format selects `pipe`: one JSON object per line on stderr.
+`docker logs omw` (or `docker compose logs -f omw`) renders them, and piping
+through `jq` makes them readable. `RUST_LOG` selects the level — the default is
+`info` — set it with `-e RUST_LOG=debug` or in the env file. The interactive
+`tty` view never engages here, since neither stream is a terminal. See
+[Output](../output.md) for the full policy and the `--log-format` flag.
 
 ## Compose
 

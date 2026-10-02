@@ -18,7 +18,7 @@ pub use assert::{
   After, AgentAssertion, ArrayStep, Assertions, EventAssertion, Matcher,
   OutcomeAssertion, Pattern, check, collect, event_kind, parse,
 };
-pub use harness::{AgentReport, Harness, Report};
+pub use harness::{AgentReport, Harness, Report, Snapshots};
 pub use scaffold::scaffold;
 
 #[cfg(any(test, feature = "mock"))]

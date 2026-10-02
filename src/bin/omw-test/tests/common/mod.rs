@@ -6,8 +6,14 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 
 /// The `omw-test` binary under test.
+///
+/// `JOURNAL_STREAM` and `RUST_LOG` are cleared so `auto` logging settles on
+/// `pipe` and the default level, keeping stderr assertions deterministic even
+/// when the test host itself is a systemd service.
 pub fn omw_test() -> Command {
-  Command::new(env!("CARGO_BIN_EXE_omw-test"))
+  let mut command = Command::new(env!("CARGO_BIN_EXE_omw-test"));
+  command.env_remove("JOURNAL_STREAM").env_remove("RUST_LOG");
+  command
 }
 
 /// The 01-hello brain: one blocking chat against the mock provider.

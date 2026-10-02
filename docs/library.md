@@ -107,6 +107,9 @@ each agent's brain script to the agents running it, so a supervisor can restart
 just the affected agents (`next_reload()` yields sorted agent names). All are
 re-exported from the prelude.
 
+Only create/modify/remove (and rescan) events count as changes; reads and opens
+are ignored, so a watcher never reacts to its own directory scans.
+
 The debounce window is the `watch_debounce_ms` tunable (see
 [tunables](./tunables.md)). `omw-test` reads its tunables from the `OMW_TEST__`
 environment overlay and holds one `Watcher` across reruns.

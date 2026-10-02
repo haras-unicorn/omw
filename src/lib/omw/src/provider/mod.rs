@@ -209,6 +209,13 @@ pub trait Provider: Send + Sync {
     tools: Vec<Tool>,
     params: Option<Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>>;
+
+  /// A machine-readable snapshot of this instance's scripted queue state,
+  /// used by the testing harness to explain a failure. Real back ends return
+  /// `None`; the built-in mock reports consumed vs remaining turns.
+  fn snapshot(&self) -> Option<Value> {
+    None
+  }
 }
 
 /// Merge one streaming ToolCall (whose arguments may be fragmented or

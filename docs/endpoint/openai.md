@@ -14,11 +14,11 @@ fails at startup when `[endpoint]` names `kind = "openai"`.
 ```toml
 [endpoint]
 kind = "openai"
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:37532"
 ```
 
 The `listen` address is parsed as a plain socket address (numeric `host:port`),
-so hostnames are rejected at startup. Set it to `"0.0.0.0:8080"` to serve all
+so hostnames are rejected at startup. Set it to `"0.0.0.0:37532"` to serve all
 interfaces. Only one listener is supported.
 
 ## The HTTP surface

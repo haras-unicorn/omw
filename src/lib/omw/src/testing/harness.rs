@@ -8,10 +8,12 @@
 //! loops or blocks cannot hang a test.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use serde_json::Value;
 use tokio::sync::broadcast;
 
-use crate::agent::{Registries, StopRegistry, run_agents_controlled};
+use crate::agent::{Backends, Registries, StopRegistry, run_agents_controlled};
 use crate::config::Config;
 use crate::host::trace::TraceEvent;
 use crate::runtime::RunOutcome;
@@ -26,6 +28,9 @@ pub struct Report {
   pub agents: BTreeMap<String, AgentReport>,
   /// A failure of the run itself (bootstrap, join, or a brain error), if any.
   pub error: Option<String>,
+  /// Scripted queue state of the mock back ends at the end of the run, for
+  /// failure diagnostics. Real back ends contribute nothing.
+  pub snapshots: Snapshots,
 }
 
 impl Report {
@@ -33,6 +38,19 @@ impl Report {
   pub fn passed(&self) -> bool {
     self.error.is_none() && self.agents.values().all(|agent| agent.passed)
   }
+}
+
+/// The mock back ends' scripted queue state, keyed by configured name, as
+/// reported by [`Provider::snapshot`](crate::provider::Provider::snapshot) and
+/// friends. A real back end contributes no entry.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct Snapshots {
+  /// Configured provider name -> its snapshot.
+  pub providers: BTreeMap<String, Value>,
+  /// Configured tooling name -> its snapshot.
+  pub tooling: BTreeMap<String, Value>,
+  /// The endpoint's snapshot, when one is configured.
+  pub endpoint: Option<Value>,
 }
 
 /// One agent's assertion verdict.
@@ -48,6 +66,16 @@ pub struct AgentReport {
   pub outcome: Option<RunOutcome>,
   /// The rendered diff when the agent failed.
   pub diff: Option<String>,
+  /// Every trace event the matcher observed, in order.
+  pub observed: Vec<TraceEvent>,
+  /// The cursor: the index of the next unsatisfied assertion. Equal to
+  /// `assertions` when the agent passed.
+  pub cursor: usize,
+  /// The number of event assertions.
+  pub assertions: usize,
+  /// Whether the verdict came from the harness timeout rather than a normal
+  /// outcome or settle.
+  pub timed_out: bool,
 }
 
 /// Drives one asserted run.
@@ -78,6 +106,40 @@ impl<'a> Harness<'a> {
     let shutdown = Shutdown::new();
     let stops = StopRegistry::default();
 
+    // Build the back ends here so the harness keeps handles to the exact mock
+    // instances and can snapshot their scripted queues after the run.
+    let built = if self.config.tunables.allow_unlocked_secrets {
+      crate::secret::allow_unlocked(|| self.build_backends())
+    } else {
+      self.build_backends()
+    };
+    let built = match built {
+      Ok(built) => built,
+      Err(error) => {
+        return Report {
+          agents: BTreeMap::new(),
+          error: Some(error.to_string()),
+          snapshots: Snapshots::default(),
+        };
+      }
+    };
+    let provider_handles: Vec<(String, Arc<dyn crate::provider::Provider>)> =
+      built
+        .providers
+        .iter()
+        .map(|(name, entry)| (name.clone(), Arc::clone(entry.inner())))
+        .collect();
+    let tooling_handles: Vec<(String, Arc<dyn crate::tooling::Tooling>)> =
+      built
+        .tooling
+        .iter()
+        .map(|(name, entry)| (name.clone(), Arc::clone(entry.inner())))
+        .collect();
+    let endpoint_handle = built
+      .endpoint
+      .as_ref()
+      .map(|entry| Arc::clone(entry.inner()));
+
     let mut states: BTreeMap<String, AgentState> = self
       .assertions
       .assertions
@@ -91,6 +153,7 @@ impl<'a> Harness<'a> {
       if state.asserted && state.matcher.matched() {
         state.settle_ok();
         stops.request_stop(agent);
+        tracing::info!(target: "omw-test", agent = %agent, "assertions settled");
       }
     }
 
@@ -100,29 +163,44 @@ impl<'a> Harness<'a> {
       tx,
       shutdown.clone(),
       stops.clone(),
+      Some(built),
     );
     let mut run = Box::pin(run);
     let mut run_result = None;
     let mut error = None;
+    let mut timed_out = false;
 
-    loop {
-      if !states.is_empty() && states.values().all(AgentState::settled) {
-        break;
-      }
-      tokio::select! {
-        biased;
-        result = &mut run => {
-          run_result = Some(result);
-          break;
-        }
-        received = rx.recv() => match received {
-          Ok(event) => observe(&mut states, &stops, event),
-          Err(broadcast::error::RecvError::Lagged(missed)) => {
-            error = Some(lagged_message(missed));
+    {
+      let drive = async {
+        loop {
+          if !states.is_empty() && states.values().all(AgentState::settled) {
             break;
           }
-          Err(broadcast::error::RecvError::Closed) => break,
-        },
+          tokio::select! {
+            biased;
+            result = &mut run => {
+              run_result = Some(result);
+              break;
+            }
+            received = rx.recv() => match received {
+              Ok(event) => observe(&mut states, &stops, event),
+              Err(broadcast::error::RecvError::Lagged(missed)) => {
+                error = Some(lagged_message(missed));
+                break;
+              }
+              Err(broadcast::error::RecvError::Closed) => break,
+            },
+          }
+        }
+      };
+      tokio::pin!(drive);
+      match self.config.tunables.test_timeout() {
+        Some(duration) => {
+          if tokio::time::timeout(duration, &mut drive).await.is_err() {
+            timed_out = true;
+          }
+        }
+        None => drive.await,
       }
     }
 
@@ -152,12 +230,17 @@ impl<'a> Harness<'a> {
       error = Some(run_error.to_string());
     }
 
-    // Any listed agent without a verdict failed: the run ended first.
+    // Any listed agent without a verdict failed: the run ended (or timed out)
+    // first.
     for (agent, state) in states.iter_mut() {
       if !state.settled() {
-        state.fail(format!(
-          "the run ended before agent {agent:?}'s assertions settled"
-        ));
+        state.timed_out = timed_out;
+        let reason = if timed_out {
+          format!("agent {agent:?} timed out before its assertions settled")
+        } else {
+          format!("the run ended before agent {agent:?}'s assertions settled")
+        };
+        state.fail(reason);
       }
     }
 
@@ -170,11 +253,45 @@ impl<'a> Harness<'a> {
           asserted: state.asserted,
           diff: state.diff(),
           outcome: state.outcome,
+          observed: state.matcher.observed().to_vec(),
+          cursor: state.matcher.cursor(),
+          assertions: state.assertions,
+          timed_out: state.timed_out,
         };
         (agent, report)
       })
       .collect();
-    Report { agents, error }
+    let snapshots = Snapshots {
+      providers: provider_handles
+        .iter()
+        .filter_map(|(name, provider)| {
+          provider.snapshot().map(|value| (name.clone(), value))
+        })
+        .collect(),
+      tooling: tooling_handles
+        .iter()
+        .filter_map(|(name, tooling)| {
+          tooling.snapshot().map(|value| (name.clone(), value))
+        })
+        .collect(),
+      endpoint: endpoint_handle.and_then(|endpoint| endpoint.snapshot()),
+    };
+    Report {
+      agents,
+      error,
+      snapshots,
+    }
+  }
+
+  /// Build the provider/tooling/endpoint back ends from the config so the
+  /// harness can hand the exact instances to the controlled run and snapshot
+  /// them afterwards.
+  fn build_backends(&self) -> anyhow::Result<Backends> {
+    Ok(Backends {
+      providers: self.registries.providers.build_entries(self.config)?,
+      tooling: self.registries.tooling.build_entries(self.config)?,
+      endpoint: self.registries.endpoints.build_entry(self.config)?,
+    })
   }
 }
 
@@ -193,6 +310,7 @@ fn observe(
     _ => {
       if state.observe(&event) && state.asserted {
         stops.request_stop(&agent);
+        tracing::info!(target: "omw-test", agent = %agent, "assertions settled");
       }
     }
   }
@@ -211,6 +329,10 @@ struct AgentState {
   /// Whether `outcome = "asserted"`: stop the agent once its events settle.
   asserted: bool,
   outcome: Option<RunOutcome>,
+  /// The number of event assertions.
+  assertions: usize,
+  /// Whether the verdict came from the harness timeout.
+  timed_out: bool,
   /// `None` until a verdict is reached.
   verdict: Option<Result<(), String>>,
 }
@@ -222,6 +344,8 @@ impl AgentState {
       outcome_assertion: assertion.outcome.clone(),
       asserted: assertion.outcome == Some(OutcomeAssertion::Asserted),
       outcome: None,
+      assertions: assertion.events.len(),
+      timed_out: false,
       verdict: None,
     }
   }
@@ -507,6 +631,53 @@ mod tests {
     )
     .await
     .map_err(|_| anyhow::anyhow!("harness hung on a stubborn brain"))?;
+    assert!(report.agents["alice"].passed);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_timed_out_agent_is_marked_as_timed_out() -> anyhow::Result<()> {
+    let registries = registries()?;
+    let mut config = config(&[("alice", "stubborn")]);
+    config.tunables.test_timeout_secs = 1;
+    let assertions = assertions(
+      "[assertions.alice]\noutcome = \"completed\"\nevents = [{ kind = \"call\", op = \"never\" }]\n",
+    );
+    let report = tokio::time::timeout(
+      Duration::from_secs(10),
+      Harness::new(&config, &registries, &assertions).run(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("harness hung on the test timeout"))?;
+    let alice = &report.agents["alice"];
+    assert!(!alice.passed);
+    assert!(alice.timed_out, "{alice:?}");
+    assert!(
+      alice
+        .diff
+        .as_deref()
+        .unwrap_or_default()
+        .contains("timed out"),
+      "{:?}",
+      alice.diff
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_zero_timeout_disables_the_bound() -> anyhow::Result<()> {
+    let registries = registries()?;
+    let mut config = config(&[("alice", "loop")]);
+    config.tunables.test_timeout_secs = 0;
+    let assertions = assertions(
+      "[assertions.alice]\noutcome = \"asserted\"\nevents = [{ kind = \"call\", op = \"start\" }]\n",
+    );
+    let report = tokio::time::timeout(
+      Duration::from_secs(10),
+      Harness::new(&config, &registries, &assertions).run(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("harness hung with the timeout disabled"))?;
     assert!(report.agents["alice"].passed);
     Ok(())
   }

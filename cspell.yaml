@@ -47,3 +47,10 @@ ignoreWords:
   - embedder
   - json2ts
   - npm
+  - ratatui
+  - crossterm
+  - journalctl
+  - codegen
+  - deque
+  - debouncer
+  - rescan

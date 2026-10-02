@@ -25,6 +25,19 @@ Secrets live in `/etc/omw/env` as `OMW__`-prefixed variables (see the
 runtime. Put brains and the filesystem tooling workspace under `/var/lib/omw`
 (the unit's `StateDirectory` + `WorkingDirectory`).
 
+## Logging
+
+systemd connects a service's stdout and stderr to the journal, so omw's `auto`
+log format detects `JOURNAL_STREAM` and emits native journald fields instead of
+raw lines. Read them with `journalctl -u omw`, or `journalctl -u omw -o json`
+for the structured attributes (the agent `name`, the MCP `source`/`tooling`
+tags, and so on) as real fields rather than one opaque `MESSAGE`. `RUST_LOG`
+selects the level — the default is `info` — set it in the unit's `Environment=`
+or in `/etc/omw/env` when you need `debug` or `trace`. No flag is required:
+`--log-format journald` only pins what `auto` already picks. See
+[Output](../output.md) for the full policy, including the `tty` and `pipe`
+formats.
+
 ## Hardening
 
 The unit carries the same sandbox as the NixOS module (see

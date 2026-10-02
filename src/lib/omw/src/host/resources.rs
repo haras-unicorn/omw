@@ -13,6 +13,7 @@ use futures_util::stream::{BoxStream, StreamExt as _};
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
 use crate::host::streams::CancelRegistry;
+use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
 use crate::tooling::{ResourceNotification, Tooling};
 
 /// Spawn a pump task on `rt` that drains `stream` and delivers resource
@@ -23,25 +24,35 @@ use crate::tooling::{ResourceNotification, Tooling};
 /// the bridge runtime whose result becomes the `resource-list-updated` event
 /// payload; a fetch failure is delivered as an [`Event::Error`] while the pump
 /// keeps running.
+#[allow(
+  clippy::too_many_arguments,
+  reason = "aggregating the bridge handles into a struct is left to a pumps refactor"
+)]
 pub fn spawn_pump(
   subs: Arc<CancelRegistry>,
   rt: Arc<tokio::runtime::Runtime>,
   bus: Arc<MessageBus>,
   name: String,
   uuid: String,
+  kind: HostKind,
   tooling: Arc<dyn Tooling>,
   mut stream: BoxStream<'static, Result<ResourceNotification, String>>,
 ) {
   let mut cancel = subs.open(uuid.clone());
+  bus.trace_event(TraceEvent::HostOpened {
+    agent: name.clone(),
+    kind,
+    uuid: uuid.clone(),
+  });
   rt.spawn(async move {
     tracing::info!(agent = %name, uuid = %uuid, "resource subscription opened");
-    loop {
+    let reason = loop {
       tokio::select! {
         biased;
 
         _ =&mut cancel => {
           tracing::debug!(agent = %name, uuid = %uuid, "resource subscription cancelled");
-          return;
+          break HostCloseReason::Cancelled;
         }
         item = stream.next() => match item {
           Some(Ok(ResourceNotification::ListChanged)) => {
@@ -72,16 +83,22 @@ pub fn spawn_pump(
             tracing::error!(agent = %name, uuid = %uuid, error = %e, "resource subscription failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
             subs.remove(&uuid);
-            return;
+            break HostCloseReason::Failed;
           }
           None => {
             tracing::debug!(agent = %name, uuid = %uuid, "resource subscription ended");
             subs.remove(&uuid);
-            return;
+            break HostCloseReason::Ended;
           }
         }
       }
-    }
+    };
+    bus.trace_event(TraceEvent::HostClosed {
+      agent: name.clone(),
+      kind,
+      uuid: uuid.clone(),
+      reason,
+    });
   });
 }
 
@@ -116,6 +133,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
+      HostKind::Resource,
       Arc::clone(&tooling),
       stream,
     );
@@ -160,6 +178,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
+      HostKind::Resource,
       Arc::clone(&tooling),
       stream,
     );
@@ -199,6 +218,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
+      HostKind::ResourceList,
       Arc::clone(&tooling),
       stream,
     );
@@ -231,6 +251,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
+      HostKind::Resource,
       Arc::clone(&tooling),
       stream,
     );

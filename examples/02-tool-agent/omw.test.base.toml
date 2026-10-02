@@ -1,7 +1,8 @@
 # 02-tool-agent: a ReAct loop against the mock provider and mock tooling.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
+# Base config, shared across variants: the provider, the tooling, each agent's
+# wiring and the assertions. The per-variant `omw.test.toml` adds only the
+# runtime kind and brain scripts. Run the case with
 # `omw-test run examples/02-tool-agent`.
 
 [providers.openai]
@@ -15,12 +16,8 @@ turns = [
 kind = "mock"
 tool_calls = [{ name = "echo", result = "hi" }]
 
-[runtime.runtime]
-kind = "{{RUNTIME}}"
-
 [agents.alice]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.alice]
 outcome = "completed"
