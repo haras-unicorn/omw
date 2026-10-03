@@ -160,7 +160,7 @@ pub fn load(
     let mut value = parse_to_value(&raw, base_format).with_context(|| {
       format!("failed to parse base config {}", base_path.display())
     })?;
-    resolve_source_scripts(&mut value, base_path);
+    resolve_source_scripts(&mut value, base_path)?;
     deep_merge(&mut merged, value);
   }
   let raw = crate::stdio::read_to_string(path)?;
@@ -200,27 +200,34 @@ pub fn load(
 }
 
 /// Resolve a config value's relative agent `script` paths against `source`'s
-/// directory, so each file's scripts are relative to where the file lives.
-fn resolve_source_scripts(value: &mut Value, source: &Path) {
+/// directory, so each file's scripts are relative to where the file lives. The
+/// resolved path is made absolute, so the later [`resolve_scripts`] pass (which
+/// joins the test config's directory) leaves it untouched instead of joining it
+/// a second time.
+fn resolve_source_scripts(value: &mut Value, source: &Path) -> Result<()> {
   let dir = source
     .parent()
     .filter(|parent| !parent.as_os_str().is_empty())
     .unwrap_or(Path::new("."));
   let Some(agents) = value.get_mut("agents").and_then(Value::as_object_mut)
   else {
-    return;
+    return Ok(());
   };
   for agent in agents.values_mut() {
     let Some(script) = agent.get("script").and_then(Value::as_str) else {
       continue;
     };
     if Path::new(script).is_relative() {
-      let resolved = dir.join(script).to_string_lossy().into_owned();
+      let resolved = std::path::absolute(dir.join(script))
+        .with_context(|| format!("failed to resolve the script {script:?}"))?
+        .to_string_lossy()
+        .into_owned();
       if let Some(object) = agent.as_object_mut() {
         object.insert("script".to_owned(), Value::String(resolved));
       }
     }
   }
+  Ok(())
 }
 
 /// The format for a config path: `format` when given, else inferred from the
@@ -543,6 +550,26 @@ mod tests {
           unsafe { std::env::remove_var(key) };
         }
       }
+    }
+  }
+
+  /// Changes the process working directory and restores it on drop, so a test
+  /// can exercise relative config paths without leaking the change.
+  struct CwdGuard {
+    original: PathBuf,
+  }
+
+  impl CwdGuard {
+    fn new(dir: &Path) -> anyhow::Result<Self> {
+      let original = std::env::current_dir()?;
+      std::env::set_current_dir(dir)?;
+      Ok(Self { original })
+    }
+  }
+
+  impl Drop for CwdGuard {
+    fn drop(&mut self) {
+      let _ = std::env::set_current_dir(&self.original);
     }
   }
 
@@ -997,6 +1024,38 @@ mod tests {
     let path = write(dir.path(), "case/omw.test.toml", "")?;
     let (cfg, _) = load(&path, None, &[base])?;
     let expected = dir.path().join("shared/brain.rhai");
+    assert_eq!(cfg.agents["alice"].script, expected.to_string_lossy());
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn resolve_scripts_does_not_double_join_base_config_scripts()
+  -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    write(
+      dir.path(),
+      "shared/omw.test.base.toml",
+      r#"
+        [runtime.runtime]
+        kind = "rhai"
+
+        [agents.alice]
+        runtime = "runtime"
+        script = "dist/index.js"
+      "#,
+    )?;
+    write(dir.path(), "shared/omw.test.toml", "")?;
+
+    let _cwd = CwdGuard::new(dir.path())?;
+    let (mut cfg, _) = load(
+      Path::new("shared/omw.test.toml"),
+      None,
+      &[PathBuf::from("shared/omw.test.base.toml")],
+    )?;
+    resolve_scripts(&mut cfg, Path::new("shared/omw.test.toml"));
+
+    let expected = std::path::absolute("shared/dist/index.js")?;
     assert_eq!(cfg.agents["alice"].script, expected.to_string_lossy());
     Ok(())
   }

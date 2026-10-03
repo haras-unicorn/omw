@@ -1,5 +1,12 @@
 //! Shared output policy for the OMW binaries.
 //!
+//! # Not a library
+//!
+//! This crate is an implementation detail of the OMW binaries. It is published
+//! only so `omw-cli` and `omw-test` can depend on it from the registry; it is
+//! **not** a supported library API and may change without notice. Use the `omw`
+//! crate instead.
+//!
 //! Every byte the binaries emit belongs to exactly one of three channels: the
 //! command's product on stdout, diagnostics from `tracing` on stderr/journald,
 //! and an interactive live view on a terminal. This crate owns that policy so

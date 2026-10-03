@@ -31,3 +31,11 @@ version_group = "omw"
 git_tag_enable = false
 git_release_enable = false
 semver_check = false
+
+[[package]]
+name = "omw-output"
+release = true
+version_group = "omw"
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
