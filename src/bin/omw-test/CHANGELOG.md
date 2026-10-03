@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.4...omw-test-v0.1.5) - 2026-10-03
+
+### Added
+
+- nicer output ([#89](https://github.com/haras-unicorn/omw/pull/89))
+
 ## [0.1.4](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.3...omw-test-v0.1.4) - 2026-10-01
 
 ### Added
