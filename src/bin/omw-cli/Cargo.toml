@@ -30,7 +30,7 @@ clap.workspace = true
 config.workspace = true
 toml.workspace = true
 omw = { version = "0.1.5", path = "../../lib/omw", default-features = false }
-omw-output = { path = "../../lib/omw-output" }
+omw-output = { version = "0.1.4", path = "../../lib/omw-output" }
 
 [dev-dependencies]
 nix.workspace = true

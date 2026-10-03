@@ -181,25 +181,26 @@ A Cargo workspace with the crates below plus a single WIT contract.
       build a shared append-only `TraceLog` for `after` gating (one gate path,
       safe across subscriptions and agents).
 
-- `src/lib/omw-output` — the binary-only shared output-policy crate
-  (`publish = false`, picked up by the `src/lib/*` member glob): the `LogFormat`
-  model plus `auto` detection (both stdio terminals → tty, then `JOURNAL_STREAM`
-  → journald, else pipe), `command_line` (the launched `argv` as one string for
-  the info panel), `producer_format` (a data producer never shows the live
-  view), `init_logging` (the journald layer, the JSONL `pipe` layer, or the
-  ratatui/crossterm live view), and the once-only `report_error`. The live view
-  (`live.rs` state + `Live` handle, `layer.rs` tracing layer, `tui.rs` render
-  thread) is driven on stderr so a redirected stdout keeps carrying data; it
-  routes MCP child stderr to `mcp:<name>` sources by the `source`/`tooling`
-  fields, and both views share a rounded-bordered info panel (command +
-  `set_details` facts): the `Agents` view pairs a "Sources" list with a log
-  pane, the `Tests` view pairs a "Tests" list (`✅`/`❌` marks + a spinner) with
-  a "Logs" pane and a bordered gauge. It honours `NO_COLOR`, restores the
-  terminal on drop/panic, and falls back to `pipe` when raw mode cannot be
-  entered. `init_logging` returns `Option<Live>`; the binaries own the handle
-  and select on its quit receiver so Ctrl-C in raw mode requests the library's
-  `Shutdown`. Because the view starts before config load, the binaries push the
-  `tunables.tui_tick_ms` / `tui_tab_capacity` knobs into it with
+- `src/lib/omw-output` — the binary-only shared output-policy crate (published
+  only so the `omw-cli`/`omw-test` binaries can depend on it from the registry;
+  not a supported library, picked up by the `src/lib/*` member glob): the
+  `LogFormat` model plus `auto` detection (both stdio terminals → tty, then
+  `JOURNAL_STREAM` → journald, else pipe), `command_line` (the launched `argv`
+  as one string for the info panel), `producer_format` (a data producer never
+  shows the live view), `init_logging` (the journald layer, the JSONL `pipe`
+  layer, or the ratatui/crossterm live view), and the once-only `report_error`.
+  The live view (`live.rs` state + `Live` handle, `layer.rs` tracing layer,
+  `tui.rs` render thread) is driven on stderr so a redirected stdout keeps
+  carrying data; it routes MCP child stderr to `mcp:<name>` sources by the
+  `source`/`tooling` fields, and both views share a rounded-bordered info panel
+  (command + `set_details` facts): the `Agents` view pairs a "Sources" list with
+  a log pane, the `Tests` view pairs a "Tests" list (`✅`/`❌` marks + a
+  spinner) with a "Logs" pane and a bordered gauge. It honours `NO_COLOR`,
+  restores the terminal on drop/panic, and falls back to `pipe` when raw mode
+  cannot be entered. `init_logging` returns `Option<Live>`; the binaries own the
+  handle and select on its quit receiver so Ctrl-C in raw mode requests the
+  library's `Shutdown`. Because the view starts before config load, the binaries
+  push the `tunables.tui_tick_ms` / `tui_tab_capacity` knobs into it with
   `Live::configure` (crate-local defaults hold until then; `0` capacity is
   unlimited). This crate depends on `ratatui` + `crossterm`; the `omw` library
   does not depend on it.

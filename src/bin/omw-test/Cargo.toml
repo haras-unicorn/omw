@@ -32,7 +32,7 @@ toml.workspace = true
 omw = { version = "0.1.5", path = "../../lib/omw", default-features = false, features = [
   "mock",
 ] }
-omw-output = { path = "../../lib/omw-output" }
+omw-output = { version = "0.1.4", path = "../../lib/omw-output" }
 glob = "0.3.4"
 
 [dev-dependencies]
