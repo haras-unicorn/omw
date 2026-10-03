@@ -1,0 +1,24 @@
+# Dev-only config for eyeballing the tty live view (`dev test cli tty`): a js
+# brain that polls its inbox forever, an OpenAI-compatible endpoint, and an
+# mcp-nixos tooling server. No provider or API key is needed because the brain
+# never chats.
+
+[runtime.js]
+kind = "js"
+
+# The MCP child's stderr shows up under the `mcp:nixos` TUI tab. The `mcp-nixos`
+# binary is provided by the dev shell.
+[tooling.nixos]
+kind = "mcp"
+transport = "stdio"
+command = "mcp-nixos"
+
+# Serve agents over HTTP while watching the TUI; point any OpenAI-compatible
+# client at it.
+[endpoint]
+kind = "openai"
+listen = "127.0.0.1:37532"
+
+[agents.alice]
+runtime = "js"
+script = "assets/omw.tty.js"

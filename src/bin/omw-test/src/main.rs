@@ -19,6 +19,6 @@ mod tls;
 mod wasm;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
   run::run().await
 }

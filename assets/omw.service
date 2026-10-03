@@ -14,6 +14,11 @@ Restart=on-failure
 RestartSec=5s
 StateDirectory=omw
 
+# Logging. systemd connects stdio to the journal, so omw's `auto` log format
+# detects JOURNAL_STREAM and writes native journald fields; read them with
+# `journalctl -u omw` (or `-o json` for the structured attributes). Set
+# RUST_LOG here or in the EnvironmentFile to change the level (default `info`).
+#
 # Systemd sandboxing. Mirrors `services.omw.hardening = true` from the NixOS
 # module. `MemoryDenyWriteExecute` is deliberately absent: it would break the
 # wasmtime JIT and nodejs MCP servers. `PrivateDevices=false` keeps /dev

@@ -1,15 +1,13 @@
 # 03-endpoint: an agent that serves the endpoint under "gpt-4o".
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
+# Base config, shared across variants: the provider, the endpoint, each agent's
+# wiring and the assertions. The per-variant `omw.test.toml` adds only the
+# runtime kind and brain scripts. Run the case with
 # `omw-test run examples/03-endpoint`.
 
 [providers.openai]
 kind = "mock"
 turns = [{ content = "hello" }, { content = "bye" }]
-
-[runtime.runtime]
-kind = "{{RUNTIME}}"
 
 [endpoint]
 kind = "mock"
@@ -20,7 +18,6 @@ requests = [
 
 [agents.server]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 [assertions.server]
 outcome = "completed"

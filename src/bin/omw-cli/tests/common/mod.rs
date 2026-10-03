@@ -21,14 +21,22 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 /// The `omw` binary under test, for `assert_cmd`-style assertions.
+///
+/// `JOURNAL_STREAM` and `RUST_LOG` are cleared so `auto` logging settles on
+/// `pipe` and the default level, keeping stderr assertions deterministic even
+/// when the test host itself is a systemd service.
 pub fn omw() -> Command {
-  Command::new(env!("CARGO_BIN_EXE_omw"))
+  let mut command = Command::new(env!("CARGO_BIN_EXE_omw"));
+  command.env_remove("JOURNAL_STREAM").env_remove("RUST_LOG");
+  command
 }
 
 /// The `omw` binary under test, as a raw process command.
 #[cfg(unix)]
 pub fn omw_raw() -> StdCommand {
-  StdCommand::new(env!("CARGO_BIN_EXE_omw"))
+  let mut command = StdCommand::new(env!("CARGO_BIN_EXE_omw"));
+  command.env_remove("JOURNAL_STREAM").env_remove("RUST_LOG");
+  command
 }
 
 /// Spawn `cmd` with stdout and stderr redirected to `log`, stdin null.

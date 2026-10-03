@@ -38,7 +38,6 @@ futures = "0.3.34"
 futures-util = "0.3.34"
 kanal = "0.1.1"
 notify = { version = "8.2.0", features = ["serde"] }
-notify-debouncer-mini = "0.7.0"
 os-memlock = "0.2.0"
 reqwest = { version = "0.13.4", default-features = false, features = [
   "json",
@@ -57,6 +56,7 @@ wasmtime-wasi = { workspace = true, optional = true }
 wat = { workspace = true, optional = true }
 zeroize = { version = "1.9.0", features = ["derive", "serde"] }
 regex = "1.13.1"
+notify-debouncer-full = { version = "0.7.0", features = ["serde"] }
 
 [build-dependencies]
 wasmprinter.workspace = true

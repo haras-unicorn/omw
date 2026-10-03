@@ -548,6 +548,11 @@ declare namespace OmwTestConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -559,6 +564,16 @@ declare namespace OmwTestConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.
@@ -667,6 +682,11 @@ declare namespace OmwTestConfig {
      */
     session_buffer?: number;
     /**
+     * How long a single testing-harness run may take before it is force-stopped
+     * and every unsettled agent marked timed out, in seconds. `0` disables it.
+     */
+    test_timeout_secs?: number;
+    /**
      * Backoff cap for tooling reconnects on failure, in seconds.
      */
     tooling_connect_backoff_cap_secs?: number;
@@ -678,6 +698,16 @@ declare namespace OmwTestConfig {
      * How many trace events the `omw-test` broadcast channel buffers.
      */
     trace_buffer?: number;
+    /**
+     * How many log lines each live-view tab keeps before the oldest are
+     * dropped. `0` means unlimited.
+     */
+    tui_tab_capacity?: number;
+    /**
+     * How long the live view's render loop waits between redraws, in ms. It is
+     * both the spinner cadence and the maximum redraw interval.
+     */
+    tui_tick_ms?: number;
     /**
      * How long to coalesce the burst of file events a single save produces,
      * in ms.

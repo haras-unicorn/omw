@@ -1,8 +1,8 @@
 # 05-patterns: assertions over a multi-turn provider script.
 #
-# Shared across variants. `dev format` expands this into each
-# `<variant>/omw.test.toml`; run the case with
-# `omw-test run examples/05-patterns`.
+# Base config, shared across variants: the provider, each agent's wiring and the
+# assertions. The per-variant `omw.test.toml` adds only the runtime kind and
+# brain scripts. Run the case with `omw-test run examples/05-patterns`.
 
 [providers.openai]
 kind = "mock"
@@ -12,12 +12,8 @@ turns = [
   { content = "gamma" },
 ]
 
-[runtime.runtime]
-kind = "{{RUNTIME}}"
-
 [agents.alice]
 runtime = "runtime"
-script = "{{SCRIPT}}"
 
 # Four chats, but only three assertions and none of them has to name every
 # event: string leaves are regexes, `$while` consumes the middle run, `$until`

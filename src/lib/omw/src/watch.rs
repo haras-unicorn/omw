@@ -7,10 +7,13 @@
 //!
 //! Parent directories are watched (non-recursively) by [`Scripts`] so editors
 //! that save atomically (`write temp + rename`) still trigger, and events are
-//! debounced so a single save restarts an agent once. State preservation is
-//! the supervisor's job: only agent names are reported here; the supervisor
-//! keeps the shared [`MessageBus`](crate::host::bus::MessageBus) (inboxes,
-//! subscriptions) alive and restarts just the run.
+//! debounced so a single save restarts an agent once. Only create/modify/remove
+//! (and rescan) events count as changes; access/read/open/close events are
+//! ignored, so a watcher does not react to its own directory reads. State
+//! preservation is the supervisor's job: only agent names are reported here;
+//! the supervisor keeps the shared
+//! [`MessageBus`](crate::host::bus::MessageBus) (inboxes, subscriptions) alive
+//! and restarts just the run.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -18,17 +21,26 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use notify_debouncer_mini::notify::RecommendedWatcher;
-use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
+use notify::event::EventKind;
+use notify_debouncer_full::notify::RecommendedWatcher;
+use notify_debouncer_full::{
+  DebounceEventResult, DebouncedEvent, Debouncer, RecommendedCache,
+  new_debouncer,
+};
 use tokio::sync::mpsc;
 
 use crate::config::{AgentConfig, Tunables};
 
-pub use notify_debouncer_mini::notify::RecursiveMode;
+pub use notify_debouncer_full::notify::RecursiveMode;
+
+/// Whether an event is a real change (not a read/open/close).
+fn is_change(event: &DebouncedEvent) -> bool {
+  !matches!(event.kind, EventKind::Access(_))
+}
 
 /// A debounced watcher over zero or more paths.
 pub struct Watcher {
-  _debouncer: Debouncer<RecommendedWatcher>,
+  _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
   rx: mpsc::UnboundedReceiver<Vec<PathBuf>>,
 }
 
@@ -36,22 +48,27 @@ impl Watcher {
   /// Create a watcher with no paths yet; add them with [`add`](Self::add).
   pub fn new(debounce: Duration) -> anyhow::Result<Self> {
     let (tx, rx) = mpsc::unbounded_channel();
-    let debouncer = new_debouncer(
-      debounce,
-      move |result: DebounceEventResult| match result {
-        Ok(events) => {
-          let paths = events
-            .into_iter()
-            .map(|event| event.path)
-            .collect::<Vec<_>>();
-          let _ = tx.send(paths);
+    let debouncer =
+      new_debouncer(debounce, None, move |result: DebounceEventResult| {
+        match result {
+          Ok(events) => {
+            let paths = events
+              .iter()
+              .filter(|event| is_change(event))
+              .flat_map(|event| event.paths.iter().cloned())
+              .collect::<Vec<_>>();
+            if !paths.is_empty() {
+              let _ = tx.send(paths);
+            }
+          }
+          Err(errors) => {
+            for error in errors {
+              tracing::warn!(error = %error, "watcher error");
+            }
+          }
         }
-        Err(error) => {
-          tracing::warn!(error = %error, "watcher error");
-        }
-      },
-    )
-    .context("failed to create the watcher")?;
+      })
+      .context("failed to create the watcher")?;
     Ok(Self {
       _debouncer: debouncer,
       rx,
@@ -75,12 +92,10 @@ impl Watcher {
     path: &Path,
     mode: RecursiveMode,
   ) -> anyhow::Result<()> {
-    notify_debouncer_mini::notify::Watcher::watch(
-      self._debouncer.watcher(),
-      path,
-      mode,
-    )
-    .with_context(|| format!("failed to watch {}", path.display()))
+    self
+      ._debouncer
+      .watch(path, mode)
+      .with_context(|| format!("failed to watch {}", path.display()))
   }
 
   /// Wait for the next debounced batch of changed paths. `None` means the
@@ -345,6 +360,52 @@ mod tests {
         .await
         .is_err(),
       "an unrelated file should not trigger a reload"
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn reading_a_watched_directory_is_not_a_change() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut watcher = Watcher::watch(
+      dir.path(),
+      RecursiveMode::Recursive,
+      Duration::from_millis(50),
+    )?;
+    let entries: Vec<_> = std::fs::read_dir(dir.path())?.collect();
+    drop(entries);
+    assert!(
+      tokio::time::timeout(Duration::from_secs(2), watcher.next_change())
+        .await
+        .is_err(),
+      "reading a watched directory should not be a change"
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn moving_a_directory_into_the_tree_reports_a_change()
+  -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let outside = tempfile::tempdir()?;
+    let source = outside.path().join("case");
+    std::fs::create_dir(&source)?;
+    std::fs::write(source.join("omw.test.toml"), "")?;
+    let mut watcher = Watcher::watch(
+      root.path(),
+      RecursiveMode::Recursive,
+      Duration::from_millis(50),
+    )?;
+    let moved = root.path().join("case");
+    std::fs::rename(&source, &moved)?;
+    let paths =
+      tokio::time::timeout(Duration::from_secs(10), watcher.next_change())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for the move"))?
+        .ok_or_else(|| anyhow::anyhow!("watcher closed"))?;
+    assert!(
+      paths.iter().any(|path| path.starts_with(root.path())),
+      "the moved directory should be reported: {paths:?}"
     );
     Ok(())
   }

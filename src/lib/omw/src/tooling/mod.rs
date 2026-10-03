@@ -173,6 +173,13 @@ pub trait Tooling: Send + Sync {
   fn attach_trace(&self, trace: crate::host::trace::TraceSender) {
     let _ = trace;
   }
+
+  /// A machine-readable snapshot of this instance's scripted queue state,
+  /// used by the testing harness to explain a failure. Real back ends return
+  /// `None`; the built-in mock reports consumed vs remaining `tool_calls`.
+  fn snapshot(&self) -> Option<Value> {
+    None
+  }
 }
 
 /// Build a tooling from opaque params plus tunables. Implemented per back

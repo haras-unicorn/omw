@@ -23,6 +23,7 @@ jobs:
       - uses: cachix/cachix-action@v15
         with:
           name: haras
+          extraPullNames: haras-releases
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - run: nix build --show-trace .#docs
       - uses: actions/upload-pages-artifact@v3

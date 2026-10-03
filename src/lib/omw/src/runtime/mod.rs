@@ -21,7 +21,8 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// The terminal result of one agent run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RunOutcome {
   /// The brain ran to completion.
   Completed,

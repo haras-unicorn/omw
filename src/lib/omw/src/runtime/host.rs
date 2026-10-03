@@ -170,6 +170,7 @@ impl provider_bindings::HostProvider for Host {
         "messages": &msgs,
         "tools": &tools,
         "params": &params,
+        "uuid": uuid.clone(),
       }),
     );
     crate::host::streams::spawn_pump(
@@ -404,6 +405,7 @@ impl tooling_bindings::HostTooling for Host {
       Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
+      crate::host::trace::HostKind::ResourceList,
       tooling,
       stream,
     );
@@ -445,6 +447,7 @@ impl tooling_bindings::HostTooling for Host {
       Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
+      crate::host::trace::HostKind::Resource,
       tooling,
       stream,
     );

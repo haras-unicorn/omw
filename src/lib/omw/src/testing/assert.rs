@@ -658,6 +658,17 @@ impl Matcher {
     self.sequence.is_done(&self.assertions)
   }
 
+  /// Every event observed so far, in order.
+  pub fn observed(&self) -> &[TraceEvent] {
+    &self.events
+  }
+
+  /// The cursor: the index of the next assertion to satisfy. Equal to the
+  /// assertion count once matched.
+  pub fn cursor(&self) -> usize {
+    self.sequence.next.min(self.assertions.len())
+  }
+
   /// Consume one trace event, advancing the matcher if it satisfies the next
   /// pending assertion.
   pub fn observe(&mut self, event: &TraceEvent) {
@@ -667,14 +678,14 @@ impl Matcher {
 
   /// A readable diff of what is still unsatisfied, for a failed assertion.
   pub fn failure(&self) -> String {
-    let next = self.sequence.next;
+    let next = self.cursor();
     let mut out = String::new();
     let _ =
       writeln!(out, "assertion #{} not satisfied", next.saturating_add(1));
     let _ = writeln!(
       out,
       "  expected: {}",
-      render_remaining(&self.assertions[next.min(self.assertions.len())..])
+      render_remaining(&self.assertions[next..])
     );
     let _ = write!(out, "  observed: {}", render_events(&self.events));
     out
@@ -682,7 +693,11 @@ impl Matcher {
 }
 
 fn render_events(events: &[TraceEvent]) -> String {
-  let parts: Vec<String> = events.iter().map(render_event).collect();
+  let parts: Vec<String> = events
+    .iter()
+    .enumerate()
+    .map(|(index, event)| format!("[{index}] {}", render_event(event)))
+    .collect();
   format!("[{}]", parts.join(", "))
 }
 
@@ -699,7 +714,39 @@ fn render_event(event: &TraceEvent) -> String {
     TraceEvent::Inbound { event, .. } => {
       format!("inbound({})", event_kind(event))
     }
+    TraceEvent::HostOpened { kind, uuid, .. } => {
+      format!("host-opened({} {uuid})", render_host_kind(*kind))
+    }
+    TraceEvent::HostClosed {
+      kind, uuid, reason, ..
+    } => format!(
+      "host-closed({} {uuid}, {})",
+      render_host_kind(*kind),
+      render_host_reason(*reason)
+    ),
     TraceEvent::Outcome { outcome, .. } => format!("outcome({outcome:?})"),
+  }
+}
+
+fn render_host_kind(kind: crate::host::trace::HostKind) -> &'static str {
+  use crate::host::trace::HostKind;
+  match kind {
+    HostKind::ChatStream => "chat-stream",
+    HostKind::Timer => "timer",
+    HostKind::ResourceList => "resource-list",
+    HostKind::Resource => "resource",
+    HostKind::ToolCall => "tool-call",
+  }
+}
+
+fn render_host_reason(
+  reason: crate::host::trace::HostCloseReason,
+) -> &'static str {
+  use crate::host::trace::HostCloseReason;
+  match reason {
+    HostCloseReason::Ended => "ended",
+    HostCloseReason::Cancelled => "cancelled",
+    HostCloseReason::Failed => "failed",
   }
 }
 

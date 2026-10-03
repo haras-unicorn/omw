@@ -43,6 +43,16 @@ pub struct Registries {
   pub endpoints: crate::endpoint::Registry,
 }
 
+/// Back ends pre-built by the testing harness so it can snapshot their
+/// scripted queues after a run. Passing them into the controlled path makes
+/// the run use exactly these instances, which the harness also holds handles
+/// to.
+pub(crate) struct Backends {
+  pub providers: HashMap<String, crate::provider::ProviderEntry>,
+  pub tooling: HashMap<String, crate::tooling::ToolingEntry>,
+  pub endpoint: Option<crate::endpoint::EndpointEntry>,
+}
+
 impl Registries {
   /// An empty set of registries with no built-ins.
   pub fn new() -> Self {
@@ -113,7 +123,7 @@ pub async fn run_agents(
   registries: &Registries,
   shutdown: Shutdown,
 ) -> anyhow::Result<()> {
-  run_once(cfg, watch, registries, shutdown, None).await
+  run_once(cfg, watch, registries, shutdown, None, None).await
 }
 
 /// Like [`run_agents`] but with an active trace channel: every agent's inbox
@@ -139,7 +149,8 @@ pub async fn run_agents_traced(
   let collector_lagged = Arc::clone(&lagged);
   let collector =
     tokio::spawn(collect_trace(rx, stop_rx, collected_tx, collector_lagged));
-  let run = run_once(cfg, watch, registries, shutdown, Some(tx_for_run)).await;
+  let run =
+    run_once(cfg, watch, registries, shutdown, Some(tx_for_run), None).await;
   let _ = stop_tx.send(());
   let collected_tx = collector.await?;
   run?;
@@ -166,6 +177,7 @@ async fn run_once(
   registries: &Registries,
   shutdown: Shutdown,
   trace: Option<TraceSender>,
+  backends: Option<Backends>,
 ) -> anyhow::Result<()> {
   run_agents_inner(
     cfg,
@@ -174,6 +186,7 @@ async fn run_once(
     trace,
     shutdown,
     StopRegistry::default(),
+    backends,
   )
   .await
 }
@@ -181,15 +194,26 @@ async fn run_once(
 /// The testing harness's controlled entry point: like [`run_once`] but with a
 /// caller-owned [`Shutdown`] (so the harness can force stragglers down) and a
 /// [`StopRegistry`] (so it can stop an `asserted` agent once its assertions
-/// settle). No OS signal subscription is installed.
+/// settle). No OS signal subscription is installed. Pre-built `backends` let
+/// the harness hold handles to the mock instances and snapshot them afterwards.
 pub(crate) async fn run_agents_controlled(
   cfg: &Config,
   registries: &Registries,
   trace: TraceSender,
   shutdown: Shutdown,
   stops: StopRegistry,
+  backends: Option<Backends>,
 ) -> anyhow::Result<()> {
-  run_agents_inner(cfg, false, registries, Some(trace), shutdown, stops).await
+  run_agents_inner(
+    cfg,
+    false,
+    registries,
+    Some(trace),
+    shutdown,
+    stops,
+    backends,
+  )
+  .await
 }
 
 /// Shared body of `run`: build the process registries, spawn one task per
@@ -202,9 +226,11 @@ async fn run_agents_inner(
   trace: Option<TraceSender>,
   shutdown: Shutdown,
   stops: StopRegistry,
+  backends: Option<Backends>,
 ) -> anyhow::Result<()> {
   let shared = Arc::new(
-    Shared::build(cfg, registries, shutdown.clone(), trace.clone()).await?,
+    Shared::build(cfg, registries, shutdown.clone(), trace.clone(), backends)
+      .await?,
   );
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   let mut handles = Vec::new();
@@ -334,7 +360,8 @@ async fn loop_once(
   trace: Option<TraceSender>,
 ) -> anyhow::Result<()> {
   let shared = Arc::new(
-    Shared::build(cfg, registries, shutdown.clone(), trace.clone()).await?,
+    Shared::build(cfg, registries, shutdown.clone(), trace.clone(), None)
+      .await?,
   );
   let (watch_tx, watcher) = start_watcher(cfg, watch)?;
   join_all(cfg.agents.iter().map(|(name, agent)| {
@@ -827,13 +854,30 @@ impl Shared {
     registries: &Registries,
     shutdown: Shutdown,
     trace: Option<TraceSender>,
+    backends: Option<Backends>,
   ) -> anyhow::Result<Self> {
+    // A pre-built set of back ends (from the testing harness) is used as-is so
+    // the harness keeps handles to the exact mock instances for snapshots.
+    let (pre_providers, pre_tooling, pre_endpoint) = match backends {
+      Some(Backends {
+        providers,
+        tooling,
+        endpoint,
+      }) => (Some(providers), Some(tooling), endpoint),
+      None => (None, None, None),
+    };
     // Secrets lock with `mlock` at construction; permit unlocked secrets for
     // the whole bootstrap when the tunable opts in (e.g. inside containers
     // where the outer `RLIMIT_MEMLOCK` cannot be raised).
     let build = || -> anyhow::Result<_> {
-      let providers = registries.providers.build_entries(cfg)?;
-      let tooling = registries.tooling.build_entries(cfg)?;
+      let providers = match pre_providers {
+        Some(providers) => providers,
+        None => registries.providers.build_entries(cfg)?,
+      };
+      let tooling = match pre_tooling {
+        Some(tooling) => tooling,
+        None => registries.tooling.build_entries(cfg)?,
+      };
       if let Some(tx) = &trace {
         for entry in tooling.values() {
           entry.inner().attach_trace(tx.clone());
@@ -861,8 +905,12 @@ impl Shared {
       } else {
         build()
       }?;
-    let (endpoint_registry, endpoint_task) =
-      if let Some(entry) = registries.endpoints.build_entry(cfg)? {
+    let endpoint_entry = match pre_endpoint {
+      Some(entry) => Some(entry),
+      None => registries.endpoints.build_entry(cfg)?,
+    };
+    let (endpoint_registry, endpoint_task) = match endpoint_entry {
+      Some(entry) => {
         let registry = Arc::new(EndpointRegistry::with_tunables(
           Arc::clone(&bus),
           cfg.tunables,
@@ -880,9 +928,9 @@ impl Shared {
           }
         });
         (Some(registry), Some(task))
-      } else {
-        (None, None)
-      };
+      }
+      None => (None, None),
+    };
     Ok(Self {
       providers,
       tooling,

@@ -78,6 +78,7 @@ struct Connected {
 /// The bridge holds its config and dials lazily: the first tool or resource
 /// use connects (with backoff) and caches the peer; later uses reuse it.
 pub struct MCPTooling {
+  name: String,
   config: Config,
   backoff_start: Duration,
   backoff_cap: Duration,
@@ -97,6 +98,7 @@ impl MCPTooling {
   pub fn new(running: rmcp::service::RunningService<RoleClient, ()>) -> Self {
     let peer = running.peer().clone();
     Self {
+      name: String::from("mcp"),
       config: Config::Stdio {
         command: String::new(),
         args: Vec::new(),
@@ -125,7 +127,7 @@ impl MCPTooling {
     }
     let mut delay = self.backoff_start;
     loop {
-      match dial_once(&self.config).await {
+      match dial_once(&self.config, &self.name).await {
         Ok(connected) => {
           let peer = connected.peer.clone();
           *self.connected.lock().await = Some(connected);
@@ -157,6 +159,7 @@ impl Factory for MCPTooling {
       .with_context(|| format!("invalid mcp tooling config for {name:?}"))?;
     tracing::debug!(name, config = ?config, "built mcp tooling");
     Ok(Arc::new(MCPTooling {
+      name: name.to_owned(),
       config,
       backoff_start: tunables.tooling_connect_backoff_start(),
       backoff_cap: tunables.tooling_connect_backoff_cap(),
@@ -168,7 +171,7 @@ impl Factory for MCPTooling {
 /// Establish an rmcp client over the configured transport and run the
 /// `initialize` lifecycle handshake. The unit type is our client handler;
 /// this client role never handles server-initiated requests.
-async fn dial_once(config: &Config) -> anyhow::Result<Connected> {
+async fn dial_once(config: &Config, name: &str) -> anyhow::Result<Connected> {
   let running = match config {
     Config::Stdio { command, args, env } => {
       let mut cmd = tokio::process::Command::new(command);
@@ -176,8 +179,13 @@ async fn dial_once(config: &Config) -> anyhow::Result<Connected> {
       for (key, value) in env {
         cmd.env(key, value.expose());
       }
-      let transport = TokioChildProcess::new(cmd)
+      let (transport, stderr) = TokioChildProcess::builder(cmd)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .context("failed to spawn MCP server process")?;
+      if let Some(stderr) = stderr {
+        drain_stderr(name, stderr);
+      }
       ().serve_with_lifecycle(transport, ClientLifecycleMode::Initialize)
         .await
         .map_err(anyhow::Error::msg)
@@ -198,6 +206,29 @@ async fn dial_once(config: &Config) -> anyhow::Result<Connected> {
     peer,
     running: Arc::new(running),
   })
+}
+
+/// Re-emit the child's stderr as `tracing` events so a server's own logging
+/// flows through the same policy as everything else (native fields in
+/// journald, JSON fields for observability, an `mcp:<name>` tab in the TUI)
+/// instead of interleaving raw with omw's output. The task ends when the
+/// child closes stderr, i.e. when the connection goes away.
+fn drain_stderr(name: &str, stderr: tokio::process::ChildStderr) {
+  use tokio::io::AsyncBufReadExt as _;
+
+  let tooling = name.to_owned();
+  tokio::spawn(async move {
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+      tracing::info!(
+        target: "mcp",
+        source = "mcp",
+        tooling = %tooling,
+        stream = "stderr",
+        "{line}"
+      );
+    }
+  });
 }
 
 #[async_trait::async_trait]

@@ -1,19 +1,21 @@
 # Brain examples
 
 Runnable agents that exercise the whole `omw` stack with no keys, no network,
-and no external services. Each case is one shared `omw.test.template.toml` plus
-a brain per variant under `rhai/`, `js/`, and `wasm/`, with a committed
-`<variant>/omw.test.toml` generated from the template.
+and no external services. Each case is one shared `omw.test.base.toml` plus a
+brain per variant under `rhai/`, `js/`, and `wasm/`, with a committed
+`<variant>/omw.test.toml` generated from the base config.
 
 Run one case (every variant) or all of them:
 
 ```sh
 omw-test run examples/01-hello
 omw-test run examples
+dev test brain examples
 ```
 
-Each case is checked against the assertions in its config. See the
-[examples guide](../docs/examples.md) for how the variants, templates, and
+A case automatically inherits its `omw.test.base.toml`. Each case is checked
+against the assertions in that base config. See the
+[examples guide](../docs/examples.md) for how the variants, base configs, and
 assertions work, and [Testing](../docs/testing/testing.md) for the binary.
 
 - `01-hello` — provider wiring: one blocking `chat`.

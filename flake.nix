@@ -21,10 +21,10 @@
 
   nixConfig = {
     extra-substituters = [
-      "https://haras.cachix.org"
+      "https://haras-releases.cachix.org"
     ];
     extra-trusted-public-keys = [
-      "haras.cachix.org-1:/HIo1JYqOIH1Nwk1EGXhuPPvDW0WekxIbY5CiXUZbYw="
+      "haras-releases.cachix.org-1:DK1D4cU3v6GUkdjynBsjk0cCMtLaueSUCD7wJBPxyMM="
     ];
   };
 }

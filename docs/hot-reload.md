@@ -21,7 +21,8 @@ omw loop --config omw.toml --watch
 The watcher tracks each agent's `script` path. It watches parent directories
 non-recursively (editors that save via `write temp + rename` still trigger) and
 debounces (see `watch_debounce_ms` in [tunables](./tunables.md)), so one save
-restarts the agent once.
+restarts the agent once. Only real mutations count: reads and opens are ignored,
+so the watcher never reacts to its own directory scans.
 
 ## What survives and what dies
 

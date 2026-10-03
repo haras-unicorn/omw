@@ -76,3 +76,6 @@ ignoreWords:
   - reserialize
   - scriptable
   - usize
+  - ratatui
+  - crossterm
+  - journalctl

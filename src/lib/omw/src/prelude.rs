@@ -18,7 +18,9 @@ pub use crate::endpoint::{
 };
 pub use crate::host::ctx::AgentContext;
 pub use crate::host::events::{Event, EventEnvelope};
-pub use crate::host::trace::{AgentTrace, TraceEvent, TraceSender};
+pub use crate::host::trace::{
+  AgentTrace, HostCloseReason, HostKind, TraceEvent, TraceSender,
+};
 pub use crate::provider::{
   ChatDelta, ChatMessage, ChatResult, Factory as ProviderFactory, Provider,
   ProviderEntry, Role, ToolCall,
@@ -30,8 +32,8 @@ pub use crate::secret::Secret;
 pub use crate::shutdown::Shutdown;
 pub use crate::testing::{
   AgentAssertion, AgentReport, ArrayStep, Assertions, EventAssertion, Harness,
-  Matcher, OutcomeAssertion, Pattern, Report, check, collect, event_kind,
-  parse, scaffold,
+  Matcher, OutcomeAssertion, Pattern, Report, Snapshots, check, collect,
+  event_kind, parse, scaffold,
 };
 pub use crate::tooling::{
   Factory as ToolingFactory, ResourceContent, ResourceInfo,

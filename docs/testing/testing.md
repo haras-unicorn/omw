@@ -33,10 +33,69 @@ omw-test run examples            # every discovered config
   always a failure, never a skip; narrow the set with the globs instead.
 - `--format <fmt>` forces the config format (`toml`, `yaml` or `json`) for every
   loaded config; without it, each file's format is inferred from its extension.
+- Shared wiring lives in an `omw.test.base.<ext>` file that, by convention,
+  applies to the test configs in its directory and below. See
+  [Base configs](#base-configs).
+- `--all` keeps going after a failure and reports every failing test. Without it
+  `omw-test` is fail-fast: it stops at the first failure and prints that test's
+  detail.
+- `--dump <path>` writes the per-test traces and mock queue snapshots as
+  machine-readable data (`-` / `/dev/stdout` streams them). Each entry carries
+  the test label, its verdict, each agent's observed events, assertion cursor
+  and diff, and the mock back ends' consumed-vs-remaining scripted queues.
+  `--dump-format json|yaml|toml` selects the encoding; it defaults to `json`,
+  which keeps a piped dump `jq`-able (`toml` drops nulls, which it cannot
+  represent).
 - `--watch` re-runs on change instead of exiting: after each pass it waits for a
   debounced filesystem event and runs again (file mode watches the config's
   parent directory; directory mode watches the root recursively). The library
   hot-reload watch is always off.
+
+### Failure diagnostics
+
+A passing test needs no explanation; a failing or hanging one needs the state
+that produced it.
+
+- **Timeout.** `tunables.test_timeout_secs` (default 30, `0` disables) bounds
+  each test's harness run. On expiry the run is force-stopped and every
+  unsettled agent is marked timed out, so a hang is unusable rather than an
+  indefinite wait.
+- **Trace state.** A failure shows each observed event with an index next to the
+  assertion cursor — the next assertion the matcher was waiting on.
+- **Host/runtime state.** The chat-stream, timer, resource-subscription and
+  tool-call pumps emit `host-opened` / `host-closed` (with a reason: ended,
+  cancelled or failed) trace events, and `chat_stream`'s call detail carries the
+  UUID it returned, so "opened but delivered nothing" is visible.
+- **Mock queue state.** On failure the mock provider/tooling/endpoint report
+  their consumed vs remaining turns/`tool_calls`/`requests` (real back ends
+  report nothing). `--dump` writes the same snapshots.
+- **Settle signal.** The instant an `outcome = "asserted"` agent's assertions
+  settle, a per-agent line is logged, so a hang is unmistakably a hang rather
+  than a pending pass.
+- **Durable tally.** An interactive run replays the per-test `PASS`/`FAIL` lines
+  and the final tally to stdout once the live view tears down, so the result
+  stays in scrollback instead of only flashing on the alternate screen.
+
+## Output
+
+Verdicts are the test runner's product, so they go to **stdout**; diagnostics go
+to **stderr** (or the journal), so `omw-test run | ...` stays parseable while
+logs stream separately.
+
+- `--log-format auto|tty|pipe|journald` selects how logs render. `auto` picks
+  `tty` when both stdout and stderr are terminals, else `journald` under systemd
+  (`JOURNAL_STREAM` is set), else `pipe` (JSONL on stderr).
+- On a terminal the **live view** owns the screen: an info panel showing the
+  launched command and the discovery path/test count, a list of every discovered
+  test marked `✅`/`❌` (with a spinner on the running one), a logs pane for the
+  running test — or the failed test's assertion diff (expected vs observed)
+  beside its buffered logs — and a bordered `N/M tests` gauge.
+- In `pipe` the same verdict lines are plain: one `PASS` / `FAIL <label>` per
+  test plus the final tally on stdout.
+- `--watch` resets the list and gauge each pass.
+
+See [Output](../output.md) for the full policy, the `RUST_LOG` level recipes and
+the per-command table.
 
 ## Schema
 
@@ -54,9 +113,9 @@ counterpart is `omw schema` (see
 
 Discovery skips hidden directories and collects any file whose stem is
 `omw.test` or ends with `.omw.test` and whose extension is `toml`, `yaml`, `yml`
-or `json`, so several test configs can live side by side in one directory. The
-shared templates (`omw.test.template.toml`) never match, since they end in
-`template.toml`.
+or `json`, so several test configs can live side by side in one directory. A
+shared base config (`omw.test.base.<ext>`) is never matched, since its stem ends
+in `.base`.
 
 ## Scaffolding
 
@@ -92,6 +151,66 @@ Everything is best-effort: a back end that cannot be built or enumerated yields
 an empty mock and a warning instead of failing the conversion. The original
 params are never carried over, so secrets do not end up in the output. Fill in
 the `turns`, `tool_calls` and `requests` to script the run.
+
+## Base configs
+
+A _base config_ is an ordinary `omw.toml`-shaped file (TOML, YAML or JSON) named
+`omw.test.base.<ext>` that contributes both the runnable config and its
+`[assertions]`. When a directory is discovered, each test config inherits the
+base configs in its own directory and in every directory between it and the
+discovery root:
+
+```text
+base config(s) (outermost first)  →  test config  →  OMW_TEST__ overlay
+```
+
+Each later source overrides the earlier ones, so the test config overrides the
+base configs it inherits, and the environment overrides them all. Merging is a
+deep table merge: a test config's `[agents.<name>]` or `[assertions.<agent>]`
+overrides the base config's keys for that entry while inheriting the rest. A
+base config's relative `script` resolves against its own directory, so it always
+points where it was written. The format of every file is inferred from its
+extension, or forced with `--format` when a file has none.
+
+A base only reaches **down** the tree, never above the path passed to
+`omw-test run`. Running `omw-test run cases` picks up `cases/omw.test.base.toml`
+for every test below it (and `cases/<case>/omw.test.base.toml` for that case),
+while a directory that has no base of its own simply inherits its ancestors'.
+`omw.test.base.*` is never collected as a test config, and `--include` /
+`--exclude` filter the tests independently.
+
+This lets a suite share its wiring and keep each test minimal — usually only the
+`[runtime.*]` kind and each agent's `script` differ per variant:
+
+```toml
+# cases/01-hello/omw.test.base.toml — shared wiring
+[providers.openai]
+kind = "mock"
+turns = [{ content = "hello, world" }]
+
+[agents.alice]
+runtime = "runtime"
+
+[assertions.alice]
+outcome = "completed"
+events = [{ kind = "call", op = "chat" }]
+```
+
+```toml
+# cases/01-hello/rhai/omw.test.toml — only what differs
+[runtime.runtime]
+kind = "rhai"
+
+[agents.alice]
+script = "brain.rhai"
+```
+
+```sh
+omw-test run cases/01-hello
+```
+
+The [examples](../examples.md) use exactly this layout: one `omw.test.base.toml`
+per case and a shrunk `omw.test.toml` per variant.
 
 ## Assertions
 
@@ -243,10 +362,17 @@ trace channel (`host/trace.rs`, exported via the `prelude`):
 pub enum TraceEvent {
   Inbound { agent: String, id: String, event: Event },
   Call { agent: String, op: String, detail: serde_json::Value },
+  HostOpened { agent: String, kind: HostKind, uuid: String },
+  HostClosed { agent: String, kind: HostKind, uuid: String, reason: HostCloseReason },
   Outcome { agent: String, outcome: RunOutcome },
 }
 pub type TraceSender = tokio::sync::broadcast::Sender<TraceEvent>;
 ```
+
+`kind` is the cancellable host source (`chat-stream`, `timer`, `resource-list`,
+`resource`, `tool-call`); `reason` is `ended`, `cancelled` or `failed`. The
+lifecycle events also double as assurance that a subscription was actually
+opened: a rejected duplicate opens nothing and emits nothing.
 
 `run_agents_traced(cfg, watch, registries, tx)` (and the `loop_` twin) spawns a
 receiver-drain task, emits one `Outcome` per agent, and returns the flattened

@@ -35,3 +35,12 @@ fn invalid_format_value_is_a_usage_error() {
     .failure()
     .code(2);
 }
+
+#[test]
+fn invalid_log_format_value_is_a_usage_error() {
+  common::omw_test()
+    .args(["run", "--log-format", "bogus"])
+    .assert()
+    .failure()
+    .code(2);
+}

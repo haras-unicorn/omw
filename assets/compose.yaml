@@ -26,9 +26,9 @@ services:
       # the stateDir equivalent for filesystem MCP tooling).
       - ./omw.toml:/etc/omw/omw.toml:ro
       - omw-workspace:/var/lib/omw
-    # Only needed with [endpoint] (listen = "0.0.0.0:8080").
+    # Only needed with [endpoint] (listen = "0.0.0.0:37532").
     ports:
-      - "8080:8080"
+      - "37532:37532"
     restart: unless-stopped
 
   # Example HTTP MCP server on the same network. Point a tooling at it with

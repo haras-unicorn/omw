@@ -17,3 +17,4 @@ ignoreWords:
   - memlock
   - eperm
   - pageable
+  - tenere

@@ -314,13 +314,13 @@ impl WasmEngine {
       .omw_omw_runtime()
       .call_run(&mut store, &script)
       .map_err(|e| map_trap(&host_ctx, e.into()))
-      .map_err(|e| {
-        tracing::error!(error = %e, "component runtime.run failed");
-        e
+      .inspect_err(|e| {
+        log_abort(&host_ctx, e, "component runtime.run");
       })?
       .map_err(|e| {
-        tracing::error!(error = %e, "component runtime.run returned an error");
-        anyhow::anyhow!(e)
+        let error = anyhow::anyhow!(e);
+        log_abort(&host_ctx, &error, "component runtime.run");
+        error
       })?;
     tracing::debug!(?result, "brain run returned");
     Ok(result)
@@ -346,6 +346,18 @@ impl WasmEngine {
     omw::tooling::add_to_linker::<_, HasSelf<_>>(&mut linker, |h| h)?;
     omw::host::add_to_linker::<_, HasSelf<_>>(&mut linker, |h| h)?;
     Ok((store, linker))
+  }
+}
+
+/// Log a brain error at `error`, or at `debug` when a shutdown/reload/stop was
+/// requested: an abort caused by the supervisor tearing the agent down is not
+/// a failure.
+fn log_abort(ctx: &AgentContext, error: &anyhow::Error, what: &str) {
+  if ctx.shutdown_requested() || ctx.reload_requested() || ctx.stop_requested()
+  {
+    tracing::debug!(error = %error, "{what} aborted");
+  } else {
+    tracing::error!(error = %error, "{what} failed");
   }
 }
 

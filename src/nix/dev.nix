@@ -6,6 +6,64 @@
 }:
 
 let
+  binaries = [
+    {
+      crate = "omw-cli";
+      program = "omw";
+    }
+    {
+      crate = "omw-test";
+      program = "omw-test";
+    }
+  ];
+
+  variants = [
+    {
+      key = null;
+      suffix = "";
+      runtime = "wasm";
+      source = "brain.rs";
+      script = "brain.wasm";
+    }
+    {
+      key = "rhai";
+      suffix = "-rhai";
+      runtime = "rhai";
+      source = "brain.rhai";
+      script = "brain.rhai";
+    }
+    {
+      key = "js";
+      suffix = "-js";
+      runtime = "js";
+      source = "brain.js";
+      script = "brain.js";
+    }
+  ];
+
+  formats = [
+    {
+      key = "unwrapped";
+      suffix = "-unwrapped";
+    }
+    {
+      key = "wrapped";
+      suffix = "";
+    }
+    {
+      key = "tarball";
+      suffix = "-tarball";
+    }
+    {
+      key = "ci-unwrapped";
+      suffix = "-ci-unwrapped";
+    }
+    {
+      key = "ci-wrapped";
+      suffix = "-ci";
+    }
+  ];
+
   makePackages =
     pkgs:
     let
@@ -157,6 +215,9 @@ let
           featureArgs = if variant == null then "" else "--features ${features}";
 
           depArgs = staticDepArgs // {
+            env = staticDepArgs.env // {
+              CARGO_PROFILE = if lib.hasPrefix "ci" format then "ci" else "release";
+            };
             cargoExtraArgs = "-p ${crate} ${featureArgs} --target ${staticTarget}";
           };
 
@@ -171,7 +232,8 @@ let
             }
           );
 
-          wrapped =
+          wrap =
+            package:
             pkgs.callPackage
               (
                 {
@@ -187,8 +249,10 @@ let
                 }
               )
               {
-                omw-unwrapped = unwrapped;
+                omw-unwrapped = package;
               };
+
+          wrapped = wrap unwrapped;
 
           tarball =
             pkgs.runCommand "${program}${suffix}-${system}.tar.gz"
@@ -201,55 +265,14 @@ let
                 tar -czf "$out" -C staging "${program}${suffix}-${system}"
               '';
         in
-        if format == "unwrapped" then
+        if lib.hasSuffix "unwrapped" format then
           unwrapped
-        else if format == "wrapped" then
+        else if lib.hasSuffix "wrapped" format then
           wrapped
         else if format == "tarball" then
           tarball
         else
           builtins.throw "unknown format ${format}";
-
-      binaries = [
-        {
-          crate = "omw-cli";
-          program = "omw";
-        }
-        {
-          crate = "omw-test";
-          program = "omw-test";
-        }
-      ];
-
-      variants = [
-        {
-          key = null;
-          suffix = "";
-        }
-        {
-          key = "rhai";
-          suffix = "-rhai";
-        }
-        {
-          key = "js";
-          suffix = "-js";
-        }
-      ];
-
-      formats = [
-        {
-          key = "unwrapped";
-          suffix = "-unwrapped";
-        }
-        {
-          key = "wrapped";
-          suffix = "";
-        }
-        {
-          key = "tarball";
-          suffix = "-tarball";
-        }
-      ];
 
       buildMatrix =
         {
@@ -319,9 +342,27 @@ in
     "aarch64-linux"
   ];
 
+  flake.lib = {
+    inherit
+      binaries
+      variants
+      formats
+      ;
+  };
+
   flake.overlays =
     let
-      overlay = final: prev: (makePackages final).buildMatrix { };
+      overlay =
+        final: prev:
+        (makePackages final).buildMatrix {
+          filterPackages =
+            { format, ... }:
+            !(builtins.elem format.key [
+              "tarball"
+              "ci-unwrapped"
+              "ci-wrapped"
+            ]);
+        };
     in
     {
       default = overlay;
@@ -383,10 +424,12 @@ in
               vscode-langservers-extracted
               yaml-language-server
               cargo-edit
+              mcp-nixos
+              tenere
               packages.rust
+              config.packages.json-schema-to-typescript
             ]
-            ++ packages.nativeBuildInputs
-            ++ [ config.packages.json-schema-to-typescript ];
+            ++ packages.nativeBuildInputs;
 
           devScript = pkgs.writeShellApplication {
             name = "dev";
@@ -468,7 +511,9 @@ in
         };
 
       apps = packages.buildMatrix {
-        filterPackages = { format, ... }: format.key != "tarball";
+        filterPackages =
+          { format, ... }:
+          format.key != "tarball" && !(lib.hasPrefix "ci" format.key);
         mapPackages =
           {
             package,
@@ -488,7 +533,7 @@ in
       };
 
       checks = packages.buildMatrix {
-        filterPackages = { format, ... }: format.key == "unwrapped";
+        filterPackages = { format, ... }: format.key == "ci-unwrapped";
         mapPackages =
           {
             package,
@@ -506,7 +551,11 @@ in
                 ''
                   bin="${lib.getExe package}"
                   echo "checking $bin for static linkage"
-                  file "$bin" | grep -E "static(-pie)? linked"
+                  if ! file -b "$bin" | grep -qE "statically linked|static-pie linked"; then
+                    echo "$bin is not statically linked:" >&2
+                    file -b "$bin" >&2
+                    exit 1
+                  fi
                   if "${pkgs.glibc}/bin/ldd" "$bin" >/dev/null 2>&1; then
                     echo "$bin is dynamically linked" >&2
                     exit 1

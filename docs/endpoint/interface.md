@@ -30,7 +30,7 @@ inbox protocol.
 ```toml
 [endpoint]
 kind = "openai"
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:37532"
 ```
 
 The endpoint is optional and disabled unless `[endpoint]` is set. The remaining

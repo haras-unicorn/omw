@@ -15,6 +15,7 @@
   - [The js runtime](./runtime/js.md)
 - [Hot reload](./hot-reload.md)
 - [Tunables](./tunables.md)
+- [Output](./output.md)
 - [Library](./library.md)
 - [Testing](./testing/testing.md)
   - [Provider mock](./testing/mocks/provider.md)

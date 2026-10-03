@@ -45,7 +45,7 @@ The unit runs `omw <mode> --config <file>` directly (`ExecStart`, no shell):
 omw loop --config /etc/omw.toml
 ```
 
-Two things follow from this:
+Three things follow from this:
 
 - **`settings` and `settingsFile` are mutually exclusive.** `settings` is an
   attribute set rendered to TOML at build time; `settingsFile` is a path to a
@@ -54,6 +54,12 @@ Two things follow from this:
   separator, e.g. `OMW__PROVIDERS__OPENAI__API_KEY`) override file values at
   runtime, so API keys never have to live in the Nix store. Set them with the
   `environment` option (systemd `Environment=`) or an `environmentFile`.
+- **Logs go to the journal natively.** systemd connects the service's stdio to
+  the journal, so omw's `auto` log format selects journald and writes structured
+  fields instead of raw lines. Read them with `journalctl -u omw`, or `-o json`
+  for the attributes. `RUST_LOG` (default `info`) sets the level; set it through
+  `environment` or `environmentFile`. See [Output](../../output.md) for the full
+  policy.
 
 `mode` selects `run` (every agent once) or `loop` (keep agents running,
 restarting on failure — the default, suited to a service).
