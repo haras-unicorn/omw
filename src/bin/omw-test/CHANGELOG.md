@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.4...omw-test-v0.1.6) - 2026-10-03
+
+### Added
+
+- nicer output ([#89](https://github.com/haras-unicorn/omw/pull/89))
+
+### Fixed
+
+- fix/script path resolution in base test config ([#93](https://github.com/haras-unicorn/omw/pull/93))
+
+### Other
+
+- release ([#90](https://github.com/haras-unicorn/omw/pull/90))
+
 ## [0.1.5](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.4...omw-test-v0.1.5) - 2026-10-03
 
 ### Added

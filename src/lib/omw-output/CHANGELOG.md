@@ -7,48 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.6](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.4...omw-cli-v0.1.6) - 2026-10-03
+## [0.1.6](https://github.com/haras-unicorn/omw/compare/omw-output-v0.1.4...omw-output-v0.1.6) - 2026-10-03
 
 ### Added
 
 - nicer output ([#89](https://github.com/haras-unicorn/omw/pull/89))
-
-### Fixed
-
-- fix/script path resolution in base test config ([#93](https://github.com/haras-unicorn/omw/pull/93))
-
-### Other
-
-- release ([#90](https://github.com/haras-unicorn/omw/pull/90))
-
-## [0.1.5](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.4...omw-cli-v0.1.5) - 2026-10-03
-
-### Added
-
-- nicer output ([#89](https://github.com/haras-unicorn/omw/pull/89))
-
-## [0.1.4](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.3...omw-cli-v0.1.4) - 2026-10-01
-
-### Added
-
 - better config schema ([#81](https://github.com/haras-unicorn/omw/pull/81))
 - json and yaml config support ([#79](https://github.com/haras-unicorn/omw/pull/79))
-
-### Fixed
-
-- stdin/stdout cli io works ([#85](https://github.com/haras-unicorn/omw/pull/85))
-- agents to map ([#78](https://github.com/haras-unicorn/omw/pull/78))
-
-## [0.1.2](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.1...omw-cli-v0.1.2) - 2026-09-26
-
-### Fixed
-
-- vendor wasm in omw ([#67](https://github.com/haras-unicorn/omw/pull/67))
-
-## [0.1.1](https://github.com/haras-unicorn/omw/releases/tag/omw-cli-v0.1.1) - 2026-09-23
-
-### Added
-
 - omw-test and examples ([#56](https://github.com/haras-unicorn/omw/pull/56))
 - bao js interpreter ([#38](https://github.com/haras-unicorn/omw/pull/38))
 - rust wasm library ([#37](https://github.com/haras-unicorn/omw/pull/37))
@@ -60,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- statically linked builds ([#47](https://github.com/haras-unicorn/omw/pull/47))
+- fix/script path resolution in base test config ([#93](https://github.com/haras-unicorn/omw/pull/93))
+- stdin/stdout cli io works ([#85](https://github.com/haras-unicorn/omw/pull/85))
+- agents to map ([#78](https://github.com/haras-unicorn/omw/pull/78))
 - clean up public api ([#46](https://github.com/haras-unicorn/omw/pull/46))
 - make endpoint implementation configurable ([#41](https://github.com/haras-unicorn/omw/pull/41))
 - decouple wasm ([#40](https://github.com/haras-unicorn/omw/pull/40))
