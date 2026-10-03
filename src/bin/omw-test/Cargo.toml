@@ -1,6 +1,6 @@
 [package]
 name = "omw-test"
-version = "0.1.4"
+version = "0.1.5"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -29,7 +29,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 toml.workspace = true
-omw = { version = "0.1.4", path = "../../lib/omw", default-features = false, features = [
+omw = { version = "0.1.5", path = "../../lib/omw", default-features = false, features = [
   "mock",
 ] }
 omw-output = { path = "../../lib/omw-output" }
