@@ -16,6 +16,43 @@ use crate::host::trace::{TraceEvent, TraceSender};
 use crate::provider::ChatMessage;
 use crate::tooling::Tool;
 
+/// The boxed run function of an [`Injection`].
+type InjectionRun = Box<
+  dyn Fn(&MessageBus, &[TraceEvent], &tokio::runtime::Handle) -> bool
+    + Send
+    + Sync,
+>;
+
+/// A call-boundary-flushed delivery registered by a test double.
+///
+/// Instead of a background task racing the guest, a mock registers a pending
+/// injection: at a guest call boundary the host runs `run` with the trace
+/// observed so far. It should perform any deliveries that are now ready and
+/// return `true` when it is done, or `false` to stay pending (for example a
+/// request whose model is not yet subscribed). Because `run` executes
+/// synchronously on the guest thread inside the boundary flush, the delivery's
+/// place in the trace is a function of the config and brain alone.
+pub(crate) struct Injection {
+  run: InjectionRun,
+}
+
+impl Injection {
+  pub(crate) fn new(
+    run: impl Fn(&MessageBus, &[TraceEvent], &tokio::runtime::Handle) -> bool
+    + Send
+    + Sync
+    + 'static,
+  ) -> Self {
+    Self { run: Box::new(run) }
+  }
+}
+
+impl std::fmt::Debug for Injection {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Injection").finish_non_exhaustive()
+  }
+}
+
 /// Lock a `std::sync::Mutex`, recovering the guard on poison (a poisoned lock
 /// should never take the whole runtime down).
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
@@ -61,6 +98,13 @@ struct BusInner {
   /// `unsubscribe-endpoint` can remove by handle instead of again walking
   /// the model map.
   endpoint_by_uuid: HashMap<String, (String, String)>,
+  /// Every trace event observed so far, appended in order. Injection triggers
+  /// match against this log, so a mock may gate on an event that preceded it.
+  observed: Vec<TraceEvent>,
+  /// Pending call-boundary injections, in registration order. A `Vec` (never a
+  /// `HashMap`) so hash randomization cannot reorder deliveries across
+  /// processes.
+  injections: Vec<Injection>,
 }
 
 impl MessageBus {
@@ -88,10 +132,57 @@ impl MessageBus {
     }
   }
 
-  /// Push one observation onto the trace channel, if any is attached.
+  /// Push one observation onto the trace channel, if any is attached, and
+  /// append it to the observed log that injection triggers match against.
   pub(crate) fn trace_event(&self, event: TraceEvent) {
+    if self.trace.is_none() {
+      return;
+    }
+    lock(&self.inner).observed.push(event.clone());
     if let Some(tx) = &self.trace {
       let _ = tx.send(event);
+    }
+  }
+
+  /// Register a pending call-boundary injection. It fires the next time the
+  /// host flushes at a guest call boundary after its trigger is observed.
+  pub(crate) fn register_injection(&self, injection: Injection) {
+    lock(&self.inner).injections.push(injection);
+  }
+
+  /// Flush triggered injections synchronously. Called by the host at a guest
+  /// call boundary; `fire` runs on the guest thread and may deliver into an
+  /// inbox or spawn async work (via `rt`) whose *delivery* was already pinned.
+  /// Untriggered injections stay pending, preserving their registration order.
+  pub(crate) fn flush_injections(&self, rt: &tokio::runtime::Handle) {
+    let (observed, pending) = {
+      let mut inner = lock(&self.inner);
+      if inner.injections.is_empty() {
+        return;
+      }
+      (
+        inner.observed.clone(),
+        std::mem::take(&mut inner.injections),
+      )
+    };
+    let mut keep = Vec::new();
+    for injection in pending {
+      if !(injection.run)(self, &observed, rt) {
+        keep.push(injection);
+      }
+    }
+    if keep.is_empty() {
+      return;
+    }
+    // Re-insert kept injections ahead of anything registered meanwhile, so
+    // registration order is preserved across a flush.
+    let mut inner = lock(&self.inner);
+    if inner.injections.is_empty() {
+      inner.injections = keep;
+    } else {
+      let mut merged = keep;
+      merged.append(&mut inner.injections);
+      inner.injections = merged;
     }
   }
 
@@ -796,5 +887,35 @@ mod tests {
       TraceEvent::Inbound { .. }
     ));
     Ok(())
+  }
+
+  #[tokio::test]
+  async fn flush_fires_triggered_injections_in_registration_order() {
+    use std::sync::Arc;
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let bus = MessageBus::with_trace(crate::config::Tunables::default(), tx);
+    let order = Arc::new(Mutex::new(Vec::new()));
+    for id in [1u8, 2] {
+      let order = Arc::clone(&order);
+      bus.register_injection(Injection::new(move |_bus, observed, _rt| {
+        let ready = observed.iter().any(
+          |event| matches!(event, TraceEvent::Call { op, .. } if op == "go"),
+        );
+        if !ready {
+          return false;
+        }
+        lock(&order).push(id);
+        true
+      }));
+    }
+    bus.trace_event(TraceEvent::Call {
+      agent: "alice".to_string(),
+      op: "go".to_string(),
+      uuid: None,
+      detail: serde_json::json!({}),
+    });
+    bus.flush_injections(&tokio::runtime::Handle::current());
+    assert_eq!(*lock(&order), vec![1, 2]);
   }
 }

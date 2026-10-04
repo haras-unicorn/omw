@@ -60,20 +60,27 @@ A Cargo workspace with the crates below plus a single WIT contract.
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
     implemented for OpenAI in `openai.rs` (behind the `provider-openai` feature)
     and as a scripted in-memory double in `mock.rs` (behind
-    `any(test, feature = "mock")`; sequenced `turns` plus `models`). The `build`
-    factory dispatches on the configured `kind`.
+    `any(test, feature = "mock")`; sequenced `turns` — each optionally ending
+    with an `error` after its deltas or `pending` forever — plus `models`). The
+    `build` factory dispatches on the configured `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
     implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature)
     with a `transport`-tagged config enum (`stdio` / `http`), and as a scripted
     in-memory double in `mock.rs` (behind `any(test, feature = "mock")`: static
     `tools`, an ordered name-verified `tool_calls` list (each a text `result`
-    convenience plus optional `structured_content`), `initial_resource_*` plus
-    ordered `resource_*_updates`, each step gated by a shared `after` and paced
-    by `delay_ms`; it learns the trace through `Tooling::attach_trace`, a
-    default no-op the supervisor calls after building entries). `call_tool`
-    returns a `ToolCallResult` (`content` + optional `structured_content`, both
-    JSON). The `build` factory dispatches on the configured `kind`.
+    convenience plus optional `structured_content`, `error` or `pending`),
+    `initial_resource_*` plus ordered `resource_*_updates` (each optionally
+    `error` or `pending`), each step gated by a shared `after` and paced by
+    `delay_ms`; it learns the trace through `Tooling::attach_trace`, a default
+    no-op the supervisor calls after building entries). `call_tool` returns a
+    `ToolCallResult` (`content` + optional `structured_content`, both JSON). The
+    `build` factory dispatches on the configured `kind`. For deterministic runs,
+    the host takes a mock-only `pub(crate) ResourceInjections` hook carried on
+    the `ToolingEntry` (set by `Registry::register_mock`, off the public
+    `Tooling` trait) and registers the mock's gated steps as call-boundary
+    injections instead of pumping them; the host's `call_tool` /
+    `subscribe_resource*` use it when present, otherwise the pump.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
     `bindings.rs` (the single `bindgen!` for the `omw` world, mapped onto host
@@ -100,13 +107,22 @@ A Cargo workspace with the crates below plus a single WIT contract.
     transport-agnostic state lives in `host/bus.rs` (`endpoint_subscribe` /
     `endpoint_route`) and `host/endpoint.rs` (`EndpointRegistry`), and a
     scripted `mock.rs` client double (behind `any(test, feature = "mock")`)
-    drives sessions for `omw-test`: its `requests` entries fire once the model
-    is subscribed, or — when gated by an `after` pattern — once a matching trace
-    event has been observed (order-only, via a shared append-only trace log
-    built from `MessageBus::trace_sender`). The agent's `stream-endpoint` call
-    detail carries the delta (`session`, `content`, `tool_call`,
-    `finish_reason`), so the reply is observable as the brain's own calls and no
-    separate endpoint trace event exists.
+    drives sessions for `omw-test`: each of its `requests` (carrying a required
+    `session_id` label) is registered synchronously — before any agent runs — as
+    a call-boundary injection that fires once the model is subscribed and its
+    `after` pattern (if any) has been observed, so concurrent requests are
+    routed deterministically; an optional `session_end = { close = N }` /
+    `{ abort = N }` ends the session after `N` deltas (normal `close`, since
+    `EndpointRegistry::close` delivers the normal end, or erroring `abort`)
+    instead of the default silent drain. A request fires once the model is
+    subscribed, or — when gated by an `after` pattern — once a matching trace
+    event has been observed (order-only, via the bus's append-only `observed`
+    log). `serve` only keeps the endpoint task alive. The agent's
+    `stream-endpoint` call detail carries the delta (`session`, `content`,
+    `tool_call`, `finish_reason`), so the reply is observable as the brain's own
+    calls and no separate endpoint trace event exists; each reply records both
+    the `session_id` and the opaque session UUID plus its ending (`closed` /
+    `aborted` / `error`) in the snapshot.
 
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
@@ -126,26 +142,35 @@ A Cargo workspace with the crates below plus a single WIT contract.
 
   - `testing/` — the deterministic brain-testing substrate. `assert.rs` holds
     the `[assertions]` model, parser (`parse(source, Format)`, format-aware),
-    and ordered-subsequence pattern matcher (`Matcher`); `harness.rs` drives a
-    run through the controlled path, consumes the trace live, stops
-    `outcome = "asserted"` agents as their assertions settle (logging a settle
-    line), bounds the run by `tunables.test_timeout_secs` (marking unsettled
-    agents timed out), snapshots the mock back ends' scripted queues, and
-    returns a `Report` whose `AgentReport`s carry the observed events, cursor
-    and diff. `assert.rs` also holds the `pub(crate)` `TraceLog` (an append-only
-    trace log with independent per-gate scanning) that the endpoint and tooling
-    mocks gate `after` on. `scaffold.rs` holds the best-effort `scaffold`
-    function that converts a deployment `Config` into a structured `toml::Table`
-    test config whose provider/tooling/endpoint are the in-config mocks,
-    introspecting the real back ends through the registries to pre-populate
-    models/tools/resources; rendering it (pretty-printing, the provenance
-    banner, the output path) is the `omw` binary's job. Exposed as
+    and ordered-subsequence pattern matcher (`Matcher`) over `call` / `inbound`
+    plus the `opened` / `closed` lifecycle kinds (matched by source kind and
+    close reason, never by UUID); `harness.rs` drives a run through the
+    controlled path, consumes the trace live, stops `outcome = "asserted"`
+    agents as their assertions settle (logging a settle line), bounds the run by
+    `tunables.test_timeout_secs` (marking unsettled agents timed out), snapshots
+    the mock back ends' scripted queues and per-call returns (provider deltas,
+    tooling results, endpoint replies), and returns a `Report` whose
+    `AgentReport`s carry the observed events, cursor and diff. `assert.rs` also
+    holds the `pub(crate)` `TraceLog` (an append-only trace log with independent
+    per-gate scanning) that the tooling mock still uses for its legacy
+    `call_tool` `after` gate; resource and endpoint `after` gates use
+    call-boundary injections instead. `scaffold.rs` holds the best-effort
+    `scaffold` function that converts a deployment `Config` into a structured
+    `toml::Table` test config whose provider/tooling/endpoint are the in-config
+    mocks, introspecting the real back ends through the registries to
+    pre-populate models/tools/resources; rendering it (pretty-printing, the
+    provenance banner, the output path) is the `omw` binary's job. Exposed as
     `omw::testing` and re-exported from `prelude`; the `omw-test` binary is a
     thin CLI over it.
 
   - `host/` — the host side of the actor model.
     - `bus.rs` is the per-agent inbox + subscription registry that fans messages
-      out tagged with a subscription UUID (and unsubscribes by handle).
+      out tagged with a subscription UUID (and unsubscribes by handle). It also
+      owns the deterministic-testing plumbing: an append-only `observed` trace
+      log (appended by `trace_event`) and an ordered `Vec` of `Injection`s
+      (mock-registered call-boundary deliveries). `flush_injections` runs each
+      triggered injection synchronously at a guest call boundary and drops the
+      consumed ones; registration order is preserved (never a `HashMap`).
 
     - `events.rs` is the `Event`/`EventEnvelope` type every I/O source pushes.
 
@@ -153,13 +178,19 @@ A Cargo workspace with the crates below plus a single WIT contract.
 
     - `streams.rs` is the chat-stream pump registry keyed by UUID that delivers
       `chat-delta`/`chat-end` events into inboxes (its `CancelRegistry` alias
-      also backs timer/resource pumps).
+      also backs timer/resource pumps). Each entry carries the agent, its
+      `SourceKind` and the trace tap, so `cancel` / `cancel_all` emit
+      `closed{cancelled}` synchronously at the cancellation; pumps emit `closed`
+      only for a natural `ended` / `failed` end.
 
     - `resources.rs` is the cancellable resource-subscription pump that delivers
-      `resource-list-updated`/`resource-updated` events into inboxes.
+      `resource-list-updated`/`resource-updated` events into inboxes. Real
+      tooling uses the pump; the mock registers call-boundary injections instead
+      (see `tooling/mock.rs`).
 
     - `tool_calls.rs` is the cancellable tool-call pump that delivers
-      `tool-result` events into inboxes.
+      `tool-result` events into inboxes. Real tooling uses the pump; the mock
+      registers an injection instead.
 
     - `memory.rs` is the per-agent string store (`DashMap`) that survives hot
       reloads via the reused `AgentContext`; guests expose a raw `memory_get` /
@@ -167,19 +198,24 @@ A Cargo workspace with the crates below plus a single WIT contract.
       pair over it.
 
     - `endpoint.rs` is the per-process endpoint session registry (`open` /
-      `push` / `abort`) that buffers an agent's streamed deltas non-blocking,
-      and fires `endpoint-session-end` events on normal/abrupt termination.
+      `push` / `abort` / the normal `close`) that buffers an agent's streamed
+      deltas non-blocking, and fires `endpoint-session-end` events on
+      normal/abrupt termination.
 
-    - `ctx.rs` is `AgentContext`.
+    - `ctx.rs` is `AgentContext`; `flush_injections` (called from `trace_call` /
+      `trace_call_uuid` and the host's `recv` / `try_recv`) is the single flush
+      choke point.
 
     - `trace.rs` is the optional broadcast trace channel (`TraceEvent` = inbound
-      / call / host-opened / host-closed / outcome, with `HostKind` and a
-      `HostCloseReason`; `TraceSender`, `AgentTrace`, `group`) that `omw-test`
-      and embedders use to observe what agents saw and did. Both `MessageBus`
-      and `AgentContext` hold an `Option<TraceSender>`, so it is zero-overhead
-      when unset; `MessageBus::trace_sender` lets the endpoint and tooling mocks
-      build a shared append-only `TraceLog` for `after` gating (one gate path,
-      safe across subscriptions and agents).
+      / call / opened / closed / outcome; a `call` carries the uuid of the
+      handle it returned, and lifecycle events carry `SourceKind` / a
+      `CloseReason`; `TraceSender`, `AgentTrace`, `group`) that `omw-test` and
+      embedders use to observe what agents saw and did. Both `MessageBus` and
+      `AgentContext` hold an `Option<TraceSender>`, so it is zero-overhead when
+      unset. `MessageBus::trace_sender` lets the endpoint and tooling mocks
+      build a shared append-only `TraceLog` for their legacy `after` gating;
+      deterministic mock deliveries use call-boundary injections instead (see
+      `host/bus.rs`).
 
 - `src/lib/omw-output` — the binary-only shared output-policy crate (published
   only so the `omw-cli`/`omw-test` binaries can depend on it from the registry;
@@ -297,7 +333,8 @@ A Cargo workspace with the crates below plus a single WIT contract.
 
 - `examples/` — runnable brain examples (not a workspace member): `01-hello`,
   `02-tool-agent`, `03-endpoint`, `04-ping-pong`, `05-patterns`, `06-memory`,
-  `07-asserted`, `08-endpoint-order` and `09-resources`, each one shared
+  `07-asserted`, `08-endpoint-order`, `09-resources`, `10-endpoint-stop`,
+  `11-tool-call-order` and `12-race-cancels`, each one shared
   `omw.test.base.toml` (the provider/tooling/endpoint wiring, each agent's
   `runtime` and the `[assertions]`), per-variant `rhai/`, `js/` and `wasm/` dirs
   (`brain.rhai` / `brain.js` / `brain.rs`), a committed generated

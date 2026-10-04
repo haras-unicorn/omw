@@ -94,6 +94,45 @@ pub struct ToolingEntry {
   name: String,
   kind: &'static str,
   inner: Arc<dyn Tooling>,
+  /// Mock-only: lets the host register call-boundary injections for a
+  /// subscription instead of spawning a racing pump. `None` for every real or
+  /// user back end, so the deterministic plumbing never touches the public
+  /// [`Tooling`] trait.
+  injections: Option<Arc<dyn ResourceInjections>>,
+}
+
+/// Mock-only hook the host uses to register call-boundary injections. Kept off
+/// the public [`Tooling`] trait so embedders implementing their own back ends
+/// never see it: mocks are special, and there is exactly one of them.
+pub(crate) trait ResourceInjections: Send + Sync {
+  /// Register injections for a `subscribe-resource-list` call tagged with
+  /// `agent` and `uuid`.
+  fn inject_resource_list(
+    &self,
+    bus: &crate::host::bus::MessageBus,
+    registry: &Arc<crate::host::streams::CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+  );
+  /// Register injections for a `subscribe-resource` call.
+  fn inject_resource(
+    &self,
+    bus: &crate::host::bus::MessageBus,
+    registry: &Arc<crate::host::streams::CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+    uri: &str,
+  );
+  /// Register an injection for a queued `call-tool` invocation.
+  fn inject_tool_call(
+    &self,
+    bus: &crate::host::bus::MessageBus,
+    registry: &Arc<crate::host::streams::CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+    tool: &str,
+    args: Value,
+  );
 }
 
 impl ToolingEntry {
@@ -107,6 +146,7 @@ impl ToolingEntry {
       name: name.into(),
       kind: T::kind(),
       inner: tooling,
+      injections: None,
     }
   }
 
@@ -123,6 +163,11 @@ impl ToolingEntry {
   /// The underlying implementation.
   pub fn inner(&self) -> &Arc<dyn Tooling> {
     &self.inner
+  }
+
+  /// The mock-only injection hook, when this entry is a mock.
+  pub(crate) fn injections(&self) -> Option<&Arc<dyn ResourceInjections>> {
+    self.injections.as_ref()
   }
 }
 
@@ -196,11 +241,7 @@ pub trait Factory: Send + Sync + 'static {
 }
 
 type FactoryFn = Arc<
-  dyn Fn(
-      &str,
-      &Value,
-      crate::config::Tunables,
-    ) -> anyhow::Result<Arc<dyn Tooling>>
+  dyn Fn(&str, &Value, crate::config::Tunables) -> anyhow::Result<ToolingEntry>
     + Send
     + Sync,
 >;
@@ -236,7 +277,39 @@ impl Registry {
       anyhow::bail!("duplicate tooling kind {kind:?}");
     }
     let factory: FactoryFn = Arc::new(|name, params, tunables| {
-      Ok(T::build(name, params, tunables)? as Arc<dyn Tooling>)
+      let tooling = T::build(name, params, tunables)?;
+      Ok(ToolingEntry {
+        name: name.to_owned(),
+        kind: T::kind(),
+        inner: tooling as Arc<dyn Tooling>,
+        injections: None,
+      })
+    });
+    self.insert(kind, factory);
+    Ok(())
+  }
+
+  /// Register the built-in mock tooling. Like [`register`](Self::register) but
+  /// also carries the mock's call-boundary injection hook, so the host can
+  /// register deterministic deliveries instead of spawning a racing pump.
+  #[cfg(any(test, feature = "mock"))]
+  pub(crate) fn register_mock<T>(&mut self) -> anyhow::Result<()>
+  where
+    T: Tooling + Factory + ResourceInjections + 'static,
+  {
+    let kind = T::kind();
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate tooling kind {kind:?}");
+    }
+    let factory: FactoryFn = Arc::new(|name, params, tunables| {
+      let tooling = T::build(name, params, tunables)?;
+      let injections: Arc<dyn ResourceInjections> = tooling.clone();
+      Ok(ToolingEntry {
+        name: name.to_owned(),
+        kind: T::kind(),
+        inner: tooling as Arc<dyn Tooling>,
+        injections: Some(injections),
+      })
     });
     self.insert(kind, factory);
     Ok(())
@@ -262,7 +335,15 @@ impl Registry {
     if self.factories.contains_key(kind) {
       anyhow::bail!("duplicate tooling kind {kind:?}");
     }
-    self.insert(kind, Arc::new(factory));
+    let adapted: FactoryFn = Arc::new(move |name, params, tunables| {
+      Ok(ToolingEntry {
+        name: name.to_owned(),
+        kind,
+        inner: factory(name, params, tunables)?,
+        injections: None,
+      })
+    });
+    self.insert(kind, adapted);
     Ok(())
   }
 
@@ -299,12 +380,10 @@ impl Registry {
         self.kinds().join(", ")
       );
     };
-    let inner = factory(name, params, tunables)?;
-    Ok(ToolingEntry {
-      name: name.to_owned(),
-      kind: static_kind,
-      inner,
-    })
+    let mut entry = factory(name, params, tunables)?;
+    entry.name = name.to_owned();
+    entry.kind = static_kind;
+    Ok(entry)
   }
 
   /// Build the configured tooling into entries keyed by name.
@@ -333,7 +412,7 @@ impl Default for Registry {
     }
     #[cfg(any(test, feature = "mock"))]
     {
-      let _ = registry.register::<mock::MockTooling>();
+      let _ = registry.register_mock::<mock::MockTooling>();
     }
     registry
   }

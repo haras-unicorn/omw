@@ -79,3 +79,6 @@ ignoreWords:
   - ratatui
   - crossterm
   - journalctl
+  - dogfooding
+  - metacharacter
+  - deser

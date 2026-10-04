@@ -32,6 +32,11 @@ models = ["gpt-test"]
     mock is built, so the guest always sees the wire string.
   - `usage = { prompt_tokens = 12, completion_tokens = 5, total_tokens = 17 }` —
     token counts attached to the turn's terminal delta (every key optional).
+  - `error = "..."` — emit the turn's deltas, then fail the stream with this
+    error (the brain sees a provider error mid-stream).
+  - `pending = true` — the stream never yields; it stays pending forever, for
+    exercising cancellation paths. The turn returns no deltas, so it records
+    none.
   - Once the script is exhausted the **last turn repeats** for every further
     chat, so a looping brain keeps working without re-listing the script.
 - `models` — the model names `list-models` returns. Defaults to
@@ -47,3 +52,6 @@ events = [
   { kind = "call", op = "chat", detail = { params = { temperature = 0.2 } } },
 ]
 ```
+
+The `--dump` snapshot also lists every call's scripted `deltas` alongside the
+request, so a dump shows exactly what the brain received back.

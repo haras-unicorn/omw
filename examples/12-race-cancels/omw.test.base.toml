@@ -1,0 +1,29 @@
+# 12-race-cancels: two subscriptions cancelled back to back.
+#
+# The two `unsubscribe_*` calls happen in sequence. A cancellation now emits
+# its `closed{cancelled}` observation synchronously, inside the unsubscribe
+# call, instead of from the pump task it wakes — so the two closes are pinned
+# to the calls that caused them rather than racing each other on the scheduler.
+#
+# Base config, shared across variants: the tooling, each agent's wiring and the
+# assertions. The per-variant `omw.test.toml` adds only the runtime kind and
+# brain scripts. Run the case with `omw-test run examples/12-race-cancels`.
+
+[tooling.docs]
+kind = "mock"
+
+[agents.reader]
+runtime = "runtime"
+
+[assertions.reader]
+outcome = "completed"
+events = [
+  { kind = "call", op = "subscribe_resource_list" },
+  { kind = "opened", source = "resource-list" },
+  { kind = "call", op = "subscribe_resource" },
+  { kind = "opened", source = "resource" },
+  { kind = "call", op = "unsubscribe_resource_list" },
+  { kind = "closed", source = "resource-list", reason = "cancelled" },
+  { kind = "call", op = "unsubscribe_resource" },
+  { kind = "closed", source = "resource", reason = "cancelled" },
+]

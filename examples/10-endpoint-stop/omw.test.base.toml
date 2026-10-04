@@ -1,0 +1,58 @@
+# 10-endpoint-stop: the endpoint mock ends a session from the client side.
+#
+# Base config, shared across variants: the provider, the endpoint, the agent's
+# wiring and the assertions. The per-variant `omw.test.toml` adds only the
+# runtime kind and brain scripts. Run the case with
+# `omw-test run examples/10-endpoint-stop`.
+
+[providers.openai]
+kind = "mock"
+turns = [{ content = "ack" }]
+
+[endpoint]
+kind = "mock"
+# Two scripted clients. Each streams one content delta back into the session,
+# then ends it: the first stops normally (`close = 1`), the second is aborted
+# (`abort = 1`). Because the sessions end from the client side, the agent never
+# sends a terminal `finish-reason`; it reacts to the `endpoint-session-end`
+# event instead.
+requests = [
+  {
+    model = "gpt-4o",
+    session_id = "normal",
+    messages = [{ content = "hi" }],
+    session_end = { close = 1 },
+  },
+  {
+    model = "gpt-4o",
+    session_id = "aborted",
+    messages = [{ content = "bye" }],
+    # Concurrent sessions: route the second only once the first has ended.
+    after = { kind = "inbound", event = "endpoint-session-end" },
+    session_end = { abort = 1 },
+  },
+]
+
+[agents.server]
+runtime = "runtime"
+
+[assertions.server]
+outcome = "completed"
+events = [
+  { kind = "call", op = "subscribe_endpoint" },
+  { kind = "opened", source = "endpoint" },
+  { kind = "inbound", event = "endpoint-message" },
+  { kind = "call", op = "chat" },
+  { kind = "call", op = "stream_endpoint", detail = { content = "ack" } },
+  { kind = "inbound", event = "endpoint-session-end" },
+  { kind = "inbound", event = "endpoint-message" },
+  { kind = "call", op = "chat" },
+  { kind = "call", op = "stream_endpoint", detail = { content = "ack" } },
+  {
+    kind = "inbound",
+    event = "endpoint-session-end",
+    payload = { data = { error = "aborted" } },
+  },
+  { kind = "call", op = "unsubscribe_endpoint" },
+  { kind = "closed", source = "endpoint", reason = "cancelled" },
+]

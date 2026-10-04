@@ -441,13 +441,6 @@
       "description": "Impl-specific configuration for the endpoint mock.",
       "type": "object",
       "properties": {
-        "poll_ms": {
-          "description": "How long to wait between polls for a model subscription.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 10,
-          "minimum": 0
-        },
         "requests": {
           "type": "array",
           "items": {
@@ -604,6 +597,21 @@
           "description": "Opaque generation params the client submitted (temperature, …).",
           "default": null
         },
+        "session_end": {
+          "description": "Opt-in scripted ending: `{ close = N }` ends the session normally after\n`N` received deltas, `{ abort = N }` aborts it. Absent, the mock drains\nsilently as before.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "description": "A user-written label for the session, so concurrent sessions can be told\napart. The mock correlates it with the opaque session UUID the host and\nbrain see and records both in the snapshot; it is never asserted or\nmatched. Reusing a label after its session closed is a new session with a\nnew UUID.",
+          "type": "string"
+        },
         "stream": {
           "description": "Whether the client asked for SSE. Informational only; the mock drains\nthe same session either way.",
           "type": "boolean",
@@ -617,7 +625,7 @@
           }
         }
       },
-      "required": ["model"]
+      "required": ["model", "session_id"]
     },
     "ResourceContentUpdate": {
       "description": "One scripted, one-by-one resource-content update.",
@@ -628,6 +636,16 @@
         },
         "content": {
           "type": "string"
+        },
+        "error": {
+          "description": "Yield this error for the step instead of an `Updated`.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "pending": {
+          "description": "Never yield: the step stays pending forever (for cancellation tests).",
+          "type": "boolean",
+          "default": false
         },
         "uri": {
           "type": "string"
@@ -660,6 +678,16 @@
       "properties": {
         "after": {
           "$ref": "#/$defs/After"
+        },
+        "error": {
+          "description": "Yield this error for the step instead of a `ListChanged`.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "pending": {
+          "description": "Never yield: the step stays pending forever (for cancellation tests).",
+          "type": "boolean",
+          "default": false
         },
         "resources": {
           "type": "array",
@@ -735,8 +763,18 @@
         "after": {
           "$ref": "#/$defs/After"
         },
+        "error": {
+          "description": "Fail the call with this error (after the gate and delay).",
+          "type": ["string", "null"],
+          "default": null
+        },
         "name": {
           "type": "string"
+        },
+        "pending": {
+          "description": "Never complete: the call stays pending forever (for cancellation tests).",
+          "type": "boolean",
+          "default": false
         },
         "result": {
           "type": "string",
@@ -750,6 +788,24 @@
     },
     "Secret": {
       "type": "string"
+    },
+    "SessionEnd": {
+      "description": "How a scripted request ends its session.\n\n`{ close = N }` removes the session and delivers a normal\n`endpoint-session-end` after `N` received deltas; `{ abort = N }` aborts it\nwith an error instead. `N = 0` fires immediately after routing. If the\nreply ends first (terminal finish-reason or `Close`) the script is a no-op.",
+      "type": "object",
+      "properties": {
+        "abort": {
+          "type": ["integer", "null"],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "close": {
+          "type": ["integer", "null"],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      }
     },
     "Tool": {
       "description": "A tool exposed by a tooling.",
@@ -925,13 +981,23 @@
       }
     },
     "Turn": {
-      "description": "One scripted turn: optional reasoning, content, a tool call, and usage.",
+      "description": "One scripted turn: optional reasoning, content, a tool call, usage, and an\noptional failure or pending marker.",
       "type": "object",
       "properties": {
         "content": {
           "description": "Plain content emitted before the terminal finish reason.",
           "type": ["string", "null"],
           "default": null
+        },
+        "error": {
+          "description": "Fail the stream with this error, after emitting the turn's deltas.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "pending": {
+          "description": "Never yield: the stream stays pending forever (for cancellation tests).",
+          "type": "boolean",
+          "default": false
         },
         "reasoning": {
           "description": "Reasoning/thinking content emitted as its own delta.",

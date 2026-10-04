@@ -1,0 +1,42 @@
+# 11-tool-call-order: queued tool calls delivered at guest call boundaries.
+#
+# The first call is `after`-gated on the `list_tools` call, the second fires as
+# soon as it is queued. Both results land at the boundary of the call that
+# triggered them, never whenever a background pump happens to wake, so the
+# order below is a function of the brain alone.
+#
+# Base config, shared across variants: the tooling, each agent's wiring and the
+# assertions. The per-variant `omw.test.toml` adds only the runtime kind and
+# brain scripts. Run the case with `omw-test run examples/11-tool-call-order`.
+
+[tooling.mcp]
+kind = "mock"
+tool_calls = [
+  {
+    name = "first",
+    result = "one",
+    after = { kind = "call", op = "list_tools" },
+  },
+  { name = "second", result = "two" },
+]
+
+[agents.alice]
+runtime = "runtime"
+
+[assertions.alice]
+outcome = "completed"
+events = [
+  { kind = "call", op = "call_tool", detail = { tool = "first" } },
+  { kind = "call", op = "list_tools" },
+  {
+    kind = "inbound",
+    event = "tool-result",
+    payload = { data = { name = "first", content = "one" } },
+  },
+  { kind = "call", op = "call_tool", detail = { tool = "second" } },
+  {
+    kind = "inbound",
+    event = "tool-result",
+    payload = { data = { name = "second", content = "two" } },
+  },
+]

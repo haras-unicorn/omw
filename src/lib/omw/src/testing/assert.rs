@@ -105,10 +105,11 @@ const UNTIL_KEY: &str = "$until";
 /// One expected observation, matched against the agent's ordered trace.
 #[derive(Debug, Clone)]
 pub enum EventAssertion {
-  /// An outbound host call. `op` is exact; `detail` is a partial [`Pattern`]
-  /// over the call's JSON detail.
+  /// An outbound host call. `op` is a partial [`Pattern`] over the op name
+  /// (its string leaf is a regex); `detail` is a partial [`Pattern`] over the
+  /// call's JSON detail.
   Call {
-    op: Option<String>,
+    op: Option<Pattern>,
     detail: Option<Pattern>,
   },
   /// An inbound inbox event. `event` is the kebab-case kind (see
@@ -118,8 +119,21 @@ pub enum EventAssertion {
     event: Option<String>,
     payload: Option<Pattern>,
   },
-  /// Greedily consume a run of events matching the wrapped `call`/`inbound`
-  /// assertion, stopping at the first non-match. Written as
+  /// A source opened: any subscription or cancellable operation registered by
+  /// UUID. `source` is a partial [`Pattern`] over the kebab-case `SourceKind`
+  /// (`chat-stream`, `timer`, `resource-list`, `resource`, `tool-call`,
+  /// `endpoint`, `agent`, `lifecycle`); there is deliberately no UUID or agent
+  /// match.
+  Opened { source: Option<Pattern> },
+  /// A source closed, with the reason it did. `source` matches the kebab-case
+  /// `SourceKind`; `reason` matches the kebab-case `CloseReason` (`ended`,
+  /// `cancelled`, `failed`).
+  Closed {
+    source: Option<Pattern>,
+    reason: Option<Pattern>,
+  },
+  /// Greedily consume a run of events matching the wrapped assertion, stopping
+  /// at the first non-match. Written as
   /// `{ "$while" = { kind = "call", ... } }`.
   While(Box<EventAssertion>),
   /// Skip events until one matches the wrapped assertion, consuming it.
@@ -158,14 +172,32 @@ impl<'de> Deserialize<'de> for EventAssertion {
         #[serde(default)]
         payload: Option<Pattern>,
       },
+      Opened {
+        #[serde(default)]
+        source: Option<Pattern>,
+      },
+      Closed {
+        #[serde(default)]
+        source: Option<Pattern>,
+        #[serde(default)]
+        reason: Option<Pattern>,
+      },
     }
     match serde_json::from_value::<Tagged>(value)
       .map_err(serde::de::Error::custom)?
     {
-      Tagged::Call { op, detail } => Ok(Self::Call { op, detail }),
+      Tagged::Call { op, detail } => Ok(Self::Call {
+        op: op
+          .map(|op| Pattern::from_value(Value::String(op)))
+          .transpose()
+          .map_err(serde::de::Error::custom)?,
+        detail,
+      }),
       Tagged::Inbound { event, payload } => {
         Ok(Self::Inbound { event, payload })
       }
+      Tagged::Opened { source } => Ok(Self::Opened { source }),
+      Tagged::Closed { source, reason } => Ok(Self::Closed { source, reason }),
     }
   }
 }
@@ -179,11 +211,13 @@ fn event_sentinel(
   let assertion = serde_json::from_value::<EventAssertion>(inner.clone())
     .context("invalid nested `$while` / `$until` assertion")?;
   match assertion {
-    EventAssertion::Call { .. } | EventAssertion::Inbound { .. } => {
-      Ok(wrap(Box::new(assertion)))
-    }
+    EventAssertion::Call { .. }
+    | EventAssertion::Inbound { .. }
+    | EventAssertion::Opened { .. }
+    | EventAssertion::Closed { .. } => Ok(wrap(Box::new(assertion))),
     _ => bail!(
-      "`{WHILE_KEY}` / `{UNTIL_KEY}` must wrap a `call` or `inbound` assertion"
+      "`{WHILE_KEY}` / `{UNTIL_KEY}` must wrap a `call`, `inbound`, \
+       `opened` or `closed` assertion"
     ),
   }
 }
@@ -437,7 +471,8 @@ impl EventAssertion {
           ..
         },
       ) => {
-        op.as_ref().is_none_or(|op| op == actual_op)
+        op.as_ref()
+          .is_none_or(|op| op.matches(&Value::String(actual_op.clone())))
           && detail
             .as_ref()
             .is_none_or(|pattern| pattern.matches(actual_detail))
@@ -453,6 +488,32 @@ impl EventAssertion {
           && payload
             .as_ref()
             .is_none_or(|pattern| pattern.matches(&to_payload(event)))
+      }
+      (
+        Self::Opened { source: host },
+        TraceEvent::Opened { source: kind, .. },
+      ) => host.as_ref().is_none_or(|pattern| {
+        pattern.matches(&Value::String(render_source(*kind).to_string()))
+      }),
+      (
+        Self::Closed {
+          source: host,
+          reason,
+        },
+        TraceEvent::Closed {
+          source: kind,
+          reason: actual_reason,
+          ..
+        },
+      ) => {
+        let host_matches = host.as_ref().is_none_or(|pattern| {
+          pattern.matches(&Value::String(render_source(*kind).to_string()))
+        });
+        let reason_matches = reason.as_ref().is_none_or(|pattern| {
+          pattern
+            .matches(&Value::String(render_reason(*actual_reason).to_string()))
+        });
+        host_matches && reason_matches
       }
       (Self::While(inner) | Self::Until(inner), event) => inner.matches(event),
       _ => false,
@@ -601,7 +662,10 @@ impl Sequence {
 impl SequenceStep<TraceEvent> for EventAssertion {
   fn kind(&self) -> StepKind {
     match self {
-      Self::Call { .. } | Self::Inbound { .. } => StepKind::Match,
+      Self::Call { .. }
+      | Self::Inbound { .. }
+      | Self::Opened { .. }
+      | Self::Closed { .. } => StepKind::Match,
       Self::While(_) => StepKind::While,
       Self::Until(_) => StepKind::Until,
     }
@@ -708,57 +772,77 @@ fn render_remaining(assertions: &[EventAssertion]) -> String {
 
 fn render_event(event: &TraceEvent) -> String {
   match event {
-    TraceEvent::Call { op, detail, .. } => {
-      format!("call(op={op:?}, detail={detail})")
-    }
+    TraceEvent::Call {
+      op, uuid, detail, ..
+    } => match uuid {
+      Some(uuid) => {
+        format!("call(op={op:?}, uuid={uuid}, detail={detail})")
+      }
+      None => format!("call(op={op:?}, detail={detail})"),
+    },
     TraceEvent::Inbound { event, .. } => {
       format!("inbound({})", event_kind(event))
     }
-    TraceEvent::HostOpened { kind, uuid, .. } => {
-      format!("host-opened({} {uuid})", render_host_kind(*kind))
+    TraceEvent::Opened {
+      source: kind, uuid, ..
+    } => {
+      format!("opened({} {uuid})", render_source(*kind))
     }
-    TraceEvent::HostClosed {
-      kind, uuid, reason, ..
+    TraceEvent::Closed {
+      source: kind,
+      uuid,
+      reason,
+      ..
     } => format!(
-      "host-closed({} {uuid}, {})",
-      render_host_kind(*kind),
-      render_host_reason(*reason)
+      "closed({} {uuid}, {})",
+      render_source(*kind),
+      render_reason(*reason)
     ),
     TraceEvent::Outcome { outcome, .. } => format!("outcome({outcome:?})"),
   }
 }
 
-fn render_host_kind(kind: crate::host::trace::HostKind) -> &'static str {
-  use crate::host::trace::HostKind;
+fn render_source(kind: crate::host::trace::SourceKind) -> &'static str {
+  use crate::host::trace::SourceKind;
   match kind {
-    HostKind::ChatStream => "chat-stream",
-    HostKind::Timer => "timer",
-    HostKind::ResourceList => "resource-list",
-    HostKind::Resource => "resource",
-    HostKind::ToolCall => "tool-call",
+    SourceKind::ChatStream => "chat-stream",
+    SourceKind::Timer => "timer",
+    SourceKind::ResourceList => "resource-list",
+    SourceKind::Resource => "resource",
+    SourceKind::ToolCall => "tool-call",
+    SourceKind::Endpoint => "endpoint",
+    SourceKind::Agent => "agent",
+    SourceKind::Lifecycle => "lifecycle",
   }
 }
 
-fn render_host_reason(
-  reason: crate::host::trace::HostCloseReason,
-) -> &'static str {
-  use crate::host::trace::HostCloseReason;
+fn render_reason(reason: crate::host::trace::CloseReason) -> &'static str {
+  use crate::host::trace::CloseReason;
   match reason {
-    HostCloseReason::Ended => "ended",
-    HostCloseReason::Cancelled => "cancelled",
-    HostCloseReason::Failed => "failed",
+    CloseReason::Ended => "ended",
+    CloseReason::Cancelled => "cancelled",
+    CloseReason::Failed => "failed",
   }
 }
 
 fn render_assertion(assertion: &EventAssertion) -> String {
   match assertion {
     EventAssertion::Call { op, detail } => format!(
-      "call(op={op:?}, detail={})",
+      "call(op={}, detail={})",
+      render_optional_pattern(op),
       render_optional_pattern(detail)
     ),
     EventAssertion::Inbound { event, payload } => format!(
       "inbound(event={event:?}, payload={})",
       render_optional_pattern(payload)
+    ),
+    EventAssertion::Opened { source } => {
+      format!("opened(source={})", render_optional_pattern(source))
+    }
+    EventAssertion::Closed { source, reason } => format!(
+      "closed(source={}, reason={})",
+      render_optional_pattern(source),
+      render_optional_pattern(reason)
     ),
     EventAssertion::While(inner) => {
       format!("{{{WHILE_KEY} = {}}}", render_assertion(inner))
@@ -825,13 +909,19 @@ mod tests {
     TraceEvent::Call {
       agent: "alice".to_string(),
       op: op.to_string(),
+      uuid: None,
       detail,
     }
   }
 
+  fn op_pattern(op: &str) -> Pattern {
+    Pattern::from_value(Value::String(op.to_string()))
+      .unwrap_or_else(|_| Pattern::Exact(Value::String(op.to_string())))
+  }
+
   fn after_call(op: &str) -> After {
     After::Pattern(EventAssertion::Call {
-      op: Some(op.to_string()),
+      op: Some(op_pattern(op)),
       detail: None,
     })
   }
@@ -1283,6 +1373,46 @@ mod tests {
   }
 
   #[test]
+  fn op_is_an_unanchored_regex() {
+    // A bare op is a substring search, like every other string leaf.
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "call", op = "chat" }]"#,
+      vec![call("chat_stream", json!({}))],
+    );
+    // Anchor it by hand to require the whole op.
+    let error = assert_failure(
+      "alice",
+      r#"events = [{ kind = "call", op = "^chat$" }]"#,
+      vec![call("chat_stream", json!({}))],
+    );
+    assert!(error.contains("not satisfied"), "{error}");
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "call", op = "^chat$" }]"#,
+      vec![call("chat", json!({}))],
+    );
+  }
+
+  #[test]
+  fn op_regex_accepts_a_character_class() {
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "call", op = "get_.*" }]"#,
+      vec![call("get_weather", json!({}))],
+    );
+  }
+
+  #[test]
+  fn invalid_op_regex_is_rejected_at_parse() {
+    parse(
+      "[assertions.alice]\nevents = [{ kind = \"call\", op = \"(\" }]\n",
+      Format::Toml,
+    )
+    .expect_err("an invalid op regex should not parse");
+  }
+
+  #[test]
   fn mismatch_reports_a_readable_diff() {
     let events = vec![inbound(Event::ChatEnd)];
     let error = assert_failure(
@@ -1291,7 +1421,7 @@ mod tests {
       events,
     );
     assert!(error.contains("assertion #1 not satisfied"), "{error}");
-    assert!(error.contains("call(op=Some(\"chat\")"), "{error}");
+    assert!(error.contains("call(op=/chat/, detail=none)"), "{error}");
     assert!(error.contains("inbound(chat-end)"), "{error}");
   }
 
@@ -1341,5 +1471,141 @@ mod tests {
     let parsed = parse("[runtime.rhai]\nkind = \"rhai\"\n", Format::Toml)?;
     assert!(parsed.assertions.is_empty());
     Ok(())
+  }
+
+  fn opened_event(source: crate::host::trace::SourceKind) -> TraceEvent {
+    TraceEvent::Opened {
+      agent: "alice".to_string(),
+      source,
+      uuid: "sub".to_string(),
+    }
+  }
+
+  fn closed_event(
+    source: crate::host::trace::SourceKind,
+    reason: crate::host::trace::CloseReason,
+  ) -> TraceEvent {
+    TraceEvent::Closed {
+      agent: "alice".to_string(),
+      source,
+      uuid: "sub".to_string(),
+      reason,
+    }
+  }
+
+  #[test]
+  fn opened_matches_by_source() {
+    use crate::host::trace::SourceKind;
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "opened", source = "resource" }]"#,
+      vec![opened_event(SourceKind::Resource)],
+    );
+    // A bare `opened` matches any source.
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "opened" }]"#,
+      vec![opened_event(SourceKind::ChatStream)],
+    );
+    let error = assert_failure(
+      "alice",
+      r#"events = [{ kind = "opened", source = "resource" }]"#,
+      vec![opened_event(SourceKind::ToolCall)],
+    );
+    assert!(error.contains("not satisfied"), "{error}");
+  }
+
+  #[test]
+  fn closed_matches_by_source_and_reason() {
+    use crate::host::trace::{CloseReason, SourceKind};
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "closed", source = "resource", reason = "cancelled" }]"#,
+      vec![closed_event(SourceKind::Resource, CloseReason::Cancelled)],
+    );
+    // Either field may be omitted.
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "closed", reason = "ended" }]"#,
+      vec![closed_event(SourceKind::ChatStream, CloseReason::Ended)],
+    );
+    let error = assert_failure(
+      "alice",
+      r#"events = [{ kind = "closed", source = "resource", reason = "cancelled" }]"#,
+      vec![closed_event(SourceKind::Resource, CloseReason::Ended)],
+    );
+    assert!(error.contains("not satisfied"), "{error}");
+  }
+
+  #[test]
+  fn subscription_sources_match_and_render() {
+    use crate::host::trace::{CloseReason, SourceKind};
+    for (source, rendered) in [
+      (SourceKind::Endpoint, "endpoint"),
+      (SourceKind::Agent, "agent"),
+      (SourceKind::Lifecycle, "lifecycle"),
+    ] {
+      assert_check(
+        "alice",
+        &format!(
+          r#"events = [
+            {{ kind = "opened", source = "{rendered}" }},
+            {{ kind = "closed", source = "{rendered}", reason = "cancelled" }},
+          ]"#
+        ),
+        vec![
+          opened_event(source),
+          closed_event(source, CloseReason::Cancelled),
+        ],
+      );
+      assert_eq!(render_source(source), rendered);
+    }
+  }
+
+  #[test]
+  fn sources_and_reasons_are_unanchored_regexes() {
+    use crate::host::trace::{CloseReason, SourceKind};
+    assert_check(
+      "alice",
+      r#"events = [{ kind = "closed", source = "resource", reason = "cancel.*" }]"#,
+      vec![closed_event(SourceKind::Resource, CloseReason::Cancelled)],
+    );
+  }
+
+  #[test]
+  fn lifecycle_assertions_work_under_sentinels() {
+    use crate::host::trace::{CloseReason, SourceKind};
+    assert_check(
+      "alice",
+      r#"events = [
+        { "$while" = { kind = "opened" } },
+        { kind = "closed", reason = "ended" },
+      ]"#,
+      vec![
+        opened_event(SourceKind::ResourceList),
+        opened_event(SourceKind::Resource),
+        closed_event(SourceKind::Resource, CloseReason::Ended),
+      ],
+    );
+    assert_check(
+      "alice",
+      r#"events = [{ "$until" = { kind = "closed" } }]"#,
+      vec![
+        call("a", json!({})),
+        closed_event(SourceKind::Timer, CloseReason::Cancelled),
+      ],
+    );
+  }
+
+  #[test]
+  fn closed_assertion_renders() {
+    let expected = assertions(
+      "alice",
+      r#"events = [{ kind = "closed", source = "resource", reason = "cancelled" }]"#,
+    );
+    assert_eq!(
+      render_assertion(&expected.assertions["alice"].events[0]),
+      "closed(source=/resource/, reason=/cancelled/)"
+    );
   }
 }

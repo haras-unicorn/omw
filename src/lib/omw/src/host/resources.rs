@@ -13,7 +13,7 @@ use futures_util::stream::{BoxStream, StreamExt as _};
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
 use crate::host::streams::CancelRegistry;
-use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
+use crate::host::trace::{CloseReason, SourceKind, TraceEvent};
 use crate::tooling::{ResourceNotification, Tooling};
 
 /// Spawn a pump task on `rt` that drains `stream` and delivers resource
@@ -34,14 +34,14 @@ pub fn spawn_pump(
   bus: Arc<MessageBus>,
   name: String,
   uuid: String,
-  kind: HostKind,
+  kind: SourceKind,
   tooling: Arc<dyn Tooling>,
   mut stream: BoxStream<'static, Result<ResourceNotification, String>>,
 ) {
-  let mut cancel = subs.open(uuid.clone());
-  bus.trace_event(TraceEvent::HostOpened {
+  let mut cancel = subs.open(&bus, uuid.clone(), name.clone(), kind);
+  bus.trace_event(TraceEvent::Opened {
     agent: name.clone(),
-    kind,
+    source: kind,
     uuid: uuid.clone(),
   });
   rt.spawn(async move {
@@ -52,7 +52,7 @@ pub fn spawn_pump(
 
         _ =&mut cancel => {
           tracing::debug!(agent = %name, uuid = %uuid, "resource subscription cancelled");
-          break HostCloseReason::Cancelled;
+          break CloseReason::Cancelled;
         }
         item = stream.next() => match item {
           Some(Ok(ResourceNotification::ListChanged)) => {
@@ -83,22 +83,24 @@ pub fn spawn_pump(
             tracing::error!(agent = %name, uuid = %uuid, error = %e, "resource subscription failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
             subs.remove(&uuid);
-            break HostCloseReason::Failed;
+            break CloseReason::Failed;
           }
           None => {
             tracing::debug!(agent = %name, uuid = %uuid, "resource subscription ended");
             subs.remove(&uuid);
-            break HostCloseReason::Ended;
+            break CloseReason::Ended;
           }
         }
       }
     };
-    bus.trace_event(TraceEvent::HostClosed {
-      agent: name.clone(),
-      kind,
-      uuid: uuid.clone(),
-      reason,
-    });
+    if reason != CloseReason::Cancelled {
+      bus.trace_event(TraceEvent::Closed {
+        agent: name.clone(),
+        source: kind,
+        uuid: uuid.clone(),
+        reason,
+      });
+    }
   });
 }
 
@@ -108,7 +110,8 @@ mod tests {
 
   use super::*;
   use crate::host::bus::MessageBus;
-  use crate::tooling::mock::{FailingTooling, MockTooling};
+  use crate::tooling::Factory;
+  use crate::tooling::mock::MockTooling;
   use crate::tooling::{
     ResourceContent, ResourceInfo, ResourceNotification, Tooling,
   };
@@ -133,7 +136,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
-      HostKind::Resource,
+      SourceKind::Resource,
       Arc::clone(&tooling),
       stream,
     );
@@ -162,7 +165,7 @@ mod tests {
     let subs = Arc::new(CancelRegistry::new());
     // The stream yields an update, but the tooling cannot read it: the pump
     // must surface the read failure without tearing the subscription down.
-    let tooling: Arc<dyn Tooling> = Arc::new(FailingTooling);
+    let tooling: Arc<dyn Tooling> = MockTooling::noop();
     let stream = futures_util::stream::once(async {
       Ok(ResourceNotification::Updated {
         uri: "file:///a".to_string(),
@@ -178,7 +181,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
-      HostKind::Resource,
+      SourceKind::Resource,
       Arc::clone(&tooling),
       stream,
     );
@@ -218,7 +221,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
-      HostKind::ResourceList,
+      SourceKind::ResourceList,
       Arc::clone(&tooling),
       stream,
     );
@@ -240,8 +243,15 @@ mod tests {
     let subs = Arc::new(CancelRegistry::new());
     // Pending: the stream never yields, so cancel is the only way the pump
     // can exit — no race with the mock's 10ms auto-notify thread.
-    let tooling: Arc<dyn Tooling> =
-      Arc::new(crate::tooling::mock::PendingTooling);
+    let tooling: Arc<dyn Tooling> = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "resource_content_updates": [
+          { "uri": "file:///a", "content": "x", "pending": true },
+        ],
+      }),
+      crate::config::Tunables::default(),
+    )?;
     let uuid = crate::host::bus::new_uuid();
 
     let stream = rt.block_on(tooling.subscribe_resource("file:///a"))?;
@@ -251,7 +261,7 @@ mod tests {
       Arc::clone(&bus),
       "alice".to_string(),
       uuid.clone(),
-      HostKind::Resource,
+      SourceKind::Resource,
       Arc::clone(&tooling),
       stream,
     );

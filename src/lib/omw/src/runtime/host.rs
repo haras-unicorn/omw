@@ -23,6 +23,7 @@ use super::bindings::omw::omw::tooling as tooling_bindings;
 use super::bindings::omw::omw::types as types_bindings;
 use crate::host::ctx::AgentContext;
 use crate::host::events::Event;
+use crate::host::trace::{CloseReason, SourceKind, TraceEvent};
 use crate::provider::{
   ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall, Usage,
 };
@@ -162,15 +163,15 @@ impl provider_bindings::HostProvider for Host {
       uuid = %uuid,
       "opening a chat stream"
     );
-    self.ctx.trace_call(
+    self.ctx.trace_call_uuid(
       "chat_stream",
+      Some(uuid.clone()),
       serde_json::json!({
         "provider": entry.name(),
         "model": model.clone(),
         "messages": &msgs,
         "tools": &tools,
         "params": &params,
-        "uuid": uuid.clone(),
       }),
     );
     crate::host::streams::spawn_pump(
@@ -260,6 +261,7 @@ impl tooling_bindings::HostTooling for Host {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
     let tooling_name = entry.name().to_string();
+    let injector = entry.injections().cloned();
     let agent = self.ctx.name().to_owned();
     let args =
       serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
@@ -270,11 +272,35 @@ impl tooling_bindings::HostTooling for Host {
       arg_bytes = arguments.len(),
       "queuing a tool call"
     );
-    self.ctx.trace_call(
+    let uuid = crate::host::bus::new_uuid();
+    if let Some(injector) = injector {
+      injector.inject_tool_call(
+        self.ctx.bus(),
+        self.ctx.tool_calls(),
+        &agent,
+        &uuid,
+        &name,
+        args,
+      );
+      drop(self.ctx.tool_calls().open(
+        self.ctx.bus(),
+        uuid.clone(),
+        agent.clone(),
+        SourceKind::ToolCall,
+      ));
+      self.ctx.trace_call_uuid(
+        "call_tool",
+        Some(uuid.clone()),
+        serde_json::json!({ "tooling": tooling_name, "tool": name.clone() }),
+      );
+      self.trace_opened(SourceKind::ToolCall, &uuid);
+      return Ok(uuid);
+    }
+    self.ctx.trace_call_uuid(
       "call_tool",
+      Some(uuid.clone()),
       serde_json::json!({ "tooling": tooling_name, "tool": name.clone() }),
     );
-    let uuid = crate::host::bus::new_uuid();
     crate::host::tool_calls::spawn_pump(
       tooling,
       self.ctx.rt(),
@@ -381,7 +407,30 @@ impl tooling_bindings::HostTooling for Host {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
     let tooling_name = entry.name().to_string();
+    let injector = entry.injections().cloned();
     let agent = self.ctx.name().to_owned();
+    let uuid = crate::host::bus::new_uuid();
+    if let Some(injector) = injector {
+      injector.inject_resource_list(
+        self.ctx.bus(),
+        self.ctx.resources(),
+        &agent,
+        &uuid,
+      );
+      drop(self.ctx.resources().open(
+        self.ctx.bus(),
+        uuid.clone(),
+        agent.clone(),
+        crate::host::trace::SourceKind::ResourceList,
+      ));
+      self.ctx.trace_call_uuid(
+        "subscribe_resource_list",
+        Some(uuid.clone()),
+        serde_json::json!({}),
+      );
+      self.trace_opened(crate::host::trace::SourceKind::ResourceList, &uuid);
+      return Ok(uuid);
+    }
     let tooling_for_sub = Arc::clone(&tooling);
     let subscribe =
       async move { tooling_for_sub.subscribe_resource_list().await };
@@ -389,23 +438,24 @@ impl tooling_bindings::HostTooling for Host {
       .ctx
       .block_on_reload(subscribe)?
       .map_err(|e| e.to_string())?;
-    let uuid = crate::host::bus::new_uuid();
     tracing::debug!(
       agent = %agent,
       tooling = %tooling_name,
       uuid = %uuid,
       "subscribing to the resource list"
     );
-    self
-      .ctx
-      .trace_call("subscribe_resource_list", serde_json::json!({}));
+    self.ctx.trace_call_uuid(
+      "subscribe_resource_list",
+      Some(uuid.clone()),
+      serde_json::json!({}),
+    );
     crate::host::resources::spawn_pump(
       Arc::clone(self.ctx.resources()),
       self.ctx.rt(),
       Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
-      crate::host::trace::HostKind::ResourceList,
+      crate::host::trace::SourceKind::ResourceList,
       tooling,
       stream,
     );
@@ -420,7 +470,31 @@ impl tooling_bindings::HostTooling for Host {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
     let tooling_name = entry.name().to_string();
+    let injector = entry.injections().cloned();
     let agent = self.ctx.name().to_owned();
+    let uuid = crate::host::bus::new_uuid();
+    if let Some(injector) = injector {
+      injector.inject_resource(
+        self.ctx.bus(),
+        self.ctx.resources(),
+        &agent,
+        &uuid,
+        &uri,
+      );
+      drop(self.ctx.resources().open(
+        self.ctx.bus(),
+        uuid.clone(),
+        agent.clone(),
+        crate::host::trace::SourceKind::Resource,
+      ));
+      self.ctx.trace_call_uuid(
+        "subscribe_resource",
+        Some(uuid.clone()),
+        serde_json::json!({ "uri": uri.clone() }),
+      );
+      self.trace_opened(crate::host::trace::SourceKind::Resource, &uuid);
+      return Ok(uuid);
+    }
     let tooling_for_sub = Arc::clone(&tooling);
     let uri_for_sub = uri.clone();
     let subscribe =
@@ -429,7 +503,6 @@ impl tooling_bindings::HostTooling for Host {
       .ctx
       .block_on_reload(subscribe)?
       .map_err(|e| e.to_string())?;
-    let uuid = crate::host::bus::new_uuid();
     tracing::debug!(
       agent = %agent,
       tooling = %tooling_name,
@@ -437,8 +510,9 @@ impl tooling_bindings::HostTooling for Host {
       uuid = %uuid,
       "subscribing to a resource"
     );
-    self.ctx.trace_call(
+    self.ctx.trace_call_uuid(
       "subscribe_resource",
+      Some(uuid.clone()),
       serde_json::json!({ "uri": uri.clone() }),
     );
     crate::host::resources::spawn_pump(
@@ -447,7 +521,7 @@ impl tooling_bindings::HostTooling for Host {
       Arc::clone(self.ctx.bus()),
       agent,
       uuid.clone(),
-      crate::host::trace::HostKind::Resource,
+      crate::host::trace::SourceKind::Resource,
       tooling,
       stream,
     );
@@ -460,11 +534,11 @@ impl tooling_bindings::HostTooling for Host {
     uuid: String,
   ) {
     let _ = self_;
-    self.ctx.resources().cancel(&uuid);
     self.ctx.trace_call(
       "unsubscribe_resource_list",
       serde_json::json!({ "uuid": uuid.clone() }),
     );
+    self.ctx.resources().cancel(&uuid);
     tracing::debug!(
       agent = %self.ctx.name(),
       uuid = %uuid,
@@ -478,11 +552,11 @@ impl tooling_bindings::HostTooling for Host {
     uuid: String,
   ) {
     let _ = self_;
-    self.ctx.resources().cancel(&uuid);
     self.ctx.trace_call(
       "unsubscribe_resource",
       serde_json::json!({ "uuid": uuid.clone() }),
     );
+    self.ctx.resources().cancel(&uuid);
     tracing::debug!(
       agent = %self.ctx.name(),
       uuid = %uuid,
@@ -493,6 +567,27 @@ impl tooling_bindings::HostTooling for Host {
   fn drop(&mut self, self_: Resource<ToolingEntry>) -> wasmtime::Result<()> {
     self.table.delete(self_)?;
     Ok(())
+  }
+}
+
+impl Host {
+  /// Record that a source opened, tagged with the handle the guest received.
+  fn trace_opened(&self, source: SourceKind, uuid: &str) {
+    self.ctx.bus().trace_event(TraceEvent::Opened {
+      agent: self.ctx.name().to_owned(),
+      source,
+      uuid: uuid.to_owned(),
+    });
+  }
+
+  /// Record that a source closed, tagged with the handle it was opened under.
+  fn trace_closed(&self, source: SourceKind, uuid: &str, reason: CloseReason) {
+    self.ctx.bus().trace_event(TraceEvent::Closed {
+      agent: self.ctx.name().to_owned(),
+      source,
+      uuid: uuid.to_owned(),
+      reason,
+    });
   }
 }
 
@@ -524,9 +619,11 @@ impl host_bindings::Host for Host {
 
   fn wait_until(&mut self, ts: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
-    self
-      .ctx
-      .trace_call("wait_until", serde_json::json!({ "ts": ts }));
+    self.ctx.trace_call_uuid(
+      "wait_until",
+      Some(uuid.clone()),
+      serde_json::json!({ "ts": ts }),
+    );
     crate::host::time::wait_until(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -540,9 +637,11 @@ impl host_bindings::Host for Host {
 
   fn wait_for(&mut self, ms: u64) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
-    self
-      .ctx
-      .trace_call("wait_for", serde_json::json!({ "ms": ms }));
+    self.ctx.trace_call_uuid(
+      "wait_for",
+      Some(uuid.clone()),
+      serde_json::json!({ "ms": ms }),
+    );
     crate::host::time::wait_for(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -556,9 +655,11 @@ impl host_bindings::Host for Host {
 
   fn wait_cron(&mut self, spec: String) -> Result<String, String> {
     let uuid = crate::host::bus::new_uuid();
-    self
-      .ctx
-      .trace_call("wait_cron", serde_json::json!({ "spec": spec.clone() }));
+    self.ctx.trace_call_uuid(
+      "wait_cron",
+      Some(uuid.clone()),
+      serde_json::json!({ "spec": spec.clone() }),
+    );
     crate::host::time::wait_cron(
       self.ctx.bus(),
       &self.ctx.rt(),
@@ -580,23 +681,28 @@ impl host_bindings::Host for Host {
   }
 
   fn subscribe_agent(&mut self, agent: String) -> Result<String, String> {
-    self.ctx.trace_call(
+    let uuid = self.ctx.bus().subscribe(self.ctx.name(), &agent);
+    self.ctx.trace_call_uuid(
       "subscribe_agent",
+      Some(uuid.clone()),
       serde_json::json!({ "agent": agent.clone() }),
     );
-    let uuid = self.ctx.bus().subscribe(self.ctx.name(), &agent);
     tracing::info!(agent = %self.ctx.name(), source = %agent, uuid = %uuid, "host subscribe-agent");
+    self.trace_opened(SourceKind::Agent, &uuid);
     Ok(uuid)
   }
 
   fn subscribe_lifecycle(&mut self) -> Result<String, String> {
-    self
-      .ctx
-      .trace_call("subscribe_lifecycle", serde_json::json!({}));
     let result = self.ctx.bus().lifecycle_subscribe(self.ctx.name());
+    self.ctx.trace_call_uuid(
+      "subscribe_lifecycle",
+      result.as_ref().ok().cloned(),
+      serde_json::json!({}),
+    );
     match &result {
       Ok(uuid) => {
-        tracing::info!(agent = %self.ctx.name(), uuid = %uuid, "host subscribe-lifecycle")
+        tracing::info!(agent = %self.ctx.name(), uuid = %uuid, "host subscribe-lifecycle");
+        self.trace_opened(SourceKind::Lifecycle, uuid);
       }
       Err(error) => {
         tracing::warn!(agent = %self.ctx.name(), error = %error, "host subscribe-lifecycle rejected")
@@ -617,6 +723,9 @@ impl host_bindings::Host for Host {
       removed,
       "host unsubscribe-lifecycle"
     );
+    if removed {
+      self.trace_closed(SourceKind::Lifecycle, &uuid, CloseReason::Cancelled);
+    }
   }
 
   fn unsubscribe_agent(&mut self, uuid: String) {
@@ -631,6 +740,9 @@ impl host_bindings::Host for Host {
       removed,
       "host unsubscribe-agent"
     );
+    if removed {
+      self.trace_closed(SourceKind::Agent, &uuid, CloseReason::Cancelled);
+    }
   }
 
   fn subscribe_endpoint(&mut self, model: String) -> Result<String, String> {
@@ -641,17 +753,24 @@ impl host_bindings::Host for Host {
       );
       return Err("the endpoint is not configured".to_string());
     }
-    self.ctx.trace_call(
+    let result = self
+      .ctx
+      .bus()
+      .endpoint_subscribe(self.ctx.name(), model.clone());
+    self.ctx.trace_call_uuid(
       "subscribe_endpoint",
-      serde_json::json!({ "model": model.clone() }),
+      result.as_ref().ok().cloned(),
+      serde_json::json!({ "model": model }),
     );
-    let result = self.ctx.bus().endpoint_subscribe(self.ctx.name(), model);
     match &result {
-      Ok(uuid) => tracing::info!(
-        agent = %self.ctx.name(),
-        uuid = %uuid,
-        "host subscribe-endpoint"
-      ),
+      Ok(uuid) => {
+        tracing::info!(
+          agent = %self.ctx.name(),
+          uuid = %uuid,
+          "host subscribe-endpoint"
+        );
+        self.trace_opened(SourceKind::Endpoint, uuid);
+      }
       Err(error) => tracing::warn!(
         agent = %self.ctx.name(),
         error = %error,
@@ -673,10 +792,11 @@ impl host_bindings::Host for Host {
       model = ?model.as_deref(),
       "host unsubscribe-endpoint"
     );
-    if model.is_some()
-      && let Some(registry) = self.ctx.endpoint()
-    {
-      registry.cancel_subscription(&uuid);
+    if model.is_some() {
+      self.trace_closed(SourceKind::Endpoint, &uuid, CloseReason::Cancelled);
+      if let Some(registry) = self.ctx.endpoint() {
+        registry.cancel_subscription(&uuid);
+      }
     }
   }
 
@@ -786,6 +906,7 @@ impl host_bindings::Host for Host {
         }
         error.to_string()
       })?;
+    self.ctx.flush_injections();
     Ok(EventEnvelope {
       id: envelope.id,
       event: out_event(envelope.event),
@@ -797,17 +918,17 @@ impl host_bindings::Host for Host {
   ) -> Result<Option<host_bindings::EventEnvelope>, String> {
     tracing::trace!(agent = %self.ctx.name(), "host try_recv poll");
     let name = self.ctx.name().to_owned();
-    Ok(
-      self
-        .ctx
-        .bus()
-        .try_recv(&name)
-        .map_err(|e| e.to_string())?
-        .map(|envelope| EventEnvelope {
-          id: envelope.id,
-          event: out_event(envelope.event),
-        }),
-    )
+    let envelope = self
+      .ctx
+      .bus()
+      .try_recv(&name)
+      .map_err(|e| e.to_string())?
+      .map(|envelope| EventEnvelope {
+        id: envelope.id,
+        event: out_event(envelope.event),
+      });
+    self.ctx.flush_injections();
+    Ok(envelope)
   }
 
   fn new_uuid(&mut self) -> String {
@@ -1084,9 +1205,13 @@ mod tests {
   use std::path::PathBuf;
 
   use super::*;
+  use crate::config::Tunables;
   use crate::host::bus::MessageBus;
-  use crate::host::streams::StreamRegistry;
+  use crate::host::endpoint::EndpointRegistry;
+  use crate::host::streams::{CancelRegistry, StreamRegistry};
+  use crate::host::trace::DEFAULT_TRACE_BUFFER;
   use crate::runtime::bindings::omw::omw::host::Host as _;
+  use tokio::sync::broadcast;
 
   fn test_host() -> anyhow::Result<Host> {
     let bus = Arc::new(MessageBus::new());
@@ -1450,5 +1575,148 @@ mod tests {
     let wire: tooling_bindings::Tool = null.into();
     assert_eq!(wire.input_schema, "null");
     assert!(wire.output_schema.is_none());
+  }
+
+  /// A host whose bus and context both carry a trace tap, plus a receiver, so
+  /// a subscription's `Call` + `Opened`/`Closed` lifecycle can be asserted
+  /// synchronously.
+  fn traced_host() -> anyhow::Result<(Host, broadcast::Receiver<TraceEvent>)> {
+    let (trace, rx) = broadcast::channel(DEFAULT_TRACE_BUFFER);
+    let bus =
+      Arc::new(MessageBus::with_trace(Tunables::default(), trace.clone()));
+    let registry = Arc::new(EndpointRegistry::new(Arc::clone(&bus)));
+    let ctx = AgentContext::with_tunables(
+      "test-agent".to_string(),
+      PathBuf::from("unused.rhai"),
+      HashMap::new(),
+      HashMap::new(),
+      bus,
+      Arc::new(StreamRegistry::new()),
+      Arc::new(CancelRegistry::new()),
+      Arc::new(CancelRegistry::new()),
+      Arc::new(CancelRegistry::new()),
+      Some(registry),
+      Some(trace),
+      Tunables::default(),
+    )?;
+    Ok((
+      Host {
+        ctx,
+        table: Default::default(),
+        wasi: wasmtime_wasi::WasiCtxBuilder::new().build(),
+      },
+      rx,
+    ))
+  }
+
+  fn drain(rx: &mut broadcast::Receiver<TraceEvent>) -> Vec<TraceEvent> {
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+      events.push(event);
+    }
+    events
+  }
+
+  fn opened(source: SourceKind, uuid: &str) -> TraceEvent {
+    TraceEvent::Opened {
+      agent: "test-agent".to_string(),
+      source,
+      uuid: uuid.to_string(),
+    }
+  }
+
+  fn closed(source: SourceKind, uuid: &str, reason: CloseReason) -> TraceEvent {
+    TraceEvent::Closed {
+      agent: "test-agent".to_string(),
+      source,
+      uuid: uuid.to_string(),
+      reason,
+    }
+  }
+
+  #[tokio::test]
+  async fn endpoint_subscription_emits_opened_then_closed() -> anyhow::Result<()>
+  {
+    let (mut host, mut rx) = traced_host()?;
+    let uuid = host.subscribe_endpoint("gpt-4o".to_string()).unwrap();
+    assert_eq!(
+      drain(&mut rx),
+      vec![
+        TraceEvent::Call {
+          agent: "test-agent".to_string(),
+          op: "subscribe_endpoint".to_string(),
+          uuid: Some(uuid.clone()),
+          detail: serde_json::json!({ "model": "gpt-4o" }),
+        },
+        opened(SourceKind::Endpoint, &uuid),
+      ]
+    );
+
+    host.unsubscribe_endpoint(uuid.clone());
+    assert_eq!(
+      drain(&mut rx),
+      vec![
+        TraceEvent::Call {
+          agent: "test-agent".to_string(),
+          op: "unsubscribe_endpoint".to_string(),
+          uuid: None,
+          detail: serde_json::json!({ "uuid": uuid.clone() }),
+        },
+        closed(SourceKind::Endpoint, &uuid, CloseReason::Cancelled),
+      ]
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn agent_and_lifecycle_subscriptions_emit_lifecycle()
+  -> anyhow::Result<()> {
+    let (mut host, mut rx) = traced_host()?;
+
+    let agent = host.subscribe_agent("bob".to_string()).unwrap();
+    let events = drain(&mut rx);
+    assert!(
+      matches!(&events[0], TraceEvent::Call { op, uuid: Some(_), .. } if op == "subscribe_agent")
+    );
+    assert_eq!(events[1], opened(SourceKind::Agent, &agent));
+    host.unsubscribe_agent(agent.clone());
+    let events = drain(&mut rx);
+    assert_eq!(
+      events[1],
+      closed(SourceKind::Agent, &agent, CloseReason::Cancelled)
+    );
+
+    let lifecycle = host.subscribe_lifecycle().unwrap();
+    let events = drain(&mut rx);
+    assert_eq!(events[1], opened(SourceKind::Lifecycle, &lifecycle));
+    host.unsubscribe_lifecycle(lifecycle.clone());
+    let events = drain(&mut rx);
+    assert_eq!(
+      events[1],
+      closed(SourceKind::Lifecycle, &lifecycle, CloseReason::Cancelled)
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_rejected_or_unknown_subscription_closes_nothing()
+  -> anyhow::Result<()> {
+    let (mut host, mut rx) = traced_host()?;
+
+    // A duplicate endpoint model is rejected: the call is traced, but nothing
+    // opens.
+    host.subscribe_endpoint("gpt-4o".to_string()).unwrap();
+    let _ = drain(&mut rx);
+    assert!(host.subscribe_endpoint("gpt-4o".to_string()).is_err());
+    let events = drain(&mut rx);
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], TraceEvent::Call { uuid: None, .. }));
+
+    // An unknown handle closes nothing.
+    host.unsubscribe_agent("ghost".to_string());
+    let events = drain(&mut rx);
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], TraceEvent::Call { uuid: None, .. }));
+    Ok(())
   }
 }

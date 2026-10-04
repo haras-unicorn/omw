@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use futures_util::StreamExt as _;
 use futures_util::stream::BoxStream;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -34,7 +35,8 @@ pub(crate) struct Config {
   pub models: Vec<String>,
 }
 
-/// One scripted turn: optional reasoning, content, a tool call, and usage.
+/// One scripted turn: optional reasoning, content, a tool call, usage, and an
+/// optional failure or pending marker.
 #[derive(Debug, Clone, Deserialize, Default, JsonSchema)]
 pub struct Turn {
   /// Plain content emitted before the terminal finish reason.
@@ -49,6 +51,12 @@ pub struct Turn {
   /// Token accounting attached to the terminal delta.
   #[serde(default)]
   pub usage: Option<UsageSpec>,
+  /// Fail the stream with this error, after emitting the turn's deltas.
+  #[serde(default)]
+  pub error: Option<String>,
+  /// Never yield: the stream stays pending forever (for cancellation tests).
+  #[serde(default)]
+  pub pending: bool,
 }
 
 /// The scripted token counts of one turn.
@@ -139,6 +147,8 @@ pub struct ChatCall {
   pub tools: Vec<Tool>,
   /// The opaque per-call generation params the guest passed, if any.
   pub params: Option<Value>,
+  /// The deltas this call returned.
+  pub deltas: Vec<ChatDelta>,
 }
 
 /// A scripted provider backed by an in-memory turn queue.
@@ -214,29 +224,61 @@ impl Provider for MockProvider {
     tools: Vec<Tool>,
     params: Option<Value>,
   ) -> anyhow::Result<BoxStream<'static, Result<ChatDelta, String>>> {
+    let turn = self.next_turn().await;
+    let pending = turn.as_ref().is_some_and(|turn| turn.pending);
+    let error = turn.as_ref().and_then(|turn| turn.error.clone());
+    // A pending stream yields nothing, so no deltas are recorded as returned.
+    let deltas = if pending {
+      Vec::new()
+    } else {
+      turn_to_deltas(turn)
+    };
     self.calls.lock().await.push(ChatCall {
       model: model.to_string(),
       messages,
       tools,
       params,
+      deltas: deltas.clone(),
     });
-    let deltas = turn_to_deltas(self.next_turn().await);
-    Ok(Box::pin(futures_util::stream::iter(
-      deltas.into_iter().map(Ok),
-    )))
+    if pending {
+      return Ok(Box::pin(futures_util::stream::pending()));
+    }
+    let items: Vec<Result<ChatDelta, String>> =
+      deltas.into_iter().map(Ok).collect();
+    match error {
+      Some(error) => {
+        let stream = futures_util::stream::iter(items)
+          .chain(futures_util::stream::once(async move { Err(error) }));
+        Ok(Box::pin(stream))
+      }
+      None => Ok(Box::pin(futures_util::stream::iter(items))),
+    }
   }
 
   fn snapshot(&self) -> Option<Value> {
     let cursor = self.cursor.try_lock().ok().map(|cursor| *cursor)?;
-    let calls = self.calls.try_lock().ok().map(|calls| calls.len())?;
+    let calls = self.calls.try_lock().ok()?;
     let consumed = cursor.min(self.turns.len());
+    let recorded = calls
+      .iter()
+      .map(|call| {
+        serde_json::json!({
+          "model": call.model,
+          "messages": call.messages,
+          "tools": call.tools,
+          "params": call.params,
+          "deltas": call.deltas,
+        })
+      })
+      .collect::<Vec<_>>();
     Some(serde_json::json!({
       "kind": "provider",
       "turns_total": self.turns.len(),
       "turns_consumed": consumed,
       "turns_remaining": self.turns.len().saturating_sub(consumed),
-      "chat_calls": calls,
+      "chat_calls": calls.len(),
       "models": self.models,
+      "calls": recorded,
     }))
   }
 }
@@ -410,6 +452,56 @@ mod tests {
     assert_eq!(snapshot["turns_consumed"], 1);
     assert_eq!(snapshot["turns_remaining"], 1);
     assert_eq!(snapshot["chat_calls"], 1);
+    assert_eq!(snapshot["calls"][0]["model"], "m");
+    assert_eq!(snapshot["calls"][0]["deltas"][0]["content"], "a");
+    assert_eq!(snapshot["calls"][0]["deltas"][0]["finish_reason"], "stop");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_turn_errors_after_emitting_its_deltas() -> anyhow::Result<()> {
+    let provider = MockProvider::build(
+      "m",
+      &serde_json::json!({
+        "turns": [{ "content": "partial", "error": "boom" }],
+      }),
+    )?;
+    let stream = provider
+      .chat_stream("m", Vec::new(), Vec::new(), None)
+      .await?;
+    let items: Vec<Result<ChatDelta, String>> = stream.collect().await;
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+      items[0].as_ref().ok().and_then(|d| d.content.as_deref()),
+      Some("partial")
+    );
+    assert_eq!(items[1].as_ref().err().map(String::as_str), Some("boom"));
+    // The emitted deltas are still recorded for the snapshot.
+    let calls = provider.calls().await;
+    assert_eq!(
+      calls[0].deltas[0].content.as_deref(),
+      Some("partial"),
+      "the emitted deltas should be recorded"
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_pending_turn_never_yields() -> anyhow::Result<()> {
+    let provider = MockProvider::build(
+      "m",
+      &serde_json::json!({ "turns": [{ "pending": true }] }),
+    )?;
+    let mut stream = provider
+      .chat_stream("m", Vec::new(), Vec::new(), None)
+      .await?;
+    let next =
+      tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await;
+    assert!(next.is_err(), "a pending stream should never yield");
+    // A pending turn returns nothing, so no deltas are recorded.
+    let calls = provider.calls().await;
+    assert!(calls[0].deltas.is_empty());
     Ok(())
   }
 }

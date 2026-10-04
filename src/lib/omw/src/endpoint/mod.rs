@@ -22,6 +22,23 @@ pub mod openai;
 pub struct EndpointEntry {
   kind: &'static str,
   inner: Arc<dyn Endpoint>,
+  /// Mock-only: lets the host register call-boundary injections for the
+  /// scripted requests instead of a racing client task. `None` for the real
+  /// endpoint, so the deterministic plumbing stays off the public
+  /// [`Endpoint`] trait.
+  injections: Option<Arc<dyn EndpointInjections>>,
+}
+
+/// Mock-only hook the host uses to register the scripted endpoint client's
+/// requests as call-boundary injections.
+pub(crate) trait EndpointInjections: Send + Sync {
+  /// Register every scripted request as a pending injection.
+  fn inject_requests(
+    &self,
+    bus: &Arc<MessageBus>,
+    registry: &Arc<EndpointRegistry>,
+    shutdown: &crate::shutdown::Shutdown,
+  );
 }
 
 impl EndpointEntry {
@@ -31,6 +48,7 @@ impl EndpointEntry {
     Self {
       kind: T::kind(),
       inner: endpoint,
+      injections: None,
     }
   }
 
@@ -42,6 +60,11 @@ impl EndpointEntry {
   /// The underlying implementation.
   pub fn inner(&self) -> &Arc<dyn Endpoint> {
     &self.inner
+  }
+
+  /// The mock-only injection hook, when this entry is a mock.
+  pub(crate) fn injections(&self) -> Option<&Arc<dyn EndpointInjections>> {
+    self.injections.as_ref()
   }
 }
 
@@ -88,7 +111,7 @@ pub trait Factory: Send + Sync + 'static {
 }
 
 type FactoryFn =
-  Arc<dyn Fn(&Value) -> anyhow::Result<Arc<dyn Endpoint>> + Send + Sync>;
+  Arc<dyn Fn(&Value) -> anyhow::Result<EndpointEntry> + Send + Sync>;
 
 /// Explicit registry of endpoint back ends, keyed by static `kind`.
 /// [`Registry::default`] carries the feature-gated built-ins; custom back
@@ -120,8 +143,38 @@ impl Registry {
     if self.factories.contains_key(kind) {
       anyhow::bail!("duplicate endpoint kind {kind:?}");
     }
-    let factory: FactoryFn =
-      Arc::new(|params| Ok(T::build(params)? as Arc<dyn Endpoint>));
+    let factory: FactoryFn = Arc::new(|params| {
+      Ok(EndpointEntry {
+        kind: T::kind(),
+        inner: T::build(params)? as Arc<dyn Endpoint>,
+        injections: None,
+      })
+    });
+    self.insert(kind, factory);
+    Ok(())
+  }
+
+  /// Register the built-in mock endpoint. Like [`register`](Self::register)
+  /// but also carries the mock's call-boundary injection hook so the scripted
+  /// requests are routed at a guest call boundary.
+  #[cfg(any(test, feature = "mock"))]
+  pub(crate) fn register_mock<T>(&mut self) -> anyhow::Result<()>
+  where
+    T: Endpoint + Factory + EndpointInjections + 'static,
+  {
+    let kind = T::kind();
+    if self.factories.contains_key(kind) {
+      anyhow::bail!("duplicate endpoint kind {kind:?}");
+    }
+    let factory: FactoryFn = Arc::new(|params| {
+      let endpoint = T::build(params)?;
+      let injections: Arc<dyn EndpointInjections> = endpoint.clone();
+      Ok(EndpointEntry {
+        kind: T::kind(),
+        inner: endpoint as Arc<dyn Endpoint>,
+        injections: Some(injections),
+      })
+    });
     self.insert(kind, factory);
     Ok(())
   }
@@ -139,7 +192,14 @@ impl Registry {
     if self.factories.contains_key(kind) {
       anyhow::bail!("duplicate endpoint kind {kind:?}");
     }
-    self.insert(kind, Arc::new(factory));
+    let adapted: FactoryFn = Arc::new(move |params| {
+      Ok(EndpointEntry {
+        kind,
+        inner: factory(params)?,
+        injections: None,
+      })
+    });
+    self.insert(kind, adapted);
     Ok(())
   }
 
@@ -174,11 +234,9 @@ impl Registry {
         self.kinds().join(", ")
       );
     };
-    let inner = factory(params)?;
-    Ok(EndpointEntry {
-      kind: static_kind,
-      inner,
-    })
+    let mut entry = factory(params)?;
+    entry.kind = static_kind;
+    Ok(entry)
   }
 
   /// Build the optional configured endpoint, if any.
@@ -210,7 +268,7 @@ impl Default for Registry {
     }
     #[cfg(any(test, feature = "mock"))]
     {
-      let _ = registry.register::<mock::MockEndpoint>();
+      let _ = registry.register_mock::<mock::MockEndpoint>();
     }
     registry
   }
