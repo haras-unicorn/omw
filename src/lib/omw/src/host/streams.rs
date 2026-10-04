@@ -19,15 +19,48 @@ use tokio::sync::oneshot;
 
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
-use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
+use crate::host::trace::{CloseReason, SourceKind, TraceEvent, TraceSender};
 use crate::provider::{ChatMessage, Provider};
 use crate::tooling::Tool;
+
+/// One open cancellable source. Besides the cancel signal, it remembers how to
+/// emit the `closed` lifecycle observation so a cancellation can be made
+/// synchronous with the guest call that requested it (see [`StreamRegistry::cancel`]).
+#[derive(Debug)]
+struct Entry {
+  /// Held for its `Drop`: dropping the sender wakes the pump's cancel
+  /// receiver. Never read.
+  #[allow(
+    dead_code,
+    reason = "the sender is held only so that dropping it wakes the pump"
+  )]
+  cancel: oneshot::Sender<()>,
+  agent: String,
+  source: SourceKind,
+  trace: Option<TraceSender>,
+}
+
+impl Entry {
+  /// Emit the `closed` lifecycle observation for a cancelled entry, if a trace
+  /// is attached. Called synchronously from `cancel` / `cancel_all` so the
+  /// close is pinned to the operation rather than to a racing pump task.
+  fn trace_closed(&self, uuid: &str, reason: CloseReason) {
+    if let Some(tx) = &self.trace {
+      let _ = tx.send(TraceEvent::Closed {
+        agent: self.agent.clone(),
+        source: self.source,
+        uuid: uuid.to_string(),
+        reason,
+      });
+    }
+  }
+}
 
 /// Registry of open chat streams, keyed by UUID. Each entry holds the cancel
 /// signal for its pump; an entry's presence means the stream is still open.
 #[derive(Default)]
 pub struct StreamRegistry {
-  open: DashMap<String, oneshot::Sender<()>>,
+  open: DashMap<String, Entry>,
 }
 
 /// The generic cancel-signal registry behind every cancellable host source (chat
@@ -40,10 +73,26 @@ impl StreamRegistry {
     Self::default()
   }
 
-  /// Register a stream and return the cancel receiver its pump waits on.
-  pub fn open(&self, uuid: String) -> oneshot::Receiver<()> {
+  /// Register a stream and return the cancel receiver its pump waits on. The
+  /// entry captures `bus`'s trace tap (if any) so a later `cancel` can emit the
+  /// `closed` observation synchronously.
+  pub fn open(
+    &self,
+    bus: &MessageBus,
+    uuid: String,
+    agent: String,
+    source: SourceKind,
+  ) -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
-    self.open.insert(uuid, tx);
+    self.open.insert(
+      uuid,
+      Entry {
+        cancel: tx,
+        agent,
+        source,
+        trace: bus.trace_sender(),
+      },
+    );
     rx
   }
 
@@ -52,18 +101,30 @@ impl StreamRegistry {
     self.open.contains_key(uuid)
   }
 
-  /// Cancel an open stream by UUID: drops its cancel signal, waking the pump.
+  /// Cancel an open stream by UUID: emits its `closed{cancelled}` observation
+  /// synchronously, then drops its cancel signal to wake the pump. The pump
+  /// skips its own `closed` emission for a cancellation, so this fires once.
   pub fn cancel(&self, uuid: &str) {
-    let _ = self.open.remove(uuid);
+    if let Some((_, entry)) = self.open.remove(uuid) {
+      entry.trace_closed(uuid, CloseReason::Cancelled);
+    }
   }
 
   /// Cancel every open stream/timer/subscription at once, waking all pumps.
-  /// Used on hot reload so a restarted agent leaves no stale pumps behind.
+  /// Used on hot reload so a restarted agent leaves no stale pumps behind. Each
+  /// entry's `closed{cancelled}` observation is emitted synchronously.
   pub fn cancel_all(&self) {
-    self.open.clear();
+    let keys: Vec<String> =
+      self.open.iter().map(|entry| entry.key().clone()).collect();
+    for uuid in keys {
+      if let Some((_, entry)) = self.open.remove(&uuid) {
+        entry.trace_closed(&uuid, CloseReason::Cancelled);
+      }
+    }
   }
 
-  /// Deregister a stream; the pump calls this once it finishes.
+  /// Deregister a stream; the pump calls this once it finishes. Silent: a
+  /// natural end emits its own `closed` from the pump.
   pub fn remove(&self, uuid: &str) {
     let _ = self.open.remove(uuid);
   }
@@ -111,11 +172,12 @@ pub fn spawn_pump(
   tools: Vec<Tool>,
   params: Option<serde_json::Value>,
 ) {
-  let mut cancel = streams.open(uuid.clone());
+  let mut cancel =
+    streams.open(&bus, uuid.clone(), name.clone(), SourceKind::ChatStream);
   tracing::info!(agent = %name, uuid = %uuid, model = %model, "chat stream opened");
-  bus.trace_event(TraceEvent::HostOpened {
+  bus.trace_event(TraceEvent::Opened {
     agent: name.clone(),
-    kind: HostKind::ChatStream,
+    source: SourceKind::ChatStream,
     uuid: uuid.clone(),
   });
   rt.spawn(async move {
@@ -127,11 +189,11 @@ pub fn spawn_pump(
         tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed to open");
         bus.deliver(&name, &uuid, Event::Error(e.to_string()));
         streams.remove(&uuid);
-        bus.trace_event(TraceEvent::HostClosed {
+        bus.trace_event(TraceEvent::Closed {
           agent: name.clone(),
-          kind: HostKind::ChatStream,
+          source: SourceKind::ChatStream,
           uuid: uuid.clone(),
-          reason: HostCloseReason::Failed,
+          reason: CloseReason::Failed,
         });
         return;
       }
@@ -142,7 +204,7 @@ pub fn spawn_pump(
 
         _ = &mut cancel => {
           tracing::debug!(agent, uuid = %uuid, "chat stream pump cancelled");
-          break HostCloseReason::Cancelled;
+          break CloseReason::Cancelled;
         }
 
         next = stream.next() => match next {
@@ -160,23 +222,25 @@ pub fn spawn_pump(
           Some(Err(e)) => {
             tracing::error!(agent, uuid = %uuid, error = %e, "chat stream pump failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
-            break HostCloseReason::Failed;
+            break CloseReason::Failed;
           }
           None => {
             tracing::debug!(agent, uuid = %uuid, "chat stream ended");
             bus.deliver(&name,&uuid, Event::ChatEnd);
-            break HostCloseReason::Ended;
+            break CloseReason::Ended;
           }
         },
       }
     };
     streams.remove(&uuid);
-    bus.trace_event(TraceEvent::HostClosed {
-      agent: name.clone(),
-      kind: HostKind::ChatStream,
-      uuid: uuid.clone(),
-      reason,
-    });
+    if reason != CloseReason::Cancelled {
+      bus.trace_event(TraceEvent::Closed {
+        agent: name.clone(),
+        source: SourceKind::ChatStream,
+        uuid: uuid.clone(),
+        reason,
+      });
+    }
   });
 }
 
@@ -189,8 +253,10 @@ mod tests {
 
   #[test]
   fn open_is_open_and_cancel_lifecycle() {
+    let bus = MessageBus::new();
     let streams = StreamRegistry::new();
-    let mut rx = streams.open("s".to_string());
+    let mut rx =
+      streams.open(&bus, "s".to_string(), "a".to_string(), SourceKind::Timer);
     assert!(streams.is_open("s"));
     streams.cancel("s");
     assert!(!streams.is_open("s"));
@@ -199,9 +265,12 @@ mod tests {
 
   #[test]
   fn cancel_all_wakes_every_pump() {
+    let bus = MessageBus::new();
     let streams = StreamRegistry::new();
-    let mut first = streams.open("a".to_string());
-    let mut second = streams.open("b".to_string());
+    let mut first =
+      streams.open(&bus, "a".to_string(), "a".to_string(), SourceKind::Timer);
+    let mut second =
+      streams.open(&bus, "b".to_string(), "a".to_string(), SourceKind::Timer);
     assert!(streams.is_open("a"));
     assert!(streams.is_open("b"));
     streams.cancel_all();
@@ -209,6 +278,50 @@ mod tests {
     assert!(!streams.is_open("b"));
     assert!(first.try_recv().is_err());
     assert!(second.try_recv().is_err());
+  }
+
+  #[test]
+  fn cancel_emits_closed_synchronously_in_cancel_order() -> anyhow::Result<()> {
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let bus = MessageBus::with_trace(crate::config::Tunables::default(), tx);
+    let streams = StreamRegistry::new();
+    let _a = streams.open(
+      &bus,
+      "a".to_string(),
+      "alice".to_string(),
+      SourceKind::ResourceList,
+    );
+    let _b = streams.open(
+      &bus,
+      "b".to_string(),
+      "alice".to_string(),
+      SourceKind::Resource,
+    );
+    // Both closes are emitted inside their `cancel` call, in call order — not
+    // from the pump tasks they wake, which the scheduler could reorder.
+    streams.cancel("a");
+    streams.cancel("b");
+    let first = rx.try_recv().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let second = rx.try_recv().map_err(|e| anyhow::anyhow!("{e}"))?;
+    assert_eq!(
+      first,
+      TraceEvent::Closed {
+        agent: "alice".to_string(),
+        source: SourceKind::ResourceList,
+        uuid: "a".to_string(),
+        reason: CloseReason::Cancelled,
+      }
+    );
+    assert_eq!(
+      second,
+      TraceEvent::Closed {
+        agent: "alice".to_string(),
+        source: SourceKind::Resource,
+        uuid: "b".to_string(),
+        reason: CloseReason::Cancelled,
+      }
+    );
+    Ok(())
   }
 
   #[test]
@@ -291,21 +404,21 @@ mod tests {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline && !closed {
       match rx.try_recv() {
-        Ok(TraceEvent::HostOpened {
-          kind: HostKind::ChatStream,
+        Ok(TraceEvent::Opened {
+          source: SourceKind::ChatStream,
           ..
         }) => opened = true,
-        Ok(TraceEvent::HostClosed {
-          kind: HostKind::ChatStream,
-          reason: HostCloseReason::Ended,
+        Ok(TraceEvent::Closed {
+          source: SourceKind::ChatStream,
+          reason: CloseReason::Ended,
           ..
         }) => closed = true,
         Ok(_) => {}
         Err(_) => std::thread::sleep(Duration::from_millis(5)),
       }
     }
-    assert!(opened, "the chat stream should trace a HostOpened");
-    assert!(closed, "the chat stream should trace a HostClosed");
+    assert!(opened, "the chat stream should trace a Opened");
+    assert!(closed, "the chat stream should trace a Closed");
     Ok(())
   }
 }

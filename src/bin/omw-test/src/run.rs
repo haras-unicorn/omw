@@ -206,6 +206,11 @@ async fn run_pass(
 ) -> Result<PassSummary> {
   if tests.is_empty() {
     tracing::warn!(path = %args.path.display(), "no tests found");
+    if let Some(path) = args.dump.as_deref() {
+      let rendered =
+        render_dump(args.dump_format, &Dump { tests: Vec::new() })?;
+      crate::stdio::write(path, &rendered)?;
+    }
     return Ok(PassSummary {
       verdicts: Vec::new(),
       passed: 0,

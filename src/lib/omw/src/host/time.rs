@@ -13,7 +13,7 @@ use chrono::{TimeZone, Utc};
 use crate::host::bus::MessageBus;
 use crate::host::events::Event;
 use crate::host::streams::CancelRegistry;
-use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
+use crate::host::trace::{CloseReason, SourceKind, TraceEvent};
 
 /// Milliseconds between the Unix epoch and `now`.
 pub fn now_ticks() -> u64 {
@@ -185,16 +185,17 @@ fn schedule(
   uuid: String,
   delay: Duration,
 ) {
-  let mut cancel = timers.open(uuid.clone());
+  let mut cancel =
+    timers.open(&bus, uuid.clone(), name.clone(), SourceKind::Timer);
   tracing::debug!(
     agent = %name,
     uuid = %uuid,
     delay_ms = delay.as_millis(),
     "timer registered"
   );
-  bus.trace_event(TraceEvent::HostOpened {
+  bus.trace_event(TraceEvent::Opened {
     agent: name.clone(),
-    kind: HostKind::Timer,
+    source: SourceKind::Timer,
     uuid: uuid.clone(),
   });
   rt.spawn(async move {
@@ -202,21 +203,23 @@ fn schedule(
       biased;
       _ = &mut cancel => {
         tracing::debug!(agent = %name, uuid = %uuid, "timer cancelled");
-        HostCloseReason::Cancelled
+        CloseReason::Cancelled
       }
       _ = tokio::time::sleep(delay) => {
         timers.remove(&uuid);
         tracing::trace!(agent = %name, uuid = %uuid, "timer fired");
         bus.deliver(&name, &uuid, Event::Timer);
-        HostCloseReason::Ended
+        CloseReason::Ended
       }
     };
-    bus.trace_event(TraceEvent::HostClosed {
-      agent: name.clone(),
-      kind: HostKind::Timer,
-      uuid: uuid.clone(),
-      reason,
-    });
+    if reason != CloseReason::Cancelled {
+      bus.trace_event(TraceEvent::Closed {
+        agent: name.clone(),
+        source: SourceKind::Timer,
+        uuid: uuid.clone(),
+        reason,
+      });
+    }
   });
 }
 

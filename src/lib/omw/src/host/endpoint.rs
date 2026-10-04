@@ -212,6 +212,18 @@ impl EndpointRegistry {
     self.sessions.remove(session);
   }
 
+  /// End a session normally (the agent's reply reached a terminal
+  /// finish-reason): remove it and fire a single `endpoint-session-end` with
+  /// no error. Idempotent once the entry is removed, so it never
+  /// double-fires.
+  pub fn close(&self, session: &str) {
+    let Some((_, entry)) = self.sessions.remove(session) else {
+      return;
+    };
+    drop(entry.tx);
+    self.deliver_ended(&entry.agent, &entry.subscription, session, None);
+  }
+
   /// Abruptly end a session (e.g. the endpoint client disconnected, dropping
   /// the receiver half). Fires a single `endpoint-session-end` with an error;
   /// idempotent once the entry is removed, so it never double-fires.
@@ -434,6 +446,37 @@ mod tests {
     }
     // Abort is idempotent: once removed, the entry never fires again.
     registry.abort(&session);
+    assert!(bus.try_recv("alice")?.is_none());
+    Ok(())
+  }
+
+  #[test]
+  fn close_delivers_a_normal_end_and_is_idempotent() -> anyhow::Result<()> {
+    let (bus, registry) = busy_registry();
+    let sub = bus
+      .endpoint_subscribe("alice", "gpt-4o".to_string())
+      .map_err(|e| anyhow::anyhow!(e))?;
+    let open = registry.clone().open("alice", &sub);
+    let session = open.session.clone();
+
+    registry.close(&session);
+    let envelope = bus
+      .try_recv("alice")?
+      .ok_or_else(|| anyhow::anyhow!("expected an endpoint-session-end"))?;
+    assert_eq!(envelope.id, sub);
+    match envelope.event {
+      Event::EndpointSessionEnd(end) => {
+        assert_eq!(end.session, session);
+        assert!(end.error.is_none());
+      }
+      other => assert!(false, "unexpected event: {other:?}"),
+    }
+
+    // Idempotent: closing again fires nothing, and dropping the now-orphaned
+    // receiver does not abort a session that already ended normally.
+    registry.close(&session);
+    assert!(bus.try_recv("alice")?.is_none());
+    drop(open.rx);
     assert!(bus.try_recv("alice")?.is_none());
     Ok(())
   }

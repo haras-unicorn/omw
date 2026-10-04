@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::host::bus::MessageBus;
 use crate::host::events::{Event, ToolResult};
 use crate::host::streams::CancelRegistry;
-use crate::host::trace::{HostCloseReason, HostKind, TraceEvent};
+use crate::host::trace::{CloseReason, SourceKind, TraceEvent};
 use crate::tooling::Tooling;
 
 /// Spawn a pump task on `rt` that awaits `tooling.call_tool(name, args)`
@@ -34,11 +34,12 @@ pub fn spawn_pump(
   tool: String,
   args: Value,
 ) {
-  let mut cancel = calls.open(uuid.clone());
+  let mut cancel =
+    calls.open(&bus, uuid.clone(), name.clone(), SourceKind::ToolCall);
   tracing::info!(agent = %name, uuid = %uuid, tool = %tool, "tool call queued");
-  bus.trace_event(TraceEvent::HostOpened {
+  bus.trace_event(TraceEvent::Opened {
     agent: name.clone(),
-    kind: HostKind::ToolCall,
+    source: SourceKind::ToolCall,
     uuid: uuid.clone(),
   });
   rt.spawn(async move {
@@ -51,7 +52,7 @@ pub fn spawn_pump(
 
       _ = &mut cancel => {
         tracing::debug!(agent = %name, uuid = %uuid, tool = %tool, "tool call cancelled");
-        HostCloseReason::Cancelled
+        CloseReason::Cancelled
       }
       res = &mut call => {
         match res {
@@ -68,23 +69,25 @@ pub fn spawn_pump(
                 structured_content: result.structured_content.map(|v| v.to_string()),
               }),
             );
-            HostCloseReason::Ended
+            CloseReason::Ended
           }
           Err(e) => {
             tracing::error!(agent = %name, uuid = %uuid, tool = %tool, error = %e, "tool call failed");
             bus.deliver(&name,&uuid, Event::Error(e.to_string()));
-            HostCloseReason::Failed
+            CloseReason::Failed
           }
         }
       }
     };
     calls.remove(&uuid);
-    bus.trace_event(TraceEvent::HostClosed {
-      agent: name.clone(),
-      kind: HostKind::ToolCall,
-      uuid: uuid.clone(),
-      reason,
-    });
+    if reason != CloseReason::Cancelled {
+      bus.trace_event(TraceEvent::Closed {
+        agent: name.clone(),
+        source: SourceKind::ToolCall,
+        uuid: uuid.clone(),
+        reason,
+      });
+    }
   });
 }
 
@@ -95,6 +98,7 @@ mod tests {
 
   use super::*;
   use crate::host::bus::MessageBus;
+  use crate::tooling::Factory;
   use crate::tooling::Tooling;
   use crate::tooling::mock::MockTooling;
 
@@ -152,7 +156,13 @@ mod tests {
     );
     let bus = Arc::new(MessageBus::new());
     let calls = Arc::new(CancelRegistry::new());
-    let tooling = Arc::new(crate::tooling::mock::FailingTooling);
+    let tooling: Arc<dyn Tooling> = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{ "name": "some-tool", "error": "mock failure" }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
     let uuid = crate::host::bus::new_uuid();
 
     spawn_pump(
@@ -188,8 +198,13 @@ mod tests {
     // Pending: the call never completes, so cancel is the only way the pump
     // can exit — no race between an immediately-ready `noop` result and the
     // cancel signal.
-    let tooling: Arc<dyn Tooling> =
-      Arc::new(crate::tooling::mock::PendingTooling);
+    let tooling: Arc<dyn Tooling> = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{ "name": "some-tool", "pending": true }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
     let uuid = crate::host::bus::new_uuid();
 
     spawn_pump(

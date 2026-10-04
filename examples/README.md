@@ -35,3 +35,10 @@ assertions work, and [Testing](../docs/testing/testing.md) for the binary.
   arrives at a specific point relative to the brain's calls.
 - `09-resources` — the tooling mock's resource list and content: subscribe to
   both, read a resource, and react to scripted, `after`-gated updates.
+- `10-endpoint-stop` — the endpoint mock ends a session from the client side: a
+  normal `close` and an `abort`, each surfacing as an `endpoint-session-end`
+  inbound event.
+- `11-tool-call-order` — queued tool calls delivered at guest call boundaries:
+  one `after`-gated, one immediate, their results ordered by the brain.
+- `12-race-cancels` — two subscriptions cancelled back to back, each `closed`
+  emitted synchronously with its unsubscribe call.

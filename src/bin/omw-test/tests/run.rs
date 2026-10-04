@@ -217,9 +217,26 @@ fn dump_writes_per_test_traces_and_mock_snapshots() {
   let json = std::fs::read_to_string(&dump).unwrap();
   assert!(json.contains("\"tests\""), "{json}");
   assert!(json.contains("\"test\": \"case/omw.test.toml\""), "{json}");
+  assert!(json.contains("\"passed\": true"), "{json}");
   assert!(json.contains("\"observed\""), "{json}");
   assert!(json.contains("\"turns_total\": 1"), "{json}");
   assert!(json.contains("\"turns_consumed\": 1"), "{json}");
+  assert!(json.contains("\"deltas\""), "{json}");
+  assert!(json.contains("hello, world"), "{json}");
+}
+
+#[test]
+fn dump_writes_an_empty_artifact_when_no_tests_are_found() {
+  let dir = tempdir().unwrap();
+  let dump = dir.path().join("dump.json");
+  common::omw_test()
+    .args(["run", "--dump"])
+    .arg(&dump)
+    .arg(dir.path())
+    .assert()
+    .success();
+  let json = std::fs::read_to_string(&dump).unwrap();
+  assert!(json.contains("\"tests\": []"), "{json}");
 }
 
 #[test]

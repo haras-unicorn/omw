@@ -19,7 +19,7 @@ pub use crate::endpoint::{
 pub use crate::host::ctx::AgentContext;
 pub use crate::host::events::{Event, EventEnvelope};
 pub use crate::host::trace::{
-  AgentTrace, HostCloseReason, HostKind, TraceEvent, TraceSender,
+  AgentTrace, CloseReason, SourceKind, TraceEvent, TraceSender,
 };
 pub use crate::provider::{
   ChatDelta, ChatMessage, ChatResult, Factory as ProviderFactory, Provider,

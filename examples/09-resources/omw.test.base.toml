@@ -50,6 +50,7 @@ runtime = "runtime"
 outcome = "completed"
 events = [
   { kind = "call", op = "subscribe_resource_list" },
+  { kind = "opened", source = "resource-list" },
   { kind = "inbound", event = "resource-list-updated" },
   { kind = "inbound", event = "resource-list-updated" },
   {
@@ -57,6 +58,7 @@ events = [
     op = "subscribe_resource",
     detail = { uri = "mem://notes" },
   },
+  { kind = "opened", source = "resource" },
   {
     kind = "inbound",
     event = "resource-updated",

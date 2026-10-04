@@ -40,12 +40,13 @@ omw-test run examples            # every discovered config
   `omw-test` is fail-fast: it stops at the first failure and prints that test's
   detail.
 - `--dump <path>` writes the per-test traces and mock queue snapshots as
-  machine-readable data (`-` / `/dev/stdout` streams them). Each entry carries
-  the test label, its verdict, each agent's observed events, assertion cursor
-  and diff, and the mock back ends' consumed-vs-remaining scripted queues.
-  `--dump-format json|yaml|toml` selects the encoding; it defaults to `json`,
-  which keeps a piped dump `jq`-able (`toml` drops nulls, which it cannot
-  represent).
+  machine-readable data (`-` / `/dev/stdout` streams them), for passing and
+  failing tests alike. Each entry carries the test label, its verdict, each
+  agent's observed events, assertion cursor and diff, and the mock back ends'
+  consumed-vs-remaining scripted queues plus their per-call returns. An empty
+  discovery writes an empty `{ "tests": [] }`. `--dump-format json|yaml|toml`
+  selects the encoding; it defaults to `json`, which keeps a piped dump
+  `jq`-able (`toml` drops nulls, which it cannot represent).
 - `--watch` re-runs on change instead of exiting: after each pass it waits for a
   debounced filesystem event and runs again (file mode watches the config's
   parent directory; directory mode watches the root recursively). The library
@@ -62,13 +63,14 @@ that produced it.
   indefinite wait.
 - **Trace state.** A failure shows each observed event with an index next to the
   assertion cursor — the next assertion the matcher was waiting on.
-- **Host/runtime state.** The chat-stream, timer, resource-subscription and
-  tool-call pumps emit `host-opened` / `host-closed` (with a reason: ended,
-  cancelled or failed) trace events, and `chat_stream`'s call detail carries the
-  UUID it returned, so "opened but delivered nothing" is visible.
+- **Host/runtime state.** Every source the brain opens emits `opened` / `closed`
+  (with a reason: ended, cancelled or failed) trace events, and each
+  handle-returning call carries the UUID it returned as its `uuid` field, so
+  "opened but delivered nothing" is visible.
 - **Mock queue state.** On failure the mock provider/tooling/endpoint report
   their consumed vs remaining turns/`tool_calls`/`requests` (real back ends
-  report nothing). `--dump` writes the same snapshots.
+  report nothing). `--dump` writes the same snapshots plus each mock's per-call
+  returns (provider deltas, tooling results, endpoint replies).
 - **Settle signal.** The instant an `outcome = "asserted"` agent's assertions
   settle, a per-agent line is logged, so a hang is unmistakably a hang rather
   than a pending pass.
@@ -229,11 +231,21 @@ events = [
 - `outcome` is `"completed"`, `{ exited = "<msg>" }`, or `"asserted"` (below).
 - each `events` entry is one of:
   - `{ kind = "call", op = "...", detail = { ... } }` — an outbound host call.
-    `op` is exact; `detail` is a partial pattern over the call's JSON detail.
+    `op` is a partial pattern over the op name, so its string is a regex (like
+    every other string leaf); `detail` is a partial pattern over the call's JSON
+    detail.
   - `{ kind = "inbound", event = "...", payload = { ... } }` — an inbox event.
     `event` is the kebab-case kind (`chat-delta`, `chat-end`, `tool-result`,
     `endpoint-message`, `message`, `timer`, `reload`, `shutdown`, `error`, …);
     `payload` is a partial pattern over the serialized event.
+  - `{ kind = "opened", source = "..." }` — a source opened: the pump-backed
+    `chat-stream`, `timer`, `resource-list`, `resource` and `tool-call`, or the
+    bus-backed `endpoint`, `agent` and `lifecycle` subscriptions.
+  - `{ kind = "closed", source = "...", reason = "..." }` — a source closed,
+    with the reason it did (`ended`, `cancelled`, `failed`). Both fields are
+    optional patterns. There is deliberately no UUID or agent match: a random
+    UUID is meaningless to assert on, so the source kind and reason are the
+    meaningful fields.
   - `{ "$while" = { kind = "call", ... } }` — greedily consume a run of matching
     trace events, stopping at the first non-match.
   - `{ "$until" = { kind = "call", ... } }` — skip trace events until one
@@ -248,7 +260,9 @@ The list is matched as an **ordered subsequence** over **partial patterns**:
 - A pattern object matches when every key it names is present and matches in the
   candidate; extra candidate keys are ignored. **String leaves are regular
   expressions** matched against the candidate string, so `"^gpt-a.*"` is a
-  regex. Numbers, booleans and null are compared for equality.
+  regex. Numbers, booleans and null are compared for equality. `op` follows the
+  same rule, so `op = "chat"` also matches `chat_stream`; anchor it with
+  `"^chat$"` when you want an exact op.
 - **Arrays match as ordered subsequences too**, with the same rules as `events`.
   Unlisted elements between matches are skipped and leading/trailing elements
   are ignored, so `[ "a", "b" ]` matches `[ "x", "a", "b", "y" ]`. An empty
@@ -263,8 +277,9 @@ The `events` list and every array inside a pattern share one vocabulary.
 `{ "$while" = P }` greedily consumes a run of consecutive elements matching the
 inner `P`, stopping at the first non-match (zero-or-more). `{ "$until" = P }`
 skips ahead to the first element matching `P` and consumes it. Under `events`,
-`P` is a `call`/`inbound` assertion; inside a pattern array it is an ordinary
-pattern. `$`-prefixed keys are reserved and never mean a partial-match field.
+`P` is a `call`/`inbound`/`opened`/`closed` assertion; inside a pattern array it
+is an ordinary pattern. `$`-prefixed keys are reserved and never mean a
+partial-match field.
 
 ```toml
 [assertions.alice]
@@ -361,18 +376,19 @@ trace channel (`host/trace.rs`, exported via the `prelude`):
 ```rust
 pub enum TraceEvent {
   Inbound { agent: String, id: String, event: Event },
-  Call { agent: String, op: String, detail: serde_json::Value },
-  HostOpened { agent: String, kind: HostKind, uuid: String },
-  HostClosed { agent: String, kind: HostKind, uuid: String, reason: HostCloseReason },
+  Call { agent: String, op: String, uuid: Option<String>, detail: serde_json::Value },
+  Opened { agent: String, source: SourceKind, uuid: String },
+  Closed { agent: String, source: SourceKind, uuid: String, reason: CloseReason },
   Outcome { agent: String, outcome: RunOutcome },
 }
 pub type TraceSender = tokio::sync::broadcast::Sender<TraceEvent>;
 ```
 
-`kind` is the cancellable host source (`chat-stream`, `timer`, `resource-list`,
-`resource`, `tool-call`); `reason` is `ended`, `cancelled` or `failed`. The
-lifecycle events also double as assurance that a subscription was actually
-opened: a rejected duplicate opens nothing and emits nothing.
+`source` is the source kind — the pump-backed `chat-stream`, `timer`,
+`resource-list`, `resource` and `tool-call`, plus the bus-backed `endpoint`,
+`agent` and `lifecycle` subscriptions; `reason` is `ended`, `cancelled` or
+`failed`. The lifecycle events also double as assurance that a subscription was
+actually opened: a rejected duplicate opens nothing and emits nothing.
 
 `run_agents_traced(cfg, watch, registries, tx)` (and the `loop_` twin) spawns a
 receiver-drain task, emits one `Outcome` per agent, and returns the flattened

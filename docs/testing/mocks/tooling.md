@@ -55,17 +55,25 @@ resource_content_updates = [
   the brain, which can react to it), so the mock stays honest about call order.
   `result` is a text convenience that becomes a single MCP text content block;
   an optional `structured_content` is passed through as the tool's MCP
-  `structuredContent`.
+  `structuredContent`. A step may instead set `error = "..."` (fail the call
+  with that error after the gate and delay) or `pending = true` (never complete;
+  for cancellation tests).
 - `initial_resource_list` — the resources `list-resources` starts from.
 - `initial_resource_contents` — `read-resource` content keyed by URI. Reading a
   URI with no content (initial or applied) errors.
 - `resource_list_updates` — ordered **full replacement** lists replayed by
   `subscribe-resource-list`; each step replaces the current list and fires a
-  `resource-list-updated`.
+  `resource-list-updated`. A step may instead set `error = "..."` (yield that
+  error) or `pending = true` (never yield).
 - `resource_content_updates` — ordered one-by-one updates replayed by
   `subscribe-resource` for the matching URI; each step sets the content and
-  fires a `resource-updated`.
+  fires a `resource-updated`. A step may instead set `error = "..."` or
+  `pending = true`, as above.
 - `delay_ms` — how long every scripted step waits before firing (default `10`).
+
+Every `call-tool` is recorded, and the `--dump` snapshot lists each call's
+`name`, `arguments` and the `result` it returned (`null` for a call that
+errored).
 
 There is **no fallback**: a subscription with no configured updates emits
 nothing.

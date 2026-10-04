@@ -111,10 +111,6 @@ declare namespace OmwTestConfig {
    * via the `definition` "Config6".
    */
   export interface Config6 {
-    /**
-     * How long to wait between polls for a model subscription.
-     */
-    poll_ms?: number;
     requests?: Request[];
     [k: string]: unknown;
   }
@@ -139,6 +135,20 @@ declare namespace OmwTestConfig {
       [k: string]: unknown;
     };
     /**
+     * Opt-in scripted ending: `{ close = N }` ends the session normally after
+     * `N` received deltas, `{ abort = N }` aborts it. Absent, the mock drains
+     * silently as before.
+     */
+    session_end?: SessionEnd | null;
+    /**
+     * A user-written label for the session, so concurrent sessions can be told
+     * apart. The mock correlates it with the opaque session UUID the host and
+     * brain see and records both in the snapshot; it is never asserted or
+     * matched. Reusing a label after its session closed is a new session with a
+     * new UUID.
+     */
+    session_id: string;
+    /**
      * Whether the client asked for SSE. Informational only; the mock drains
      * the same session either way.
      */
@@ -157,6 +167,22 @@ declare namespace OmwTestConfig {
     content?: string | null;
     reasoning?: string | null;
     role?: string;
+    [k: string]: unknown;
+  }
+  /**
+   * How a scripted request ends its session.
+   *
+   * `{ close = N }` removes the session and delivers a normal
+   * `endpoint-session-end` after `N` received deltas; `{ abort = N }` aborts it
+   * with an error instead. `N = 0` fires immediately after routing. If the
+   * reply ends first (terminal finish-reason or `Close`) the script is a no-op.
+   *
+   * This interface was referenced by `Config`'s JSON-Schema
+   * via the `definition` "SessionEnd".
+   */
+  export interface SessionEnd {
+    abort?: number | null;
+    close?: number | null;
     [k: string]: unknown;
   }
   /**
@@ -226,7 +252,8 @@ declare namespace OmwTestConfig {
     [k: string]: unknown;
   }
   /**
-   * One scripted turn: optional reasoning, content, a tool call, and usage.
+   * One scripted turn: optional reasoning, content, a tool call, usage, and an
+   * optional failure or pending marker.
    *
    * This interface was referenced by `Config`'s JSON-Schema
    * via the `definition` "Turn".
@@ -236,6 +263,14 @@ declare namespace OmwTestConfig {
      * Plain content emitted before the terminal finish reason.
      */
     content?: string | null;
+    /**
+     * Fail the stream with this error, after emitting the turn's deltas.
+     */
+    error?: string | null;
+    /**
+     * Never yield: the stream stays pending forever (for cancellation tests).
+     */
+    pending?: boolean;
     /**
      * Reasoning/thinking content emitted as its own delta.
      */
@@ -464,6 +499,14 @@ declare namespace OmwTestConfig {
   export interface ResourceContentUpdate {
     after?: After;
     content: string;
+    /**
+     * Yield this error for the step instead of an `Updated`.
+     */
+    error?: string | null;
+    /**
+     * Never yield: the step stays pending forever (for cancellation tests).
+     */
+    pending?: boolean;
     uri: string;
     [k: string]: unknown;
   }
@@ -475,6 +518,14 @@ declare namespace OmwTestConfig {
    */
   export interface ResourceListUpdate {
     after?: After;
+    /**
+     * Yield this error for the step instead of a `ListChanged`.
+     */
+    error?: string | null;
+    /**
+     * Never yield: the step stays pending forever (for cancellation tests).
+     */
+    pending?: boolean;
     resources: ResourceInfo[];
     [k: string]: unknown;
   }
@@ -488,7 +539,15 @@ declare namespace OmwTestConfig {
    */
   export interface ScriptedToolCall {
     after?: After;
+    /**
+     * Fail the call with this error (after the gate and delay).
+     */
+    error?: string | null;
     name: string;
+    /**
+     * Never complete: the call stays pending forever (for cancellation tests).
+     */
+    pending?: boolean;
     result?: string;
     structured_content?: {
       [k: string]: unknown;

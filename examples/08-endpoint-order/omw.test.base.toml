@@ -16,6 +16,7 @@ kind = "mock"
 requests = [
   {
     model = "gpt-4o",
+    session_id = "ordered",
     messages = [{ content = "hi" }],
     stream = true,
     after = { kind = "call", op = "chat" },

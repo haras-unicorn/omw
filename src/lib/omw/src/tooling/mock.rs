@@ -18,7 +18,7 @@
 )]
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -26,14 +26,22 @@ use futures_util::stream::BoxStream;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 use super::{
-  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool,
-  ToolCallResult, Tooling,
+  Factory, ResourceContent, ResourceInfo, ResourceInjections,
+  ResourceNotification, Tool, ToolCallResult, Tooling,
 };
-use crate::host::trace::TraceSender;
+use crate::host::bus::{Injection, MessageBus};
+use crate::host::events::{Event, ToolResult};
+use crate::host::streams::CancelRegistry;
+use crate::host::trace::{TraceEvent, TraceSender};
 use crate::testing::{After, TraceLog};
+
+/// Lock a `std::sync::Mutex`, recovering the guard on poison (a poisoned lock
+/// should never take the whole runtime down).
+fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
+  mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
 
 fn default_delay_ms() -> u64 {
   10
@@ -81,6 +89,12 @@ pub(crate) struct ScriptedToolCall {
   result: String,
   #[serde(default)]
   structured_content: Option<Value>,
+  /// Fail the call with this error (after the gate and delay).
+  #[serde(default)]
+  error: Option<String>,
+  /// Never complete: the call stays pending forever (for cancellation tests).
+  #[serde(default)]
+  pending: bool,
   #[serde(default)]
   after: After,
 }
@@ -94,6 +108,12 @@ fn text_content(text: &str) -> Value {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(crate) struct ResourceListUpdate {
   resources: Vec<ResourceInfo>,
+  /// Yield this error for the step instead of a `ListChanged`.
+  #[serde(default)]
+  error: Option<String>,
+  /// Never yield: the step stays pending forever (for cancellation tests).
+  #[serde(default)]
+  pending: bool,
   #[serde(default)]
   after: After,
 }
@@ -103,6 +123,12 @@ pub(crate) struct ResourceListUpdate {
 pub(crate) struct ResourceContentUpdate {
   uri: String,
   content: String,
+  /// Yield this error for the step instead of an `Updated`.
+  #[serde(default)]
+  error: Option<String>,
+  /// Never yield: the step stays pending forever (for cancellation tests).
+  #[serde(default)]
+  pending: bool,
   #[serde(default)]
   after: After,
 }
@@ -121,98 +147,13 @@ pub struct ToolCall {
   pub arguments: Value,
 }
 
-/// A scripted tooling whose calls never complete, for testing cancellation:
-/// `call-tool` awaits a pending future and each subscription returns a
-/// pending stream, so a pump can only exit via cancel. This makes
-/// cancel-suppresses-delivery tests deterministic (no race between an
-/// immediately-completing call and `cancel`).
-pub struct PendingTooling;
-
-#[async_trait::async_trait]
-impl Tooling for PendingTooling {
-  fn kind() -> &'static str {
-    "mock"
-  }
-
-  async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
-    Ok(Vec::new())
-  }
-
-  async fn call_tool(
-    &self,
-    _name: &str,
-    _args: Value,
-  ) -> anyhow::Result<ToolCallResult> {
-    std::future::pending().await
-  }
-
-  async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
-    Ok(Vec::new())
-  }
-
-  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
-    anyhow::bail!("mock has no content for resource {uri:?}")
-  }
-
-  async fn subscribe_resource_list(
-    &self,
-  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
-  {
-    Ok(Box::pin(futures_util::stream::pending()))
-  }
-
-  async fn subscribe_resource(
-    &self,
-    _uri: &str,
-  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
-  {
-    Ok(Box::pin(futures_util::stream::pending()))
-  }
-}
-
-/// A scripted tooling that fails every call, for testing error paths.
-pub struct FailingTooling;
-
-#[async_trait::async_trait]
-impl Tooling for FailingTooling {
-  fn kind() -> &'static str {
-    "mock"
-  }
-
-  async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
-    Ok(Vec::new())
-  }
-
-  async fn call_tool(
-    &self,
-    _name: &str,
-    _args: Value,
-  ) -> anyhow::Result<ToolCallResult> {
-    anyhow::bail!("mock failure")
-  }
-
-  async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
-    Ok(Vec::new())
-  }
-
-  async fn read_resource(&self, _uri: &str) -> anyhow::Result<ResourceContent> {
-    anyhow::bail!("mock failure")
-  }
-
-  async fn subscribe_resource_list(
-    &self,
-  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
-  {
-    anyhow::bail!("mock failure")
-  }
-
-  async fn subscribe_resource(
-    &self,
-    _uri: &str,
-  ) -> anyhow::Result<BoxStream<'static, Result<ResourceNotification, String>>>
-  {
-    anyhow::bail!("mock failure")
-  }
+/// A recorded `call-tool` invocation and the result it produced, when it
+/// succeeded. `result` is `None` for a call that errored (name mismatch,
+/// exhausted script, …).
+#[derive(Debug, Clone)]
+pub struct RecordedToolCall {
+  pub call: ToolCall,
+  pub result: Option<ToolCallResult>,
 }
 
 /// A scripted tooling backed by in-memory state. `call-tool` consumes the
@@ -225,7 +166,7 @@ pub struct MockTooling {
   resource_list_updates: Vec<ResourceListUpdate>,
   resource_content_updates: Vec<ResourceContentUpdate>,
   state: Arc<Mutex<State>>,
-  calls: Arc<Mutex<Vec<ToolCall>>>,
+  calls: Arc<Mutex<Vec<RecordedToolCall>>>,
   /// The append-only trace log, attached once before the run so any gate can
   /// observe any event, including ones that precede the step that waits on it.
   trace: Arc<OnceLock<Arc<TraceLog>>>,
@@ -270,6 +211,8 @@ impl MockTooling {
         name: name.to_string(),
         result: result.to_string(),
         structured_content: None,
+        error: None,
+        pending: false,
         after: After::Start,
       }],
       ..Self::noop_owned()
@@ -282,6 +225,8 @@ impl MockTooling {
     Arc::new(Self {
       resource_list_updates: vec![ResourceListUpdate {
         resources: resources.clone(),
+        error: None,
+        pending: false,
         after: After::Start,
       }],
       state: Arc::new(Mutex::new(State {
@@ -307,6 +252,8 @@ impl MockTooling {
       resource_content_updates: vec![ResourceContentUpdate {
         uri: uri.to_string(),
         content: content.to_string(),
+        error: None,
+        pending: false,
         after: After::Start,
       }],
       state: Arc::new(Mutex::new(State {
@@ -333,7 +280,10 @@ impl MockTooling {
 
   /// Recorded tool calls, in order.
   pub async fn calls(&self) -> Vec<ToolCall> {
-    self.calls.lock().await.clone()
+    lock(&self.calls)
+      .iter()
+      .map(|record| record.call.clone())
+      .collect()
   }
 }
 
@@ -369,15 +319,22 @@ impl Tooling for MockTooling {
     name: &str,
     args: Value,
   ) -> anyhow::Result<ToolCallResult> {
-    self.calls.lock().await.push(ToolCall {
-      name: name.to_string(),
-      arguments: args,
-    });
+    let record_index = {
+      let mut calls = lock(&self.calls);
+      calls.push(RecordedToolCall {
+        call: ToolCall {
+          name: name.to_string(),
+          arguments: args,
+        },
+        result: None,
+      });
+      calls.len().saturating_sub(1)
+    };
     if self.tool_calls.is_empty() {
       anyhow::bail!("mock has no scripted result for tool {name:?}");
     }
     let index = {
-      let mut next = self.tool_call_next.lock().await;
+      let mut next = lock(&self.tool_call_next);
       let index = *next;
       *next = next.saturating_add(1);
       index
@@ -390,18 +347,28 @@ impl Tooling for MockTooling {
     }
     gate(&self.trace, &step.after).await;
     tokio::time::sleep(self.delay).await;
-    Ok(ToolCallResult {
+    if step.pending {
+      std::future::pending::<()>().await;
+    }
+    if let Some(error) = step.error {
+      anyhow::bail!("{error}");
+    }
+    let result = ToolCallResult {
       content: text_content(&step.result),
       structured_content: step.structured_content,
-    })
+    };
+    if let Some(record) = lock(&self.calls).get_mut(record_index) {
+      record.result = Some(result.clone());
+    }
+    Ok(result)
   }
 
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>> {
-    Ok(self.state.lock().await.resources.clone())
+    Ok(lock(&self.state).resources.clone())
   }
 
   async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
-    let state = self.state.lock().await;
+    let state = lock(&self.state);
     let content = state
       .contents
       .get(uri)
@@ -436,7 +403,13 @@ impl Tooling for MockTooling {
           let step = steps.get(index)?.clone();
           gate(&trace, &step.after).await;
           tokio::time::sleep(delay).await;
-          state.lock().await.resources = step.resources;
+          if step.pending {
+            std::future::pending::<()>().await;
+          }
+          if let Some(error) = step.error {
+            return Some((Err(error), (steps, index.saturating_add(1))));
+          }
+          lock(&state).resources = step.resources;
           Some((
             Ok(ResourceNotification::ListChanged),
             (steps, index.saturating_add(1)),
@@ -471,11 +444,13 @@ impl Tooling for MockTooling {
           let step = steps.get(index)?.clone();
           gate(&trace, &step.after).await;
           tokio::time::sleep(delay).await;
-          state
-            .lock()
-            .await
-            .contents
-            .insert(step.uri.clone(), step.content);
+          if step.pending {
+            std::future::pending::<()>().await;
+          }
+          if let Some(error) = step.error {
+            return Some((Err(error), (steps, index.saturating_add(1))));
+          }
+          lock(&state).contents.insert(step.uri.clone(), step.content);
           Some((
             Ok(ResourceNotification::Updated { uri }),
             (steps, index.saturating_add(1)),
@@ -497,18 +472,18 @@ impl Tooling for MockTooling {
       .try_lock()
       .ok()
       .map(|cursor| (*cursor).min(self.tool_calls.len()))?;
-    let calls = self
-      .calls
-      .try_lock()
-      .ok()
-      .map(|calls| {
-        calls
-          .iter()
-          .map(|call| {
-            serde_json::json!({ "name": call.name, "arguments": call.arguments })
+    let calls = self.calls.try_lock().ok().map(|calls| {
+      calls
+        .iter()
+        .map(|record| {
+          serde_json::json!({
+            "name": record.call.name,
+            "arguments": record.call.arguments,
+            "result": record.result,
           })
-          .collect::<Vec<_>>()
-      })?;
+        })
+        .collect::<Vec<_>>()
+    })?;
     Some(serde_json::json!({
       "kind": "tooling",
       "tool_calls_total": self.tool_calls.len(),
@@ -519,10 +494,219 @@ impl Tooling for MockTooling {
   }
 }
 
+/// Whether a scripted step's `after` gate has been satisfied by the observed
+/// trace. `"start"` is always ready.
+fn after_ready(after: &After, observed: &[TraceEvent]) -> bool {
+  match after {
+    After::Start => true,
+    After::Pattern(assertion) => {
+      observed.iter().any(|event| assertion.matches(event))
+    }
+  }
+}
+
+/// Build a `resource-updated` event for a content step, resolving the MIME
+/// type from the mock's current resource list.
+fn content_event(state: &Mutex<State>, uri: &str, content: String) -> Event {
+  let mime_type = lock(state)
+    .resources
+    .iter()
+    .find(|r| r.uri == uri)
+    .and_then(|r| r.mime_type.clone());
+  Event::ResourceUpdated(ResourceContent {
+    uri: uri.to_string(),
+    mime_type,
+    content,
+  })
+}
+
+/// The mock's call-boundary injection hook. Instead of a pump racing the guest,
+/// each subscription registers injections that fire the next time the host
+/// flushes at a guest call boundary. Deliveries therefore land at a point
+/// determined by the config and brain, never by the scheduler.
+impl ResourceInjections for MockTooling {
+  fn inject_resource_list(
+    &self,
+    bus: &MessageBus,
+    registry: &Arc<CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+  ) {
+    let steps = Arc::new(self.resource_list_updates.clone());
+    if steps.is_empty() {
+      return;
+    }
+    let state = Arc::clone(&self.state);
+    let registry = Arc::clone(registry);
+    let agent = agent.to_string();
+    let uuid = uuid.to_string();
+    let cursor = Arc::new(Mutex::new(0usize));
+    bus.register_injection(Injection::new(move |bus, observed, _rt| {
+      if !registry.is_open(&uuid) {
+        return true;
+      }
+      loop {
+        let index = *lock(&cursor);
+        let Some(step) = steps.get(index) else {
+          return true;
+        };
+        if step.pending || !after_ready(&step.after, observed) {
+          return false;
+        }
+        if let Some(error) = &step.error {
+          bus.deliver(&agent, &uuid, Event::Error(error.clone()));
+        } else {
+          lock(&state).resources = step.resources.clone();
+          bus.deliver(
+            &agent,
+            &uuid,
+            Event::ResourceListUpdated(step.resources.clone()),
+          );
+        }
+        *lock(&cursor) = index.saturating_add(1);
+      }
+    }));
+  }
+
+  fn inject_resource(
+    &self,
+    bus: &MessageBus,
+    registry: &Arc<CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+    uri: &str,
+  ) {
+    let steps: Vec<ResourceContentUpdate> = self
+      .resource_content_updates
+      .iter()
+      .filter(|update| update.uri == uri)
+      .cloned()
+      .collect();
+    if steps.is_empty() {
+      return;
+    }
+    let steps = Arc::new(steps);
+    let state = Arc::clone(&self.state);
+    let registry = Arc::clone(registry);
+    let agent = agent.to_string();
+    let uuid = uuid.to_string();
+    let cursor = Arc::new(Mutex::new(0usize));
+    bus.register_injection(Injection::new(move |bus, observed, _rt| {
+      if !registry.is_open(&uuid) {
+        return true;
+      }
+      loop {
+        let index = *lock(&cursor);
+        let Some(step) = steps.get(index) else {
+          return true;
+        };
+        if step.pending || !after_ready(&step.after, observed) {
+          return false;
+        }
+        if let Some(error) = &step.error {
+          bus.deliver(&agent, &uuid, Event::Error(error.clone()));
+        } else {
+          lock(&state)
+            .contents
+            .insert(step.uri.clone(), step.content.clone());
+          let event = content_event(&state, &step.uri, step.content.clone());
+          bus.deliver(&agent, &uuid, event);
+        }
+        *lock(&cursor) = index.saturating_add(1);
+      }
+    }));
+  }
+
+  fn inject_tool_call(
+    &self,
+    bus: &MessageBus,
+    registry: &Arc<CancelRegistry>,
+    agent: &str,
+    uuid: &str,
+    tool: &str,
+    args: Value,
+  ) {
+    // Record the invocation and advance the script cursor synchronously, so
+    // queued calls stay ordered and the snapshot reflects what the guest sent.
+    let record_index = {
+      let mut calls = lock(&self.calls);
+      calls.push(RecordedToolCall {
+        call: ToolCall {
+          name: tool.to_string(),
+          arguments: args.clone(),
+        },
+        result: None,
+      });
+      calls.len().saturating_sub(1)
+    };
+    let index = {
+      let mut next = lock(&self.tool_call_next);
+      let index = *next;
+      *next = next.saturating_add(1);
+      index
+    };
+    let step = self.tool_calls.get(index).cloned();
+    let arguments = args.to_string();
+    let calls = Arc::clone(&self.calls);
+    let registry = Arc::clone(registry);
+    let agent = agent.to_string();
+    let uuid = uuid.to_string();
+    let tool = tool.to_string();
+    bus.register_injection(Injection::new(move |bus, observed, _rt| {
+      if !registry.is_open(&uuid) {
+        return true;
+      }
+      let Some(step) = &step else {
+        bus.deliver(
+          &agent,
+          &uuid,
+          Event::Error(format!("mock tool calls exhausted at {tool:?}")),
+        );
+        return true;
+      };
+      if step.name != tool {
+        bus.deliver(
+          &agent,
+          &uuid,
+          Event::Error(format!(
+            "mock expected tool {:?}, got {tool:?}",
+            step.name
+          )),
+        );
+        return true;
+      }
+      if step.pending || !after_ready(&step.after, observed) {
+        return false;
+      }
+      if let Some(error) = &step.error {
+        bus.deliver(&agent, &uuid, Event::Error(error.clone()));
+        return true;
+      }
+      let result = ToolCallResult {
+        content: text_content(&step.result),
+        structured_content: step.structured_content.clone(),
+      };
+      if let Some(record) = lock(&calls).get_mut(record_index) {
+        record.result = Some(result.clone());
+      }
+      bus.deliver(
+        &agent,
+        &uuid,
+        Event::ToolResult(ToolResult {
+          name: tool.clone(),
+          arguments: arguments.clone(),
+          content: result.content.to_string(),
+          structured_content: result.structured_content.map(|v| v.to_string()),
+        }),
+      );
+      true
+    }));
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-
   #[tokio::test]
   async fn tool_calls_are_name_verified_and_ordered() -> anyhow::Result<()> {
     let tooling = MockTooling::build(
@@ -698,6 +882,107 @@ mod tests {
     assert_eq!(snapshot["tool_calls_consumed"], 1);
     assert_eq!(snapshot["tool_calls_remaining"], 1);
     assert_eq!(snapshot["calls"][0]["name"], "echo");
+    assert_eq!(snapshot["calls"][0]["result"]["content"][0]["text"], "hi");
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn snapshot_records_a_failed_call_without_a_result()
+  -> anyhow::Result<()> {
+    let tooling = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{ "name": "echo", "result": "hi" }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let error = tooling
+      .call_tool("wrong", serde_json::json!({}))
+      .await
+      .expect_err("a name mismatch is an error");
+    assert!(error.to_string().contains("expected tool"), "{error}");
+    let snapshot = tooling
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["calls"][0]["name"], "wrong");
+    assert!(snapshot["calls"][0]["result"].is_null());
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_scripted_tool_error_is_delivered() -> anyhow::Result<()> {
+    let tooling = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{ "name": "echo", "error": "boom" }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let error = tooling
+      .call_tool("echo", serde_json::json!({}))
+      .await
+      .expect_err("a scripted error should be delivered");
+    assert_eq!(error.to_string(), "boom");
+    let snapshot = tooling
+      .snapshot()
+      .ok_or_else(|| anyhow::anyhow!("expected a snapshot"))?;
+    assert_eq!(snapshot["calls"][0]["name"], "echo");
+    assert!(snapshot["calls"][0]["result"].is_null());
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn a_pending_tool_call_never_completes() -> anyhow::Result<()> {
+    let tooling = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "tool_calls": [{ "name": "echo", "pending": true }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let call = tooling.call_tool("echo", serde_json::json!({}));
+    assert!(
+      tokio::time::timeout(Duration::from_millis(50), call)
+        .await
+        .is_err(),
+      "a pending tool call should never complete"
+    );
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn resource_steps_can_error_or_pend() -> anyhow::Result<()> {
+    use futures_util::StreamExt as _;
+
+    let erroring = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "resource_list_updates": [{ "resources": [], "error": "boom" }],
+        "resource_content_updates": [
+          { "uri": "mem://a", "content": "x", "error": "boom" },
+        ],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let mut list = erroring.subscribe_resource_list().await?;
+    assert_eq!(list.next().await, Some(Err("boom".to_string())));
+    let mut content = erroring.subscribe_resource("mem://a").await?;
+    assert_eq!(content.next().await, Some(Err("boom".to_string())));
+
+    let pending = MockTooling::build(
+      "t",
+      &serde_json::json!({
+        "resource_list_updates": [{ "resources": [], "pending": true }],
+      }),
+      crate::config::Tunables::default(),
+    )?;
+    let mut list = pending.subscribe_resource_list().await?;
+    assert!(
+      tokio::time::timeout(Duration::from_millis(50), list.next())
+        .await
+        .is_err(),
+      "a pending resource step should never yield"
+    );
     Ok(())
   }
 }

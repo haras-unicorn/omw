@@ -24,10 +24,14 @@ use crate::runtime::RunOutcome;
 /// [`RecvError::Lagged`]: broadcast::error::RecvError::Lagged
 pub const DEFAULT_TRACE_BUFFER: usize = 4096;
 
-/// Which cancellable host source a lifecycle observation belongs to.
+/// Which source an `opened` / `closed` lifecycle observation belongs to.
+///
+/// Every subscription and cancellable operation the brain opens gets one:
+/// the pump-backed sources that deliver their events from a background task,
+/// and the bus-backed subscriptions that only receive host-originated events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum HostKind {
+pub enum SourceKind {
   /// A `provider.chat-stream` pump.
   ChatStream,
   /// A timer (`wait-*`).
@@ -38,12 +42,18 @@ pub enum HostKind {
   Resource,
   /// A queued tool call (`call-tool`).
   ToolCall,
+  /// An endpoint model subscription (`subscribe-endpoint`).
+  Endpoint,
+  /// A subscription to another agent's messages (`subscribe-agent`).
+  Agent,
+  /// A lifecycle (`reload` / `shutdown` / `error`) subscription.
+  Lifecycle,
 }
 
-/// Why a host source closed.
+/// Why a source closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum HostCloseReason {
+pub enum CloseReason {
   /// The source ran to its natural end.
   Ended,
   /// The source was cancelled (explicitly or on reload).
@@ -62,26 +72,29 @@ pub enum TraceEvent {
     id: String,
     event: Event,
   },
-  /// An outbound host call made by an agent.
+  /// An outbound host call made by an agent. `uuid` is the handle the call
+  /// returned, when it returned one (a chat stream, tool call, subscription or
+  /// timer).
   Call {
     agent: String,
     op: String,
+    uuid: Option<String>,
     detail: Value,
   },
-  /// A host source opened (a chat stream, timer, resource subscription or
-  /// tool call registered by UUID). Doubles as assurance that a subscription
-  /// was actually accepted: a rejected duplicate opens nothing.
-  HostOpened {
+  /// A source opened (any subscription or cancellable operation registered by
+  /// UUID). Doubles as assurance that a subscription was actually accepted: a
+  /// rejected duplicate opens nothing.
+  Opened {
     agent: String,
-    kind: HostKind,
+    source: SourceKind,
     uuid: String,
   },
-  /// A host source closed, with the reason it did.
-  HostClosed {
+  /// A source closed, with the reason it did.
+  Closed {
     agent: String,
-    kind: HostKind,
+    source: SourceKind,
     uuid: String,
-    reason: HostCloseReason,
+    reason: CloseReason,
   },
   /// An agent iteration's terminal outcome.
   Outcome { agent: String, outcome: RunOutcome },
@@ -93,8 +106,8 @@ impl TraceEvent {
     match self {
       Self::Inbound { agent, .. }
       | Self::Call { agent, .. }
-      | Self::HostOpened { agent, .. }
-      | Self::HostClosed { agent, .. }
+      | Self::Opened { agent, .. }
+      | Self::Closed { agent, .. }
       | Self::Outcome { agent, .. } => agent,
     }
   }

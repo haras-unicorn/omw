@@ -123,12 +123,37 @@ impl AgentContext {
 
   /// Record one outbound host call on the trace channel, if attached.
   pub(crate) fn trace_call(&self, op: &str, detail: serde_json::Value) {
-    if let Some(tx) = &self.trace {
-      let _ = tx.send(TraceEvent::Call {
+    self.trace_call_uuid(op, None, detail);
+  }
+
+  /// Record one outbound host call that returned a handle, so the trace can
+  /// correlate the call with the `opened` / `closed` lifecycle of
+  /// the source it opened.
+  pub(crate) fn trace_call_uuid(
+    &self,
+    op: &str,
+    uuid: Option<String>,
+    detail: serde_json::Value,
+  ) {
+    if self.trace.is_some() {
+      self.bus.trace_event(TraceEvent::Call {
         agent: self.name.clone(),
         op: op.to_string(),
+        uuid,
         detail,
       });
+      self.flush_injections();
+    }
+  }
+
+  /// Flush any call-boundary injections whose trigger has now been observed.
+  /// Called from [`trace_call_uuid`](Self::trace_call_uuid) and the host's
+  /// `recv` / `try_recv`, so deliveries are pinned to guest call boundaries
+  /// instead of racing them from background tasks.
+  pub(crate) fn flush_injections(&self) {
+    if self.trace.is_some() {
+      let rt = self.rt();
+      self.bus.flush_injections(rt.handle());
     }
   }
 

@@ -915,6 +915,12 @@ impl Shared {
           Arc::clone(&bus),
           cfg.tunables,
         ));
+        // Register the mock client's scripted requests as call-boundary
+        // injections synchronously, before any agent can run, so a request
+        // never races the guest's first `recv`.
+        if let Some(injector) = entry.injections().cloned() {
+          injector.inject_requests(&bus, &registry, &shutdown);
+        }
         let serve_bus = Arc::clone(&bus);
         let serve_registry = Arc::clone(&registry);
         let serve_shutdown = shutdown.clone();

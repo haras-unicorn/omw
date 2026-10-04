@@ -12,8 +12,21 @@ turns = [{ content = "hello" }, { content = "bye" }]
 [endpoint]
 kind = "mock"
 requests = [
-  { model = "gpt-4o", messages = [{ content = "hi" }], stream = true },
-  { model = "gpt-4o", messages = [{ content = "bye" }], stream = false },
+  {
+    model = "gpt-4o",
+    session_id = "streamed",
+    messages = [{ content = "hi" }],
+    stream = true,
+  },
+  {
+    model = "gpt-4o",
+    session_id = "buffered",
+    messages = [{ content = "bye" }],
+    stream = false,
+    # Concurrent sessions: gate the second request after the first reply's
+    # terminal delta so the two rounds stay ordered.
+    after = { kind = "call", op = "stream_endpoint", detail = { finish_reason = "stop" } },
+  },
 ]
 
 [agents.server]
