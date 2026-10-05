@@ -1,6 +1,6 @@
 [package]
 name = "omw-wasm-rust"
-version = "0.1.4"
+version = "0.1.5"
 description = "Rust guest SDK for omw wasm brains"
 repository.workspace = true
 authors.workspace = true

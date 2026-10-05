@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/haras-unicorn/omw/compare/omw-output-v0.1.6...omw-output-v0.1.7) - 2026-10-05
+
+### Added
+
+- parallel testing ([#101](https://github.com/haras-unicorn/omw/pull/101))
+- python runtime via rustpython ([#100](https://github.com/haras-unicorn/omw/pull/100))
+
 ## [0.1.6](https://github.com/haras-unicorn/omw/compare/omw-output-v0.1.4...omw-output-v0.1.6) - 2026-10-03
 
 ### Added
