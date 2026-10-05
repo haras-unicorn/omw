@@ -2,9 +2,10 @@
 //! traced path, and check its assertions.
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::IsTerminal as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -13,6 +14,8 @@ use omw::host::trace::TraceEvent;
 use omw::runtime::RunOutcome;
 use omw::testing::Snapshots;
 use omw::watch::{RecursiveMode, Watcher};
+use tokio::task::JoinSet;
+use tracing::Instrument as _;
 
 #[cfg(feature = "compile-wasm")]
 use crate::cli::CompileWasmArgs;
@@ -110,12 +113,21 @@ async fn run_tests(
     live.configure(tunables.tui_tick_ms, tunables.tui_tab_capacity);
   }
   if !args.watch {
-    let tests = match collect::discover(&args.path)
-      .and_then(|tests| collect::filter(tests, &args.include, &args.exclude))
-    {
+    let tests = match discover_and_filter(&args) {
       Ok(tests) => tests,
       Err(error) => return RunResult::err(error),
     };
+    if let Some(live) = live {
+      live
+        .set_tests(tests.iter().map(|test| test.label().to_owned()).collect());
+      set_pass_details(
+        live,
+        &args.path,
+        tests.len(),
+        tests.len(),
+        resolve_jobs(args.jobs),
+      );
+    }
     let summary = match run_pass(&tests, &args, live).await {
       Ok(summary) => summary,
       Err(error) => return RunResult::err(error),
@@ -143,36 +155,135 @@ async fn run_tests(
     Ok(watcher) => watcher,
     Err(error) => return RunResult::err(error),
   };
+
+  // The first pass runs everything discovered.
+  let mut tests = match discover_and_filter(&args) {
+    Ok(tests) => tests,
+    Err(error) => return RunResult::err(error),
+  };
+  if let Some(live) = live {
+    live.reset();
+    live.set_tests(tests.iter().map(|test| test.label().to_owned()).collect());
+    set_pass_details(
+      live,
+      &args.path,
+      tests.len(),
+      tests.len(),
+      resolve_jobs(args.jobs),
+    );
+  }
+  report_pass(run_pass(&tests, &args, live).await);
+  let mut known: HashSet<PathBuf> = tests
+    .iter()
+    .map(|test| collect::canonical_path(&test.config))
+    .collect();
+
   loop {
-    let tests = match collect::discover(&args.path)
-      .and_then(|tests| collect::filter(tests, &args.include, &args.exclude))
-    {
+    let changed = match watcher.next_change().await {
+      Some(changed) => changed,
+      None => return RunResult::err(anyhow::anyhow!("watch channel closed")),
+    };
+    // Re-discover so new (and removed) test configs are picked up.
+    tests = match discover_and_filter(&args) {
       Ok(tests) => tests,
       Err(error) => {
         tracing::error!(error = %error, "test discovery failed; watching for changes");
-        if watcher.next_change().await.is_none() {
-          return RunResult::err(anyhow::anyhow!("watch channel closed"));
-        }
         continue;
       }
     };
+    let affected = affected_tests(&tests, &changed, &known, args.format);
+    known = tests
+      .iter()
+      .map(|test| collect::canonical_path(&test.config))
+      .collect();
+    if affected.is_empty() {
+      tracing::info!(changed = ?changed, "no tests affected; watching for changes");
+      continue;
+    }
     if let Some(live) = live {
-      live.reset();
+      // Keep every discovered test listed; only the affected ones change state.
+      live
+        .sync_tests(tests.iter().map(|test| test.label().to_owned()).collect());
+      live.begin_pass();
+      set_pass_details(
+        live,
+        &args.path,
+        tests.len(),
+        affected.len(),
+        resolve_jobs(args.jobs),
+      );
     }
-    match run_pass(&tests, &args, live).await {
-      Ok(summary) if summary.failed == 0 => {}
-      Ok(summary) => {
-        tracing::error!(
-          error = %summary.failure_summary(),
-          "test pass failed; watching for changes"
-        );
+    tracing::info!(
+      affected = affected.len(),
+      total = tests.len(),
+      "re-running affected tests"
+    );
+    report_pass(run_pass(&affected, &args, live).await);
+  }
+}
+
+/// Discover and filter the tests under `args.path`.
+fn discover_and_filter(args: &RunArgs) -> Result<Vec<Test>> {
+  collect::discover(&args.path)
+    .and_then(|tests| collect::filter(tests, &args.include, &args.exclude))
+}
+
+/// The tests a change batch should re-run: any test whose config, base configs
+/// or resolved brain scripts include a changed path, plus any newly discovered
+/// test (one whose config was not in `known`).
+fn affected_tests(
+  tests: &[Test],
+  changed: &[PathBuf],
+  known: &HashSet<PathBuf>,
+  format: Option<Format>,
+) -> Vec<Test> {
+  let changed: Vec<PathBuf> = changed
+    .iter()
+    .map(|path| collect::canonical_path(path))
+    .collect();
+  tests
+    .iter()
+    .filter(|test| {
+      if !known.contains(&collect::canonical_path(&test.config)) {
+        return true;
       }
-      Err(error) => {
-        tracing::error!(error = %error, "test pass failed; watching for changes");
-      }
-    }
-    if watcher.next_change().await.is_none() {
-      return RunResult::err(anyhow::anyhow!("watch channel closed"));
+      let watched = collect::watched_paths(test, format);
+      changed.iter().any(|path| watched.contains(path))
+    })
+    .cloned()
+    .collect()
+}
+
+/// Update the live view's info panel for a pass: the discovery path, the total
+/// discovered and (when a subset re-runs) the affected count, and the jobs.
+fn set_pass_details(
+  live: &omw_output::Live,
+  path: &Path,
+  total: usize,
+  affected: usize,
+  jobs: usize,
+) {
+  let mut details = vec![
+    ("path".to_owned(), path.display().to_string()),
+    ("tests".to_owned(), total.to_string()),
+    ("jobs".to_owned(), jobs.to_string()),
+  ];
+  if affected != total {
+    details.push(("affected".to_owned(), affected.to_string()));
+  }
+  live.set_details(details);
+}
+
+/// Log a watch pass's result; failures are not fatal while watching.
+fn report_pass(result: Result<PassSummary>) {
+  match result {
+    Ok(summary) if summary.failed == 0 => {}
+    Ok(summary) => tracing::error!(
+      error = %summary.failure_summary(),
+      "test pass failed; watching for changes"
+    ),
+    Err(error) => {
+      tracing::error!(error = %error, "test pass failed; watching for changes");
     }
   }
 }
@@ -218,51 +329,88 @@ async fn run_pass(
       suppressed: false,
     });
   }
+  let jobs = resolve_jobs(args.jobs);
   if let Some(live) = live {
-    live.set_tests(tests.iter().map(|test| test.label().to_owned()).collect());
-    live.set_details(vec![
-      ("path".to_owned(), args.path.display().to_string()),
-      ("tests".to_owned(), tests.len().to_string()),
-    ]);
     live.set_progress(0, tests.len());
   }
   // Verdicts are the product: stdout when it is not the terminal the live view
   // owns (or when there is no live view at all).
   let to_stdout = live.is_none() || !std::io::stdout().is_terminal();
-  let mut verdicts = Vec::new();
-  let mut dumps = Vec::new();
+  let mut dumps: Vec<Option<TestDump>> =
+    std::iter::repeat_with(|| None).take(tests.len()).collect();
+  let mut next = 0usize;
+  let mut in_flight = 0usize;
   let mut done = 0usize;
-  for test in tests {
-    if let Some(live) = live {
-      live.begin_test(test.label());
+  let mut stop_launching = false;
+  let mut set: JoinSet<(usize, TestDump)> = JoinSet::new();
+
+  // Fill the initial window. Each test runs instrumented with its label, so a
+  // concurrent run still routes its logs to the right test in the live view.
+  let spawn_ready = |set: &mut JoinSet<(usize, TestDump)>,
+                     next: &mut usize,
+                     in_flight: &mut usize,
+                     stop_launching: bool| {
+    while !stop_launching && *next < tests.len() && *in_flight < jobs {
+      let index = *next;
+      let test = tests[index].clone();
+      let format = args.format;
+      let label = test.label().to_owned();
+      if let Some(live) = live {
+        live.begin_test(label.clone());
+      }
+      set.spawn(async move {
+        let dump = run_one(&test, format)
+          .instrument(tracing::info_span!("test", test = %label))
+          .await;
+        (index, dump)
+      });
+      *next = next.saturating_add(1);
+      *in_flight = in_flight.saturating_add(1);
     }
-    let dump = run_one(test, args.format).await;
+  };
+  spawn_ready(&mut set, &mut next, &mut in_flight, stop_launching);
+
+  while let Some(joined) = set.join_next().await {
+    let (index, dump) = joined.map_err(|error| {
+      anyhow::anyhow!("a test task failed to join: {error}")
+    })?;
+    in_flight = in_flight.saturating_sub(1);
+    let label = tests[index].label().to_owned();
     let passed = dump.passed;
     let detail = dump.detail();
     if let Some(live) = live {
-      live.verdict(test.label(), passed, detail.clone());
+      live.verdict(label.clone(), passed, detail.clone());
     }
     if to_stdout {
       if passed {
-        println!("PASS {}", test.label());
+        println!("PASS {label}");
       } else {
-        println!("FAIL {}", test.label());
+        println!("FAIL {label}");
         if let Some(detail) = &detail {
           eprintln!("{detail}");
         }
       }
     }
-    verdicts.push((test.label().to_owned(), passed));
-    dumps.push(dump);
     done = done.saturating_add(1);
     if let Some(live) = live {
       live.set_progress(done, tests.len());
     }
+    dumps[index] = Some(dump);
+    // Fail-fast: a failure stops further launches, but already-running tests
+    // finish and report (with `-j 1` this is exactly the sequential behavior).
     if !passed && !args.all {
-      break;
+      stop_launching = true;
     }
+    spawn_ready(&mut set, &mut next, &mut in_flight, stop_launching);
   }
+
+  let verdicts: Vec<(String, bool)> = dumps
+    .iter()
+    .flatten()
+    .map(|dump| (dump.test.clone(), dump.passed))
+    .collect();
   if let Some(path) = args.dump.as_deref() {
+    let dumps: Vec<TestDump> = dumps.into_iter().flatten().collect();
     let rendered = render_dump(args.dump_format, &Dump { tests: dumps })?;
     crate::stdio::write(path, &rendered)?;
   }
@@ -277,6 +425,18 @@ async fn run_pass(
     failed,
     suppressed: !to_stdout,
   })
+}
+
+/// How many tests to run at once: an explicit positive count, else the
+/// machine's logical core count (`-j 0` and an omitted flag both mean auto).
+/// Falls back to one if the parallelism cannot be determined.
+fn resolve_jobs(jobs: Option<usize>) -> usize {
+  match jobs {
+    Some(jobs) if jobs > 0 => jobs,
+    _ => std::thread::available_parallelism()
+      .map(|parallelism| parallelism.get())
+      .unwrap_or(1),
+  }
 }
 
 /// One test's machine-readable outcome, dumped by `--dump`.
@@ -428,4 +588,134 @@ fn compile_wasm(args: &CompileWasmArgs) -> Result<()> {
     println!("{}", wasm.display());
   }
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use std::collections::HashSet;
+  use std::path::{Path, PathBuf};
+
+  use super::{affected_tests, resolve_jobs};
+  use crate::collect::{self, Test};
+
+  #[test]
+  fn an_explicit_positive_jobs_count_is_used_verbatim() {
+    assert_eq!(resolve_jobs(Some(1)), 1);
+    assert_eq!(resolve_jobs(Some(4)), 4);
+  }
+
+  #[test]
+  fn an_omitted_or_zero_jobs_count_is_auto() {
+    let auto = std::thread::available_parallelism()
+      .map(|parallelism| parallelism.get())
+      .unwrap_or(1);
+    assert_eq!(resolve_jobs(None), auto);
+    assert_eq!(resolve_jobs(Some(0)), auto);
+  }
+
+  fn write(dir: &Path, rel: &str, contents: &str) -> PathBuf {
+    let path = dir.join(rel);
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent).expect("failed to create the directory");
+    }
+    std::fs::write(&path, contents).expect("failed to write the file");
+    path
+  }
+
+  /// A minimal test config whose single agent runs `script`.
+  fn case(dir: &Path, rel: &str, script: &str) -> PathBuf {
+    write(
+      dir,
+      rel,
+      &format!(
+        "[runtime.runtime]\nkind = \"rhai\"\n\n[agents.alice]\nruntime = \"runtime\"\nscript = \"{script}\"\n"
+      ),
+    )
+  }
+
+  fn known(tests: &[Test]) -> HashSet<PathBuf> {
+    tests
+      .iter()
+      .map(|test| collect::canonical_path(&test.config))
+      .collect()
+  }
+
+  fn labels(tests: &[Test]) -> Vec<String> {
+    tests.iter().map(|test| test.relative.clone()).collect()
+  }
+
+  #[test]
+  fn a_brain_change_affects_only_the_test_running_it() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    case(dir.path(), "a/omw.test.toml", "brain.rhai");
+    case(dir.path(), "b/omw.test.toml", "brain.rhai");
+    let tests = collect::discover(dir.path())?;
+    let changed = vec![dir.path().join("a/brain.rhai")];
+
+    let affected = affected_tests(&tests, &changed, &known(&tests), None);
+    assert_eq!(labels(&affected), vec!["a/omw.test.toml"]);
+    Ok(())
+  }
+
+  #[test]
+  fn an_unrelated_change_affects_nothing() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    case(dir.path(), "a/omw.test.toml", "brain.rhai");
+    case(dir.path(), "b/omw.test.toml", "brain.rhai");
+    let tests = collect::discover(dir.path())?;
+    let changed = vec![dir.path().join("README.md")];
+
+    let affected = affected_tests(&tests, &changed, &known(&tests), None);
+    assert!(affected.is_empty());
+    Ok(())
+  }
+
+  #[test]
+  fn a_base_config_change_affects_every_test_inheriting_it()
+  -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let base = write(
+      dir.path(),
+      "omw.test.base.toml",
+      "[agents.bob]\nruntime = \"runtime\"\nscript = \"shared/brain.rhai\"\n",
+    );
+    case(dir.path(), "a/omw.test.toml", "brain.rhai");
+    case(dir.path(), "b/omw.test.toml", "brain.rhai");
+    let tests = collect::discover(dir.path())?;
+
+    let by_base = affected_tests(&tests, &[base.clone()], &known(&tests), None);
+    assert_eq!(labels(&by_base), vec!["a/omw.test.toml", "b/omw.test.toml"]);
+
+    let by_shared_script = affected_tests(
+      &tests,
+      &[dir.path().join("shared/brain.rhai")],
+      &known(&tests),
+      None,
+    );
+    assert_eq!(
+      labels(&by_shared_script),
+      vec!["a/omw.test.toml", "b/omw.test.toml"]
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn a_newly_discovered_test_is_affected() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    case(dir.path(), "a/omw.test.toml", "brain.rhai");
+    case(dir.path(), "b/omw.test.toml", "brain.rhai");
+    let tests = collect::discover(dir.path())?;
+
+    let affected = affected_tests(
+      &tests,
+      &[dir.path().join("unrelated")],
+      &HashSet::new(),
+      None,
+    );
+    assert_eq!(
+      labels(&affected),
+      vec!["a/omw.test.toml", "b/omw.test.toml"]
+    );
+    Ok(())
+  }
 }

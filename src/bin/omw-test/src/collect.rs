@@ -153,21 +153,7 @@ pub fn load(
   format: Option<Format>,
   bases: &[PathBuf],
 ) -> Result<(Config, Assertions)> {
-  let mut merged = Value::Object(serde_json::Map::new());
-  for base_path in bases {
-    let raw = crate::stdio::read_to_string(base_path)?;
-    let base_format = resolve_format(base_path, format)?;
-    let mut value = parse_to_value(&raw, base_format).with_context(|| {
-      format!("failed to parse base config {}", base_path.display())
-    })?;
-    resolve_source_scripts(&mut value, base_path)?;
-    deep_merge(&mut merged, value);
-  }
-  let raw = crate::stdio::read_to_string(path)?;
-  let format = resolve_format(path, format)?;
-  let value = parse_to_value(&raw, format)
-    .with_context(|| format!("failed to parse {}", path.display()))?;
-  deep_merge(&mut merged, value);
+  let merged = merged_value(path, format, bases)?;
 
   let env = ::config::Environment::with_prefix("OMW_TEST").separator("__");
   let source: ::config::Config = ::config::Config::builder()
@@ -186,7 +172,7 @@ pub fn load(
     .context("failed to deserialize configuration")?;
   tracing::info!(
     path = %path.display(),
-    format = %format,
+    format = %resolve_format(path, format)?,
     providers = config.providers.len(),
     tooling = config.tooling.len(),
     runtime = config.runtime.len(),
@@ -197,6 +183,89 @@ pub fn load(
   let assertions: Assertions = serde_json::from_value(merged)
     .context("failed to deserialize [assertions]")?;
   Ok((config, assertions))
+}
+
+/// Merge the base configs and the test config into one JSON value, without the
+/// `OMW_TEST__` environment overlay. Each base's relative `script` resolves
+/// against that base's directory before it is merged, so a base always points
+/// where it was written.
+fn merged_value(
+  path: &Path,
+  format: Option<Format>,
+  bases: &[PathBuf],
+) -> Result<Value> {
+  let mut merged = Value::Object(serde_json::Map::new());
+  for base_path in bases {
+    let raw = crate::stdio::read_to_string(base_path)?;
+    let base_format = resolve_format(base_path, format)?;
+    let mut value = parse_to_value(&raw, base_format).with_context(|| {
+      format!("failed to parse base config {}", base_path.display())
+    })?;
+    resolve_source_scripts(&mut value, base_path)?;
+    deep_merge(&mut merged, value);
+  }
+  let raw = crate::stdio::read_to_string(path)?;
+  let format = resolve_format(path, format)?;
+  let value = parse_to_value(&raw, format)
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+  deep_merge(&mut merged, value);
+  Ok(merged)
+}
+
+/// The paths whose change should re-run `test`: its own config file, each base
+/// config, and every brain script its agents resolve to. A base's script is
+/// already absolute by the time it is merged; the test config's relative
+/// scripts resolve against the test config's directory.
+///
+/// Best-effort: a config that fails to parse still contributes its config and
+/// bases, so an in-progress broken edit still re-runs the test (and reports the
+/// parse error).
+pub fn watched_paths(test: &Test, format: Option<Format>) -> Vec<PathBuf> {
+  let mut paths = vec![canonical_path(&test.config)];
+  for base in &test.bases {
+    paths.push(canonical_path(base));
+  }
+  if let Ok(value) = merged_value(&test.config, format, &test.bases) {
+    for script in agent_scripts(&value, &test.config) {
+      paths.push(canonical_path(&script));
+    }
+  }
+  paths.sort();
+  paths.dedup();
+  paths
+}
+
+/// Every agent's `script` in a merged config value, with a relative path
+/// resolved against the test config's directory (base contributions are
+/// already absolute).
+fn agent_scripts(value: &Value, config: &Path) -> Vec<PathBuf> {
+  let dir = config
+    .parent()
+    .filter(|parent| !parent.as_os_str().is_empty())
+    .unwrap_or(Path::new("."));
+  let Some(agents) = value.get("agents").and_then(Value::as_object) else {
+    return Vec::new();
+  };
+  agents
+    .values()
+    .filter_map(|agent| {
+      let script = agent.get("script").and_then(Value::as_str)?;
+      let path = Path::new(script);
+      Some(if path.is_relative() {
+        dir.join(path)
+      } else {
+        path.to_path_buf()
+      })
+    })
+    .collect()
+}
+
+/// Canonical form of `path`, falling back to an absolute path when the file
+/// does not exist (a not-yet-created or deleted target).
+pub fn canonical_path(path: &Path) -> PathBuf {
+  path.canonicalize().unwrap_or_else(|_| {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+  })
 }
 
 /// Resolve a config value's relative agent `script` paths against `source`'s
@@ -1080,6 +1149,59 @@ mod tests {
     write(dir.path(), "case/omw.test.toml", "")?;
     let tests = discover(dir.path())?;
     assert_eq!(relative_paths(&tests), vec!["case/omw.test.toml"]);
+    Ok(())
+  }
+
+  #[test]
+  fn watched_paths_include_config_bases_and_resolved_scripts()
+  -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(
+      dir.path(),
+      "omw.test.base.toml",
+      "[agents.bob]\nruntime = \"runtime\"\nscript = \"shared/brain.rhai\"\n",
+    )?;
+    let config = write(
+      dir.path(),
+      "case/rhai/omw.test.toml",
+      "[agents.alice]\nruntime = \"runtime\"\nscript = \"brain.rhai\"\n",
+    )?;
+    let test = Test {
+      config: config.clone(),
+      relative: "case/rhai/omw.test.toml".to_owned(),
+      bases: vec![base.clone()],
+    };
+
+    let paths = watched_paths(&test, None);
+    assert!(paths.contains(&canonical_path(&config)));
+    assert!(paths.contains(&canonical_path(&base)));
+    // The test config's script resolves against the test config's directory...
+    assert!(
+      paths.contains(&canonical_path(&dir.path().join("case/rhai/brain.rhai")))
+    );
+    // ...while the base's script resolves against the base's directory.
+    assert!(
+      paths.contains(&canonical_path(&dir.path().join("shared/brain.rhai")))
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn watched_paths_fall_back_to_config_and_bases_on_a_parse_error()
+  -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let base = write(dir.path(), "omw.test.base.toml", "[agents.bob]\n")?;
+    let config = write(dir.path(), "case/omw.test.toml", "not = = toml")?;
+    let test = Test {
+      config: config.clone(),
+      relative: "case/omw.test.toml".to_owned(),
+      bases: vec![base.clone()],
+    };
+
+    let paths = watched_paths(&test, None);
+    let mut expected = vec![canonical_path(&config), canonical_path(&base)];
+    expected.sort();
+    assert_eq!(paths, expected);
     Ok(())
   }
 }

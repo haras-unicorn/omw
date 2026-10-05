@@ -358,7 +358,7 @@ fn test_logs(state: &State) -> Vec<String> {
     }
     return lines;
   }
-  state.current_logs.clone()
+  state.current_logs()
 }
 
 /// A rounded, single-line bordered pane.

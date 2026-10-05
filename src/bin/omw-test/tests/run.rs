@@ -178,8 +178,9 @@ fn fail_fast_stops_at_the_first_failure_while_all_runs_every_test() {
   common::write_case(dir.path(), "a", "nope");
   common::write_case(dir.path(), "b", "nope");
 
+  // `-j 1` is the sequential path: the first failure stops the pass.
   let assert = common::omw_test()
-    .args(["run"])
+    .args(["run", "-j", "1"])
     .arg(dir.path())
     .assert()
     .failure();
@@ -201,6 +202,41 @@ fn fail_fast_stops_at_the_first_failure_while_all_runs_every_test() {
     2,
     "--all should run both tests, got: {stdout}"
   );
+}
+
+#[test]
+fn jobs_flag_runs_tests_in_parallel() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "a", "chat");
+  common::write_case(dir.path(), "b", "chat");
+  common::write_case(dir.path(), "c", "chat");
+  let assert = common::omw_test()
+    .args(["run", "--all", "--jobs", "3"])
+    .arg(dir.path())
+    .assert()
+    .success();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  assert_eq!(
+    stdout.matches("PASS").count(),
+    3,
+    "every test should run, got: {stdout}"
+  );
+  assert!(
+    stdout.contains("3 passed, 0 failed"),
+    "tally should cover every test, got: {stdout}"
+  );
+}
+
+#[test]
+fn jobs_zero_is_auto_and_runs() {
+  let dir = tempdir().unwrap();
+  common::write_case(dir.path(), "a", "chat");
+  common::omw_test()
+    .args(["run", "-j", "0"])
+    .arg(dir.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("PASS"));
 }
 
 #[test]
@@ -267,4 +303,81 @@ fn dump_format_yaml_and_toml_are_honored() {
   let text = std::fs::read_to_string(&toml).unwrap();
   assert!(text.contains("[[tests]]"), "{text}");
   assert!(text.contains("case/omw.test.toml"), "{text}");
+}
+
+/// A `--watch` pass re-runs only the tests a change affects: editing one
+/// test's brain re-runs that test and leaves its sibling's last verdict alone.
+#[cfg(unix)]
+#[test]
+fn watch_reruns_only_the_affected_tests() {
+  use std::time::Duration;
+
+  let root = tempdir().unwrap();
+  common::write_case(root.path(), "a", "chat");
+  common::write_case(root.path(), "b", "chat");
+  // The log lives outside the watched root, or its own writes would look like
+  // changes and trigger endless re-runs.
+  let logs = tempdir().unwrap();
+  let log = logs.path().join("watch.log");
+
+  let mut cmd = common::omw_test_raw();
+  cmd
+    .args(["run", "--watch", "-j", "1"])
+    .arg(root.path())
+    .env("OMW_TEST__TUNABLES__WATCH_DEBOUNCE_MS", "50");
+  let mut child = common::spawn_capturing(&mut cmd, &log);
+
+  assert!(
+    common::wait_for_count(
+      &log,
+      "PASS b/omw.test.toml",
+      1,
+      Duration::from_secs(60)
+    ),
+    "the first pass should run both tests: {}",
+    std::fs::read_to_string(&log).unwrap_or_default()
+  );
+  assert!(
+    common::wait_for_count(
+      &log,
+      "2 passed, 0 failed",
+      1,
+      Duration::from_secs(60)
+    ),
+    "the first pass should tally both tests: {}",
+    std::fs::read_to_string(&log).unwrap_or_default()
+  );
+
+  // Touch only `a`'s brain. The change keeps the same call, so `a` still
+  // passes; the point is which tests re-ran.
+  let brain = root.path().join("a/brain.rhai");
+  let mut contents = std::fs::read_to_string(&brain).unwrap();
+  contents.push_str("\n// touched\n");
+  std::fs::write(&brain, contents).unwrap();
+
+  assert!(
+    common::wait_for_count(
+      &log,
+      "1 passed, 0 failed",
+      1,
+      Duration::from_secs(60)
+    ),
+    "the second pass should run only the affected test: {}",
+    std::fs::read_to_string(&log).unwrap_or_default()
+  );
+
+  let contents = std::fs::read_to_string(&log).unwrap();
+  assert_eq!(
+    contents.matches("PASS a/omw.test.toml").count(),
+    2,
+    "`a` should have run in both passes: {contents}"
+  );
+  assert_eq!(
+    contents.matches("PASS b/omw.test.toml").count(),
+    1,
+    "`b` should not have re-run: {contents}"
+  );
+
+  let _ = child.kill();
+  let _ = child.wait();
 }

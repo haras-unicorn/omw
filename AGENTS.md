@@ -280,15 +280,19 @@ A Cargo workspace with the crates below plus a single WIT contract.
   the exit code. `omw-test run [path]` (default `.`) recursively runs every
   discovered config through the `omw::testing` harness against the in-config
   `kind = "mock"` doubles, printing `PASS`/`FAIL` per test and exiting non-zero
-  with a diff when an assertion mismatches; it is fail-fast by default (`--all`
-  keeps going), each test inherits the `omw.test.base.<ext>` configs in its
-  directory and ancestors up to the discovery root, `--dump <path>` writes
-  per-test traces and mock snapshots as JSON, YAML or TOML (`--dump-format`,
-  default JSON), and a standard-stream path (`-`, `/dev/stdin`) is a single
-  config read from stdin (needs `--format`); `--include`/`--exclude` filter the
-  root-relative config paths and `--watch` re-runs on change. On `tty` it drives
-  the live view's `Tests` view (a tests list marked `✅`/`❌`, a logs/failure
-  pane, a bordered gauge) and resets it each `--watch` pass; verdicts go to
+  with a diff when an assertion mismatches; it runs tests concurrently up to
+  `-j/--jobs` (default: the logical core count, `-j 1` sequential) and is
+  fail-fast by default (`--all` keeps going), each test inherits the
+  `omw.test.base.<ext>` configs in its directory and ancestors up to the
+  discovery root, `--dump <path>` writes per-test traces and mock snapshots as
+  JSON, YAML or TOML (`--dump-format`, default JSON), and a standard-stream path
+  (`-`, `/dev/stdin`) is a single config read from stdin (needs `--format`);
+  `--include`/`--exclude` filter the root-relative config paths and `--watch`
+  re-runs only the tests a change affects (its config, an inherited base config
+  or a brain script it uses, plus newly discovered configs), keeping every
+  discovered test listed with its last verdict. On `tty` it drives the live
+  view's `Tests` view (a tests list marked `✅`/`❌`, a logs/failure pane, a
+  bordered gauge) and retains the list across `--watch` passes; verdicts go to
   stdout only when stdout is not the terminal the live view owns, and after the
   live view tears down the per-test lines and tally are replayed to stdout.
   Depends on `omw` with `default-features = false, features = ["mock"]` (plus

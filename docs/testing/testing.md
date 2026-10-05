@@ -39,6 +39,12 @@ omw-test run examples            # every discovered config
 - `--all` keeps going after a failure and reports every failing test. Without it
   `omw-test` is fail-fast: it stops at the first failure and prints that test's
   detail.
+- `-j <N>` / `--jobs <N>` runs up to `N` tests concurrently. It defaults to the
+  machine's logical core count (`-j 0` also means auto), so a suite tests in
+  parallel out of the box; `-j 1` is the sequential behavior. Under fail-fast
+  with more than one job, a failure stops launching new tests but the tests
+  already in flight finish and report, so the tally can cover more than the
+  single first failure.
 - `--dump <path>` writes the per-test traces and mock queue snapshots as
   machine-readable data (`-` / `/dev/stdout` streams them), for passing and
   failing tests alike. Each entry carries the test label, its verdict, each
@@ -48,9 +54,13 @@ omw-test run examples            # every discovered config
   selects the encoding; it defaults to `json`, which keeps a piped dump
   `jq`-able (`toml` drops nulls, which it cannot represent).
 - `--watch` re-runs on change instead of exiting: after each pass it waits for a
-  debounced filesystem event and runs again (file mode watches the config's
-  parent directory; directory mode watches the root recursively). The library
-  hot-reload watch is always off.
+  debounced filesystem event, then only re-runs the tests that change affects —
+  a test whose config, one of its inherited base configs, or one of its agents'
+  brain scripts was touched (plus any newly discovered config). A change that
+  affects no test is logged and skipped instead of re-running everything. The
+  tty view keeps every discovered test listed with its last verdict, so
+  unaffected tests still show their previous pass/fail. The library hot-reload
+  watch is always off.
 
 ### Failure diagnostics
 
@@ -94,7 +104,9 @@ logs stream separately.
   beside its buffered logs — and a bordered `N/M tests` gauge.
 - In `pipe` the same verdict lines are plain: one `PASS` / `FAIL <label>` per
   test plus the final tally on stdout.
-- `--watch` resets the list and gauge each pass.
+- `--watch` keeps every discovered test listed with its last verdict across
+  passes and only advances the affected tests' state; the gauge covers the tests
+  running in the current pass.
 
 See [Output](../output.md) for the full policy, the `RUST_LOG` level recipes and
 the per-command table.

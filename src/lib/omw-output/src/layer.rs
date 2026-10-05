@@ -9,8 +9,10 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::registry::LookupSpan;
 
 use crate::live::{State, View, Wake};
 
@@ -27,8 +29,22 @@ impl TuiLayer {
   }
 }
 
-impl<S: Subscriber> Layer<S> for TuiLayer {
-  fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+impl<S> Layer<S> for TuiLayer
+where
+  S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+  fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+    if attrs.metadata().name() != "test" {
+      return;
+    }
+    let mut visitor = TestField::default();
+    attrs.record(&mut visitor);
+    if let (Some(label), Some(span)) = (visitor.label, ctx.span(id)) {
+      span.extensions_mut().insert(TestLabel(label));
+    }
+  }
+
+  fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
     let mut fields = Fields::default();
     event.record(&mut fields);
     let metadata = event.metadata();
@@ -38,13 +54,61 @@ impl<S: Subscriber> Layer<S> for TuiLayer {
     match state.view {
       View::Agents => state.push_line(&fields.tab(), line),
       View::Tests => {
-        if state.current_test.is_some() {
-          state.current_logs.push(line);
+        if let Some(label) = test_label(&ctx, event) {
+          state.push_test_log(&label, line);
+        } else if let Some(current) = state.current_test.clone() {
+          // A log from a detached task that escaped the test span still lands
+          // with the test it belongs to, best-effort.
+          state.push_test_log(&current, line);
         }
       }
     }
     drop(state);
     self.wake.send();
+  }
+}
+
+/// The label a test span carries, stashed in the span's extensions so an event
+/// can find its test by walking the span scope.
+#[derive(Debug)]
+struct TestLabel(String);
+
+/// The `test` field of the innermost active span that carries one, so a log
+/// emitted during a test's run is attributed to that test.
+fn test_label<S: Subscriber + for<'lookup> LookupSpan<'lookup>>(
+  ctx: &Context<'_, S>,
+  event: &Event<'_>,
+) -> Option<String> {
+  let scope = ctx.event_scope(event)?;
+  for span in scope {
+    if let Some(label) = span.extensions().get::<TestLabel>() {
+      return Some(label.0.clone());
+    }
+  }
+  None
+}
+
+/// A visitor that picks the `test` field out of a span's attributes.
+#[derive(Debug, Default)]
+struct TestField {
+  label: Option<String>,
+}
+
+impl TestField {
+  fn set(&mut self, field: &Field, value: String) {
+    if field.name() == "test" {
+      self.label = Some(value);
+    }
+  }
+}
+
+impl Visit for TestField {
+  fn record_str(&mut self, field: &Field, value: &str) {
+    self.set(field, value.to_owned());
+  }
+
+  fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+    self.set(field, format!("{value:?}"));
   }
 }
 
