@@ -67,6 +67,10 @@ pub struct RunArgs {
   /// Run every discovered test; without this, stop at the first failure
   #[arg(long)]
   pub all: bool,
+  /// How many tests to run at once (default: logical core count; `1` is
+  /// sequential)
+  #[arg(short = 'j', long, value_name = "N")]
+  pub jobs: Option<usize>,
   /// Write per-test traces and mock snapshots (`-` / `/dev/stdout` streams
   /// them)
   #[arg(long, value_name = "PATH")]
@@ -144,6 +148,7 @@ mod tests {
         exclude: Vec::new(),
         format: None,
         all: false,
+        jobs: None,
         dump: None,
         dump_format: Format::Json,
         watch: false,
@@ -173,6 +178,7 @@ mod tests {
         exclude: vec!["**/wasm".to_owned()],
         format: None,
         all: false,
+        jobs: None,
         dump: None,
         dump_format: Format::Json,
         watch: true,
@@ -185,6 +191,15 @@ mod tests {
     let args =
       run_args(parse(&["omw-test", "run", "examples", "--format", "json"]));
     assert_eq!(args.and_then(|args| args.format), Some(Format::Json));
+  }
+
+  #[test]
+  fn run_accepts_a_jobs_count() {
+    let args = run_args(parse(&["omw-test", "run", "-j", "4"]));
+    assert_eq!(args.and_then(|args| args.jobs), Some(4));
+
+    let args = run_args(parse(&["omw-test", "run", "--jobs", "1"]));
+    assert_eq!(args.and_then(|args| args.jobs), Some(1));
   }
 
   #[cfg(feature = "compile-wasm")]

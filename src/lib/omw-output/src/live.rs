@@ -4,6 +4,7 @@
 //! thread reads it. The [`Live`] handle owns the render thread and restores the
 //! terminal on drop.
 
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -106,8 +107,10 @@ pub(crate) struct State {
   pub(crate) tests: Vec<TestEntry>,
   /// The label of the test currently running, if any.
   pub(crate) current_test: Option<String>,
-  /// Log lines buffered for the test currently running.
-  pub(crate) current_logs: Vec<String>,
+  /// Log lines buffered per test, keyed by label, so a concurrent run still
+  /// routes each test's logs to its own failure pane. Entries are dropped once
+  /// the test's verdict is recorded.
+  pub(crate) test_logs: BTreeMap<String, Vec<String>>,
   /// How many lines the user has scrolled up from the bottom (`View::Tests`).
   pub(crate) logs_scroll: usize,
   /// The most recent failure to render.
@@ -136,7 +139,7 @@ impl State {
       progress_total: 0,
       tests: Vec::new(),
       current_test: None,
-      current_logs: Vec::new(),
+      test_logs: BTreeMap::new(),
       logs_scroll: 0,
       failure: None,
     }
@@ -172,6 +175,58 @@ impl State {
       }
       tab.lines.push_back(line);
     }
+  }
+
+  /// Append `line` to the log buffer for the test labelled `label`, dropping
+  /// the oldest past the cap.
+  pub(crate) fn push_test_log(&mut self, label: &str, line: String) {
+    let capacity = self.tab_capacity;
+    let logs = self.test_logs.entry(label.to_owned()).or_default();
+    if let Some(capacity) = capacity
+      && logs.len() >= capacity
+    {
+      logs.remove(0);
+    }
+    logs.push(line);
+  }
+
+  /// The logs of the test currently running, for the `View::Tests` logs pane.
+  pub(crate) fn current_logs(&self) -> Vec<String> {
+    self
+      .current_test
+      .as_ref()
+      .and_then(|label| self.test_logs.get(label))
+      .cloned()
+      .unwrap_or_default()
+  }
+
+  /// The label of any test still marked running, used to pick a new "current"
+  /// test once the current one gets its verdict.
+  fn any_running(&self) -> Option<String> {
+    self
+      .tests
+      .iter()
+      .find(|test| test.status == TestStatus::Running)
+      .map(|test| test.label.clone())
+  }
+
+  /// Merge `labels` into the test list: an existing test keeps its status, a
+  /// new one starts pending, and a label no longer present is dropped.
+  pub(crate) fn sync_tests(&mut self, labels: Vec<String>) {
+    let existing: BTreeMap<String, TestStatus> = self
+      .tests
+      .drain(..)
+      .map(|entry| (entry.label, entry.status))
+      .collect();
+    self.tests = labels
+      .into_iter()
+      .map(|label| {
+        let status =
+          existing.get(&label).copied().unwrap_or(TestStatus::Pending);
+        TestEntry { label, status }
+      })
+      .collect();
+    self.progress_total = self.tests.len();
   }
 }
 
@@ -286,6 +341,28 @@ impl Live {
     self.wake.send();
   }
 
+  /// Keep the test list in sync with `labels` for a new watch pass: an existing
+  /// test keeps its last status, a new one starts pending, and a label no longer
+  /// discovered is dropped. The list is never reset to pending, so an
+  /// incremental pass leaves the unaffected tests showing their last verdict.
+  pub fn sync_tests(&self, labels: Vec<String>) {
+    let mut state = self.lock();
+    state.sync_tests(labels);
+    drop(state);
+    self.wake.send();
+  }
+
+  /// Prepare the `View::Tests` pane for a new pass without dropping the test
+  /// list: clear the failure detail and the running-test cursor.
+  pub fn begin_pass(&self) {
+    let mut state = self.lock();
+    state.current_test = None;
+    state.logs_scroll = 0;
+    state.failure = None;
+    drop(state);
+    self.wake.send();
+  }
+
   /// Set the progress gauge (`View::Tests`).
   pub fn set_progress(&self, done: usize, total: usize) {
     let mut state = self.lock();
@@ -305,7 +382,6 @@ impl Live {
       test.status = TestStatus::Running;
     }
     state.current_test = Some(label);
-    state.current_logs.clear();
     state.logs_scroll = 0;
     drop(state);
     self.wake.send();
@@ -329,12 +405,16 @@ impl Live {
         TestStatus::Failed
       };
     }
+    let logs = state.test_logs.remove(&label).unwrap_or_default();
     if !passed && let Some(detail) = detail {
       state.failure = Some(Failure {
-        label,
+        label: label.clone(),
         detail,
-        logs: state.current_logs.clone(),
+        logs,
       });
+    }
+    if state.current_test.as_deref() == Some(label.as_str()) {
+      state.current_test = state.any_running();
     }
     drop(state);
     self.wake.send();
@@ -347,7 +427,7 @@ impl Live {
     state.progress_total = 0;
     state.tests.clear();
     state.current_test = None;
-    state.current_logs.clear();
+    state.test_logs.clear();
     state.logs_scroll = 0;
     state.failure = None;
     drop(state);
@@ -434,6 +514,28 @@ mod tests {
     let state = State::new(true);
     assert_eq!(state.tick, Duration::from_millis(80));
     assert_eq!(state.tab_capacity, Some(2000));
+  }
+
+  #[test]
+  fn push_test_log_caps_each_test_buffer_independently() {
+    let mut state = State::new(true);
+    state.tab_capacity = Some(2);
+    for index in 0..4 {
+      state.push_test_log("a", index.to_string());
+    }
+    state.push_test_log("b", "x".to_owned());
+    assert_eq!(state.test_logs["a"], vec!["2", "3"]);
+    assert_eq!(state.test_logs["b"], vec!["x"]);
+  }
+
+  #[test]
+  fn current_logs_follows_the_current_test() {
+    let mut state = State::new(true);
+    state.push_test_log("a", "one".to_owned());
+    state.current_test = Some("a".to_owned());
+    assert_eq!(state.current_logs(), vec!["one"]);
+    state.current_test = None;
+    assert!(state.current_logs().is_empty());
   }
 
   #[test]

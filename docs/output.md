@@ -147,8 +147,10 @@ lines pair a spinner and status on the left with key hints on the right.
 - **`omw-test`** (`run`): a left "Tests" list marking every discovered test
   `✅`/`❌` (with a spinner on the running one), a right "Logs" pane for the
   running test or the failed test's assertion diff and buffered logs, and a
-  bordered `N/M tests` gauge. The details line shows the discovery path and test
-  count. `--watch` resets the list and gauge each pass.
+  bordered `N/M tests` gauge. The details line shows the discovery path, test
+  count and (on an incremental `--watch` pass) the affected count. `--watch`
+  retains every discovered test with its last verdict and re-runs only the
+  affected tests each pass.
 
 The TUI uses `✅`/`❌`; the product on stdout/pipe stays `PASS`/`FAIL` for
 scripts. Keybindings are `←`/`→`/`Tab`/`h`/`l` switch, `↑`/`↓`/`j`/`k` scroll,
