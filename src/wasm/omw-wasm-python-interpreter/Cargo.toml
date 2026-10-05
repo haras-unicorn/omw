@@ -1,0 +1,29 @@
+[package]
+name = "omw-wasm-python-interpreter"
+version = "0.1.0"
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json.workspace = true
+wit-bindgen.workspace = true
+rustpython-vm = { version = "0.6", default-features = false, features = [
+  "compiler",
+  "gc",
+  "freeze-stdlib",
+  "stdio",
+] }
+rustpython-stdlib = { version = "0.6", default-features = false, features = [
+  "compiler",
+] }
+rustpython-pylib = { version = "0.6", default-features = false, features = [
+  "freeze-stdlib",
+] }

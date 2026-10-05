@@ -2,12 +2,13 @@
 
 The `examples/` directory holds runnable agents that exercise the whole `omw`
 stack with no keys, no network and no external services. Each case is one shared
-`omw.test.base.toml` plus a brain per variant under `rhai/`, `js` and `wasm/`,
-and a committed `<variant>/omw.test.toml` generated from the base config.
+`omw.test.base.toml` plus a brain per variant under `rhai/`, `js/`, `python/`
+and `wasm/`, and a committed `<variant>/omw.test.toml` generated from the base
+config.
 
 They double as documentation: read a case's `omw.test.base.toml` to see what a
 brain does, its shrunk `<variant>/omw.test.toml` to see the variant wiring, and
-its `brain.rhai` / `brain.js` / `brain.rs` to see how to write it.
+its `brain.rhai` / `brain.js` / `brain.py` / `brain.rs` to see how to write it.
 
 ## Running
 

@@ -6,10 +6,11 @@ OMW = OpenAI + MCP + WASM.
 
 `omw` is an agent runtime. You declare agents in a TOML configuration, each
 wiring a _provider_ (an OpenAI-family chat service), _tooling_ (MCP tool
-servers), and a _brain_ — either a compiled WASM component, a [rhai] script, or
-a JavaScript script. `omw` then drives each agent through an actor model: every
-agent owns a single inbox, and chat streams, tool results, timers, and messages
-from other agents all arrive there as tagged events the brain consumes.
+servers), and a _brain_ — either a compiled WASM component, a [rhai] script, a
+JavaScript script, or a Python script. `omw` then drives each agent through an
+actor model: every agent owns a single inbox, and chat streams, tool results,
+timers, and messages from other agents all arrive there as tagged events the
+brain consumes.
 
 [rhai]: https://rhai.rs
 
@@ -31,16 +32,18 @@ and a brain, and `omw` runs it for one iteration (`run`) or keeps it going
   _resources_; resource subscriptions deliver change events.
 - **Brains** are runtimes. The `wasm` runtime loads an agent as a compiled
   component; the `rhai` runtime evaluates a script on an interpreter that ships
-  as an opt-in variant, as does the `js` runtime. The default `omw`
+  as an opt-in variant, as do the `js` and `python` runtimes. The default `omw`
   package/binary ships with the `runtime-wasm`, `provider-openai`,
-  `tooling-mcp`, and `endpoint-openai` back ends but without either script
-  runtime, whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
-  (`--features runtime-rhai`) includes the rhai interpreter and the `omw-js`
+  `tooling-mcp`, and `endpoint-openai` back ends but without any script runtime,
+  whereas the `omw-rhai` package / `omw-rhai-<arch>.tar.gz` binary
+  (`--features runtime-rhai`) includes the rhai interpreter, the `omw-js`
   package / `omw-js-<arch>.tar.gz` binary (`--features runtime-js`) includes the
-  js interpreter. All three see the same `omw` host interface (rhai in
-  snake_case, js in camelCase). To write a pure Rust brain, depend on the
-  `omw-wasm-rust` guest SDK crate instead of running `wit-bindgen` yourself; see
-  [Rust brains].
+  js interpreter, and the `omw-python` package / `omw-python-<arch>.tar.gz`
+  binary (`--features runtime-python`) includes the python interpreter. All four
+  see the same `omw` host interface (rhai, js and python expose it on an `omw`
+  global; rhai and python use snake_case, js camelCase). To write a pure Rust
+  brain, depend on the `omw-wasm-rust` guest SDK crate instead of running
+  `wit-bindgen` yourself; see [Rust brains].
 - **Agents** are actors. They subscribe to each other explicitly, so a message
   only ever reaches an agent that chose to listen.
 - **Endpoint** is an optional OpenAI-compatible HTTP server. Set `[endpoint]`
@@ -71,10 +74,11 @@ nix build github:haras-unicorn/omw
 
 Prebuilt binaries for `x86_64-linux` and `aarch64-linux` are attached to each
 [GitHub release] as tarballs containing the `omw` binary. The default
-`omw-<arch>.tar.gz` ships no rhai runtime; grab the `omw-rhai-<arch>.tar.gz`
-tarball (or the rhai Nix package) when your brains are rhai scripts, or the
+`omw-<arch>.tar.gz` ships no script runtime; grab the `omw-rhai-<arch>.tar.gz`
+tarball (or the rhai Nix package) when your brains are rhai scripts, the
 `omw-js-<arch>.tar.gz` tarball (or the js Nix package) when your brains are
-JavaScript scripts:
+JavaScript scripts, or the `omw-python-<arch>.tar.gz` tarball (or the python Nix
+package) when your brains are Python scripts:
 
 ```sh
 curl -L -o omw.tar.gz \
@@ -99,6 +103,15 @@ curl -L -o omw-js.tar.gz \
   https://github.com/haras-unicorn/omw/releases/latest/download/omw-js-x86_64-linux.tar.gz
 tar -xzf omw-js.tar.gz
 ./omw-js-x86_64-linux
+```
+
+The python variant is the same shape, with the `-python` name:
+
+```sh
+curl -L -o omw-python.tar.gz \
+  https://github.com/haras-unicorn/omw/releases/latest/download/omw-python-x86_64-linux.tar.gz
+tar -xzf omw-python.tar.gz
+./omw-python-x86_64-linux
 ```
 
 [GitHub release]: https://github.com/haras-unicorn/omw/releases
@@ -225,10 +238,10 @@ and enabling the runtime features you want. See the [library] page for details.
 
 The [examples] are runnable agents that exercise the whole stack — provider,
 tooling, endpoint, agents — with no keys, no network, and no external services,
-each in rhai, js, and wasm. The `omw-test` binary runs them deterministically
-against in-process scripted doubles and checks what every agent saw and did
-against an `[assertions]` section; the [testing] pages cover the binary, the
-assertion language, and each mock. See [examples] for the tour.
+each in rhai, js, python, and wasm. The `omw-test` binary runs them
+deterministically against in-process scripted doubles and checks what every
+agent saw and did against an `[assertions]` section; the [testing] pages cover
+the binary, the assertion language, and each mock. See [examples] for the tour.
 
 ## Output
 

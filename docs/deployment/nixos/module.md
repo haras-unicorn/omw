@@ -70,9 +70,10 @@ and subscriptions survive).
 
 `variant` selects which package variant runs: `default` (the
 crates.io-equivalent build, no script runtime), `rhai` (the `omw-rhai` package,
-which compiles the bundled rhai interpreter in) or `js` (the `omw-js` package,
-which compiles the bundled js interpreter in). Overridable entirely with
-`package`.
+which compiles the bundled rhai interpreter in), `js` (the `omw-js` package,
+which compiles the bundled js interpreter in) or `python` (the `omw-python`
+package, which compiles the bundled python interpreter in). Overridable entirely
+with `package`.
 
 ## Users and state
 

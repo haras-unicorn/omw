@@ -1,14 +1,16 @@
-//! Build script: for the `runtime-rhai`, `runtime-js` and `mock` features,
-//! cross-compiles the bundled guests for `wasm32-wasip2`, wraps the resulting
-//! core module into a WASM component when necessary, and embeds it into the
-//! `omw` library (linked into the `omw` binary built by the `omw-cli` crate).
+//! Build script: for the `runtime-rhai`, `runtime-js`, `runtime-python` and
+//! `mock` features, cross-compiles the bundled guests for `wasm32-wasip2`,
+//! wraps the resulting core module into a WASM component when necessary, and
+//! embeds it into the `omw` library (linked into the `omw` binary built by the
+//! `omw-cli` crate).
 //!
 //! The guests are intentionally *not* a `[dependencies]` of `omw`: their
 //! `export!` ABI (`#![no_main]` + `cabi_post_...` symbols) cannot link for the
 //! host target. Instead we build them as part of `omw`'s own build, only when
 //! the `runtime-rhai` (the embedded rhai interpreter), `runtime-js` (the
-//! embedded js interpreter) or `mock` (a test-only wasm mock brain) feature is
-//! enabled. A featureless build runs no wasm tooling at all, so `cargo publish`
+//! embedded js interpreter), `runtime-python` (the embedded python
+//! interpreter) or `mock` (a test-only wasm mock brain) feature is enabled. A
+//! featureless build runs no wasm tooling at all, so `cargo publish`
 //! (the default crate) verifies without `wasm-tools` or a `wasm32-wasip2`
 //! target.
 //!
@@ -35,6 +37,9 @@ fn main() {
   }
   if env::var_os("CARGO_FEATURE_RUNTIME_JS").is_some() {
     compile_guest("omw-wasm-js-interpreter");
+  }
+  if env::var_os("CARGO_FEATURE_RUNTIME_PYTHON").is_some() {
+    compile_guest("omw-wasm-python-interpreter");
   }
   if env::var_os("CARGO_FEATURE_MOCK").is_some() {
     compile_guest("omw-wasm-mock");

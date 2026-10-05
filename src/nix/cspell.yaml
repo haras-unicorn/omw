@@ -30,3 +30,6 @@ ignoreWords:
   - json2ts
   - npm
   - tenere
+  - datamodel
+  - jsonschema
+  - conint

@@ -12,10 +12,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The default features are `runtime-wasm`, `provider-openai`, `tooling-mcp`, and
-`endpoint-openai`. The `runtime-rhai` and `runtime-js` script runtimes are
-opt-in features; a `--no-default-features` build yields empty registries. The
-CLI-only stack (`clap`, `config`, `tracing-subscriber`) lives in the separate
-`omw-cli` crate, so library consumers never pull it in.
+`endpoint-openai`. The `runtime-rhai`, `runtime-js` and `runtime-python` script
+runtimes are opt-in features; a `--no-default-features` build yields empty
+registries. The CLI-only stack (`clap`, `config`, `tracing-subscriber`) lives in
+the separate `omw-cli` crate, so library consumers never pull it in.
 
 ## TLS setup
 

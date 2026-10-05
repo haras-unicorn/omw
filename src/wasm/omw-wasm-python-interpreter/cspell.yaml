@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/streetsidesoftware/cspell/refs/heads/main/cspell.schema.json
+useGitignore: true
+version: "0.2"
+language: en
+ignorePaths:
+  - omw.all.py
+ignoreWords:
+  - cdylib
+  - rlib
+  - bindgen
+  - wasip
+  - impls
+  - rustpython
+  - pydantic
+  - datamodel
+  - codegen
+  - pyi
+  - deserializes
+  - serde
+  - stdlib
+  - pylib
+  - lossily
+  - pyobj
+  - kwargs

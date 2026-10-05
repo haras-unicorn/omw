@@ -9,10 +9,11 @@ readme.workspace = true
 edition.workspace = true
 
 [features]
-default = ["runtime-wasm", "runtime-rhai", "runtime-js"]
+default = ["runtime-wasm", "runtime-rhai", "runtime-js", "runtime-python"]
 runtime-wasm = ["omw/runtime-wasm"]
 runtime-rhai = ["omw/runtime-rhai"]
 runtime-js = ["omw/runtime-js"]
+runtime-python = ["omw/runtime-python"]
 # Internal helper: cross-build single-file rust brains for wasm32-wasip2. Only
 # the dev shell enables it; it assumes the in-repo SDK layout and is not a
 # supported user workflow.

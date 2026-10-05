@@ -11,6 +11,8 @@ mod engine;
 mod host;
 #[cfg(feature = "runtime-js")]
 mod js;
+#[cfg(feature = "runtime-python")]
+mod python;
 #[cfg(feature = "runtime-rhai")]
 mod rhai;
 #[cfg(feature = "runtime-wasm")]
@@ -241,6 +243,10 @@ impl Default for Registry {
     {
       let _ = registry.register::<js::JsWasmRuntime>();
     }
+    #[cfg(feature = "runtime-python")]
+    {
+      let _ = registry.register::<python::PythonWasmRuntime>();
+    }
     registry
   }
 }
@@ -277,6 +283,10 @@ impl schemars::JsonSchema for RuntimeImpls {
     ));
     #[cfg(feature = "runtime-js")]
     variants.push(crate::schema::kind_variant::<js::Config>(generator, "js"));
+    #[cfg(feature = "runtime-python")]
+    variants.push(crate::schema::kind_variant::<python::Config>(
+      generator, "python",
+    ));
     variants.push(generator.subschema_for::<crate::config::ImplConfig>());
     schemars::json_schema!({
       "type": "object",
@@ -310,6 +320,12 @@ mod tests {
     assert!(
       registry
         .build("js", "js", &Value::Object(Map::new()))
+        .is_ok()
+    );
+    #[cfg(feature = "runtime-python")]
+    assert!(
+      registry
+        .build("python", "python", &Value::Object(Map::new()))
         .is_ok()
     );
     Ok(())

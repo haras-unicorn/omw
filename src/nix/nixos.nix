@@ -22,13 +22,16 @@ let
             "default"
             "rhai"
             "js"
+            "python"
           ];
           default = "default";
           description = ''
             Which package variant to run: `default` (the crates.io-equivalent
-            build, without the rhai runtime), `rhai` (adds the bundled rhai
-            interpreter via the `omw-rhai` package) or `js` (adds the bundled
-            js interpreter via the `omw-js` package). Overridable with `package`.
+            build, without the script runtimes), `rhai` (adds the bundled rhai
+            interpreter via the `omw-rhai` package), `js` (adds the bundled js
+            interpreter via the `omw-js` package) or `python` (adds the bundled
+            python interpreter via the `omw-python` package). Overridable with
+            `package`.
           '';
         };
 
@@ -39,6 +42,8 @@ let
               self.packages.${pkgs.stdenv.hostPlatform.system}.omw-rhai
             else if cfg.variant == "js" then
               self.packages.${pkgs.stdenv.hostPlatform.system}.omw-js
+            else if cfg.variant == "python" then
+              self.packages.${pkgs.stdenv.hostPlatform.system}.omw-python
             else
               self.packages.${pkgs.stdenv.hostPlatform.system}.omw;
           description = "The omw package to run.";

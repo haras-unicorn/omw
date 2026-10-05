@@ -8,8 +8,9 @@
 #     --build-arg OMW_ARCH=x86_64-linux \
 #     -t omw .
 #
-# Variants: `default` (wasm brains only), `rhai`, `js`. The tarball names are
-# `omw-<arch>.tar.gz`, `omw-rhai-<arch>.tar.gz`, `omw-js-<arch>.tar.gz`.
+# Variants: `default` (wasm brains only), `rhai`, `js`, `python`. The tarball
+# names are `omw-<arch>.tar.gz`, `omw-rhai-<arch>.tar.gz`,
+# `omw-js-<arch>.tar.gz`, `omw-python-<arch>.tar.gz`.
 ARG OMW_VERSION=0.1.0
 ARG OMW_VARIANT=rhai
 ARG OMW_ARCH=x86_64-linux

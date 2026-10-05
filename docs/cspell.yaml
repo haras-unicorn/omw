@@ -82,3 +82,10 @@ ignoreWords:
   - dogfooding
   - metacharacter
   - deser
+  - rustpython
+  - datamodel
+  - pydantic
+  - pyi
+  - snake
+  - ints
+  - mypy

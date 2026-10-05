@@ -438,6 +438,96 @@
       }
     },
     "Config6": {
+      "description": "Impl-specific configuration for the python runtime.",
+      "type": "object",
+      "properties": {
+        "allow_blocking_current_thread": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_ip_name_lookup": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_tcp": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_udp": {
+          "type": "boolean",
+          "default": false
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "default": {}
+        },
+        "inherit_args": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdio": {
+          "type": "boolean",
+          "default": false
+        },
+        "inherit_stdout": {
+          "type": "boolean",
+          "default": false
+        },
+        "initial_cwd": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "insecure_random_seed": {
+          "type": ["integer", "null"],
+          "format": "uint128",
+          "default": null,
+          "minimum": 0
+        },
+        "interpreter": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "max_random_size": {
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "preopens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Preopen"
+          }
+        }
+      }
+    },
+    "Config7": {
       "description": "Impl-specific configuration for the endpoint mock.",
       "type": "object",
       "properties": {
@@ -456,7 +546,7 @@
             {
               "allOf": [
                 {
-                  "$ref": "#/$defs/Config6"
+                  "$ref": "#/$defs/Config7"
                 },
                 {
                   "type": "object",
@@ -744,6 +834,22 @@
                 "properties": {
                   "kind": {
                     "const": "js"
+                  }
+                },
+                "required": ["kind"]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/$defs/Config6"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "python"
                   }
                 },
                 "required": ["kind"]
