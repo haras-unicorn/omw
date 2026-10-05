@@ -90,11 +90,13 @@ A Cargo workspace with the crates below plus a single WIT contract.
     `runtime.run`, plus the per-runtime `WasiConfig`/`Preopen` sandbox flattened
     into each wasm-based runtime's config), `wasm.rs` (loads the agent's `.wasm`
     or `.wat` brain), `rhai.rs` (the bundled Rhai evaluator that loads `.rhai`
-    brains enabled by the `runtime-rhai` feature) and `js.rs` (the bundled JS
-    evaluator that loads `.js` brains enabled by the `runtime-js` feature). The
-    `runtime-wasm` feature gates `bindings`/`engine`/`host`/`wasm`;
-    `runtime-rhai`, `runtime-js` and `mock` each imply it. The default features
-    are `runtime-wasm`, `provider-openai`, `tooling-mcp` and `endpoint-openai`.
+    brains enabled by the `runtime-rhai` feature), `js.rs` (the bundled JS
+    evaluator that loads `.js` brains enabled by the `runtime-js` feature) and
+    `python.rs` (the bundled Python evaluator that loads `.py` brains enabled by
+    the `runtime-python` feature). The `runtime-wasm` feature gates
+    `bindings`/`engine`/`host`/`wasm`; `runtime-rhai`, `runtime-js`,
+    `runtime-python` and `mock` each imply it. The default features are
+    `runtime-wasm`, `provider-openai`, `tooling-mcp` and `endpoint-openai`.
 
   - `endpoint/` — the `Endpoint` abstraction (`serve(bus, registry)`), with
     `openai.rs` (the optional OpenAI-compatible HTTP server behind the
@@ -127,18 +129,19 @@ A Cargo workspace with the crates below plus a single WIT contract.
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
 
-  - `build.rs` — for the `runtime-rhai`/`runtime-js` and `mock` features,
-    cross-compiles the bundled guests for `wasm32-wasip2`, wraps a core module
-    into a component with `wasm-tools component new` when needed, prints it to
-    WAT with the `wasmprinter` build-dep, AOT-serializes it with `wasmtime`, and
-    embeds all three via `include_bytes!`. The guest sources live outside the
-    `omw` package (`src/wasm/*`), so setting `OMW_WASM_BUILD_VENDORED` (only the
-    release prebuild) also copies each component into the package's `wasm/`.
-    When the sources are absent (a registry checkout), `build.rs` embeds the
-    vendored components instead of cross-building, so the published crate is
-    self-contained. A `runtime-wasm`-less build runs no wasm tooling.
-    `.release-plz.toml` sets `publish_allow_dirty = true` for `omw` because the
-    vendored components are untracked (but un-ignored) at release time.
+  - `build.rs` — for the `runtime-rhai`/`runtime-js`/`runtime-python` and `mock`
+    features, cross-compiles the bundled guests for `wasm32-wasip2`, wraps a
+    core module into a component with `wasm-tools component new` when needed,
+    prints it to WAT with the `wasmprinter` build-dep, AOT-serializes it with
+    `wasmtime`, and embeds all four via `include_bytes!`. The guest sources live
+    outside the `omw` package (`src/wasm/*`), so setting
+    `OMW_WASM_BUILD_VENDORED` (only the release prebuild) also copies each
+    component into the package's `wasm/`. When the sources are absent (a
+    registry checkout), `build.rs` embeds the vendored components instead of
+    cross-building, so the published crate is self-contained. A
+    `runtime-wasm`-less build runs no wasm tooling. `.release-plz.toml` sets
+    `publish_allow_dirty = true` for `omw` because the vendored components are
+    untracked (but un-ignored) at release time.
 
   - `testing/` — the deterministic brain-testing substrate. `assert.rs` holds
     the `[assertions]` model, parser (`parse(source, Format)`, format-aware),
@@ -307,6 +310,19 @@ A Cargo workspace with the crates below plus a single WIT contract.
   (`assets/schema.d.ts`, `assets/schema.test.d.ts`) and `omw.d.ts` — which is
   the file to vendor next to a `brain.js` (see `docs/runtime/js.md`).
 
+- `src/wasm/omw-wasm-python-interpreter` — the Python guest component
+  (`#![no_main]`), compiled to `wasm32-wasip2` on the bundled RustPython
+  interpreter. Exports the `runtime` interface (`kind` + `run(script)`) and
+  installs the `omw` global whose `provider`/`tooling`/`host` namespaces route
+  to the host (snake_case; records surface as attribute objects). A script that
+  parses as a single expression returns its value as the terminal message;
+  anything else runs as statements. Ships the Python-side declarations: the
+  hand-written `omw.pyi` stubs for the `omw` global, the generated
+  `assets/schema.py` / `assets/schema.test.py` pydantic models (from
+  `datamodel-code-generator`), and the combined `omw.all.py` (both schemas
+  namespaced under `OmwConfig` / `OmwTestConfig`, plus the stubs) — the file to
+  vendor next to a `brain.py` (see `docs/runtime/python.md`).
+
 - `src/lib/omw-wasm-rust` — the `omw-wasm-rust` guest SDK for Rust brains
   (published to crates.io): re-exports the generated `omw` world bindings plus
   small builders, typed `Provider`/`Tooling` handles, `host` helpers and
@@ -336,18 +352,18 @@ A Cargo workspace with the crates below plus a single WIT contract.
   `07-asserted`, `08-endpoint-order`, `09-resources`, `10-endpoint-stop`,
   `11-tool-call-order` and `12-race-cancels`, each one shared
   `omw.test.base.toml` (the provider/tooling/endpoint wiring, each agent's
-  `runtime` and the `[assertions]`), per-variant `rhai/`, `js/` and `wasm/` dirs
-  (`brain.rhai` / `brain.js` / `brain.rs`), a committed generated
-  `<variant>/omw.test.toml` (only the runtime `kind` and each agent's `script`),
-  and a `README.md`. `dev format` regenerates the per-variant configs from the
-  base config and `dev lint` regenerates-and-compares them.
-  `dev test example brain <case> <variant>` builds that cell's `brain.rs` to
-  `brain.wasm` (scaffolding a throwaway crate in the system temp dir), then runs
-  the case with only that variant included; `dev test brain examples` runs every
-  cell, gating the `wasm` cells on `OMW_TEST_WASM_RUNTIME_NON_NATIVE`, and
-  `dev test` runs it alongside the library examples and unit tests. The base
-  configs drive the in-config `kind = "mock"` doubles and carry the
-  `[assertions.<agent>]` sections.
+  `runtime` and the `[assertions]`), per-variant `rhai/`, `js/`, `python/` and
+  `wasm/` dirs (`brain.rhai` / `brain.js` / `brain.py` / `brain.rs`), a
+  committed generated `<variant>/omw.test.toml` (only the runtime `kind` and
+  each agent's `script`), and a `README.md`. `dev format` regenerates the
+  per-variant configs from the base config and `dev lint`
+  regenerates-and-compares them. `dev test example brain <case> <variant>`
+  builds that cell's `brain.rs` to `brain.wasm` (scaffolding a throwaway crate
+  in the system temp dir), then runs the case with only that variant included;
+  `dev test brain examples` runs every cell, gating the `wasm` cells on
+  `OMW_TEST_WASM_RUNTIME_NON_NATIVE`, and `dev test` runs it alongside the
+  library examples and unit tests. The base configs drive the in-config
+  `kind = "mock"` doubles and carry the `[assertions.<agent>]` sections.
 
 - `docs/` — mdbook documentation, published to GitHub Pages. `docs/testing/`
   (the binary plus per-mock pages) and `docs/examples.md` cover the test and
@@ -374,14 +390,15 @@ A Cargo workspace with the crates below plus a single WIT contract.
   `extraArgs`, `user`/`group` (or dynamic user), `stateDir`, default-on
   `hardening` (+ `readOnlyPaths`/`readWritePaths` path allow-lists and a
   `serviceConfig` escape hatch) and a `variant` option selecting the `default`,
-  `rhai` or `js` package variant. Its option reference is generated by the
-  `omw-options` flake package.
+  `rhai`, `js` or `python` package variant. Its option reference is generated by
+  the `omw-options` flake package.
 
 - `assets/` — deployment examples included verbatim in the docs (`omw.service`,
   `Dockerfile`, `compose.yaml`, `omw.example.toml`, `omw.example.env`,
   `omw.nix`) plus the committed machine-readable schemas (`schema.json`,
-  `schema.test.json`) and the config TypeScript declarations generated from them
-  (`schema.d.ts`, `schema.test.d.ts`), each wrapped in a namespace.
+  `schema.test.json`), the config TypeScript declarations generated from them
+  (`schema.d.ts`, `schema.test.d.ts`), each wrapped in a namespace, and the
+  pydantic models generated from them (`schema.py`, `schema.test.py`).
 
 - `docs/deployment/` — deployment pages (`deployment.md` overview plus
   `systemd.md`, `docker.md`, `nixos/`); keep the shared config/workspace
@@ -427,10 +444,11 @@ A Cargo workspace with the crates below plus a single WIT contract.
   for the per-agent `MessageBus` inboxes.
 
 - Keep the `omw` WIT world(s) in sync with `runtime/bindings.rs` (host),
-  `install_omw` (Rhai guest), the `omw` global (JS guest), and the vendored
-  copies under `src/lib/omw-wasm-rust/wit/`,
+  `install_omw` (Rhai guest), the `omw` global (JS guest), the `omw` global
+  (Python guest), and the vendored copies under `src/lib/omw-wasm-rust/wit/`,
   `src/wasm/omw-wasm-rhai-interpreter/wit/`,
-  `src/wasm/omw-wasm-js-interpreter/wit/` and `src/wasm/omw-wasm-mock/wit/`.
+  `src/wasm/omw-wasm-js-interpreter/wit/`,
+  `src/wasm/omw-wasm-python-interpreter/wit/` and `src/wasm/omw-wasm-mock/wit/`.
 
 ## Library surface
 
@@ -445,7 +463,7 @@ of the library at all.
 | `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`, `Format`                                                                                                                                                          | default fns private                                                                                                                                                                                                                                 |
 | `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `Usage`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                                                               |
 | `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`, `ToolCallResult`), `register_toolings!`                                                   | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                                                            |
-| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` plus `engine` / `bindings` / `host` private                                                                                                                                                                                  |
+| `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` / `python` plus `engine` / `bindings` / `host` private                                                                                                                                                                       |
 | `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                                                                                            | `openai` still `pub mod` (impl detail)                                                                                                                                                                                                              |
 | `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`, `trace` types (`TraceEvent`, `TraceSender`, `AgentTrace`, `group`))                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `trace` is a `pub` mod (`memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`)                                                                                          |
 | `secret`, `shutdown` | `Secret` (`new`, `expose`), `Shutdown`                                                                                                                                                                               | `shutdown_signal` owned by `omw-cli` (process policy)                                                                                                                                                                                               |
@@ -464,7 +482,9 @@ wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
   (`schema.json` for `omw-cli`, `schema.test.json` for `omw-test`) and the
   declarations generated from them (`assets/schema.d.ts`,
   `assets/schema.test.d.ts` and the concatenated
-  `src/wasm/omw-wasm-js-interpreter/omw.all.d.ts`)
+  `src/wasm/omw-wasm-js-interpreter/omw.all.d.ts`), plus the pydantic models
+  (`assets/schema.py`, `assets/schema.test.py` via `datamodel-codegen`) and the
+  concatenated `src/wasm/omw-wasm-python-interpreter/omw.all.py`)
 - `dev test` — `omw test lib examples` (each library example), `omw test units`
   (`cargo clippy --all-features -- -D warnings` plus
   `cargo test --all-features`) and `omw test brain examples` (cross-builds the
@@ -478,21 +498,23 @@ wrapper (`src/nix/dev.nu`, invoked by `dev.nix`):
 - `dev update` — `nix flake update` plus `cargo update`
 - `dev release-pr` — `release-plz release-pr` (opens the release PR)
 - `dev release` — vendors the wasm guests first
-  (`OMW_WASM_BUILD_VENDORED=1 cargo build --release -p omw --features runtime-rhai,runtime-js,mock`),
+  (`OMW_WASM_BUILD_VENDORED=1 cargo build --release -p omw --features runtime-rhai,runtime-js,runtime-python,mock`),
   then `release-plz release` (tags + publishes on release PR merge)
 - `dev build` — builds the
-  `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball`/`omw-test-tarball` packages
-  (per-arch `omw[-rhai,-js,-test]-<arch>.tar.gz` via `runCommand`) and uploads
-  them to the tag release (`GITHUB_REF_NAME`) with `gh`, one artifact at a time
-  so a killed job still leaves the earlier tarballs uploaded; then builds the
-  wrapped/unwrapped flake packages (already warm from the tarball build) and
-  pushes their runtime closure to the public `haras-releases` Cachix cache,
-  pinning each (`<attr>-<system>`, `--keep-days 365`)
+  `omw-tarball`/`omw-rhai-tarball`/`omw-js-tarball`/`omw-python-tarball`/`omw-test-tarball`
+  packages (per-arch `omw[-rhai,-js,-python,-test]-<arch>.tar.gz` via
+  `runCommand`) and uploads them to the tag release (`GITHUB_REF_NAME`) with
+  `gh`, one artifact at a time so a killed job still leaves the earlier tarballs
+  uploaded; then builds the wrapped/unwrapped flake packages (already warm from
+  the tarball build) and pushes their runtime closure to the public
+  `haras-releases` Cachix cache, pinning each (`<attr>-<system>`,
+  `--keep-days 365`)
 - `dev lint` — the local full CI pass: `dev lint check`, `dev lint test`,
   `dev lint nix --all-systems`, then `dev lint build`
-- `dev lint check` — the static checks: wit/options/schema/`.d.ts`/per-variant
-  config freshness, prettier, cspell, nixfmt, markdownlint, markdown-link-check,
-  taplo and `cargo fmt --check`
+- `dev lint check` — the static checks:
+  wit/options/schema/`.d.ts`/`.py`/per-variant config freshness, prettier,
+  cspell, nixfmt, markdownlint, markdown-link-check, taplo and
+  `cargo fmt --check`
 - `dev lint test` — the same tasks as `dev test`
 - `dev lint nix [--all-systems]` — `nix flake check --show-trace` (optionally
   across systems)
@@ -523,8 +545,8 @@ until you need to do a final pass on all tests. Do not use anything other than
 `dev test fast` unless the user specifically demands for it.
 
 Because `build.rs` cross-compiles the bundled guests (for the
-`runtime-rhai`/`mock`/`runtime-js` features) for `wasm32-wasip2`, building those
-features **from source** needs that target and `wasm-tools` on PATH (both
-provided by the dev shell). The published crate embeds the vendored components
-instead, so consumers need neither (the WAT comes from the `wasmprinter`
-build-dep and the AOT from the `wasmtime` build-dep).
+`runtime-rhai`/`runtime-js`/`runtime-python`/`mock` features) for
+`wasm32-wasip2`, building those features **from source** needs that target and
+`wasm-tools` on PATH (both provided by the dev shell). The published crate
+embeds the vendored components instead, so consumers need neither (the WAT comes
+from the `wasmprinter` build-dep and the AOT from the `wasmtime` build-dep).

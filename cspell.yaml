@@ -54,3 +54,7 @@ ignoreWords:
   - deque
   - debouncer
   - rescan
+  - rustpython
+  - datamodel
+  - pydantic
+  - pyi

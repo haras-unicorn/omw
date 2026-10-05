@@ -7,6 +7,8 @@ ignorePaths:
   - schema.test.json
   - schema.d.ts
   - schema.test.d.ts
+  - schema.py
+  - schema.test.py
 ignoreWords:
   - tzdata
   - adduser

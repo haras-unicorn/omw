@@ -39,6 +39,13 @@ let
       source = "brain.js";
       script = "brain.js";
     }
+    {
+      key = "python";
+      suffix = "-python";
+      runtime = "python";
+      source = "brain.py";
+      script = "brain.py";
+    }
   ];
 
   formats = [
@@ -428,6 +435,7 @@ in
               tenere
               packages.rust
               config.packages.json-schema-to-typescript
+              pkgs.datamodel-code-generator
             ]
             ++ packages.nativeBuildInputs;
 

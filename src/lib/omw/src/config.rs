@@ -460,6 +460,8 @@ mod schema_tests {
     asserts("rhai");
     #[cfg(feature = "runtime-js")]
     asserts("js");
+    #[cfg(feature = "runtime-python")]
+    asserts("python");
     #[cfg(feature = "mock")]
     asserts("mock");
     // The generic escape hatch keeps custom kinds valid.

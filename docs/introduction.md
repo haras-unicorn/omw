@@ -17,7 +17,7 @@ openai endpoint, and wasm runtime:
 ```
 
 The testing schema (`omw-test`), describing the mock provider/tooling/endpoint
-and the wasm/rhai/js runtimes:
+and the wasm/rhai/js/python runtimes:
 
 ```json
 {{#include ../assets/schema.test.json}}

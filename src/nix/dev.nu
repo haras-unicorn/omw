@@ -98,9 +98,13 @@ def "main format" [] {
   (omw config types ./assets/schema.test.json OmwTestConfig)
     | prettier --parser typescript
     | save -f "./assets/schema.test.d.ts"
-  (omw all types)
+  datamodel-codegen --disable-timestamp --input ./assets/schema.json --input-file-type jsonschema --output ./assets/schema.py --output-model-type pydantic_v2.BaseModel
+  datamodel-codegen --disable-timestamp --input ./assets/schema.test.json --input-file-type jsonschema --output ./assets/schema.test.py --output-model-type pydantic_v2.BaseModel
+  (omw all js types)
     | prettier --parser typescript
     | save -f "./src/wasm/omw-wasm-js-interpreter/omw.all.d.ts"
+  (omw all python types)
+    | save -f "./src/wasm/omw-wasm-python-interpreter/omw.all.py"
   prettier --write .
   nixfmt ...(fd '.*\.nix$' . | lines)
   cargo fmt --all
@@ -169,10 +173,38 @@ def "main lint check" [] {
   }
   if ((open --raw ./src/wasm/omw-wasm-js-interpreter/omw.all.d.ts
     | str trim)
-    != (omw all types
+    != (omw all js types
     | prettier --parser typescript
     | str trim)) {
     print -e "omw.all.d.ts doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./assets/schema.py
+    | str trim)
+    != (datamodel-codegen
+      --disable-timestamp
+      --input ./assets/schema.json
+      --input-file-type jsonschema
+      --output-model-type pydantic_v2.BaseModel
+    | str trim)) {
+    print -e "schema.py doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./assets/schema.test.py
+    | str trim)
+    != (datamodel-codegen
+      --disable-timestamp
+      --input ./assets/schema.test.json
+      --input-file-type jsonschema
+      --output-model-type pydantic_v2.BaseModel
+    | str trim)) {
+    print -e "schema.test.py doesn't match generated"
+    exit 1
+  }
+  if ((open --raw ./src/wasm/omw-wasm-python-interpreter/omw.all.py
+    | str trim)
+    != (omw all python types | str trim)) {
+    print -e "omw.all.py doesn't match generated"
     exit 1
   }
   let variants = (omw brain example variants)
@@ -252,7 +284,7 @@ def "main release" [] {
   rm -rf ./src/lib/omw/wasm
   touch ./src/lib/omw/build.rs
   with-env { OMW_WASM_BUILD_VENDORED: "1" } {
-    cargo build --release -p omw --features runtime-rhai,runtime-js,mock
+    cargo build --release -p omw --features runtime-rhai,runtime-js,runtime-python,mock
   }
   let dir = "./src/lib/omw/wasm"
   for guest in (omw guests) {
@@ -292,7 +324,7 @@ def "main build" [] {
     (cachix pin haras-releases
       $"($row.attr)-(omw system)"
       $path
-      --keep-days 365)
+      --keep-revisions 2)
   }
 }
 
@@ -433,7 +465,7 @@ def "omw brain example cases" [] {
     | path dirname
 }
 
-def "omw all types" [] {
+def "omw all js types" [] {
   [
     (open --raw ./assets/schema.d.ts)
     (open --raw ./assets/schema.test.d.ts)
@@ -441,10 +473,48 @@ def "omw all types" [] {
   ] | str join "\n\n"
 }
 
+def "omw all python types" [] {
+  let header = [
+    "# The bundled python type declarations: the deployment and testing config"
+    "# models (each namespaced under `OmwConfig` / `OmwTestConfig`) and the"
+    "# hand-written stubs for the `omw` global."
+    ""
+    "from __future__ import annotations"
+    ""
+    "from enum import Enum"
+    "from typing import Any, Literal, Optional"
+    ""
+    "from pydantic import BaseModel, ConfigDict, Field, RootModel, conint"
+    ""
+    ""
+  ] | str join "\n"
+  let namespace = {|name: string, file: path|
+    let body = (
+      open --raw $file
+      | lines
+      | skip while {|line| not ($line | str starts-with "class ") }
+      | each {|line| if ($line | is-empty) { $line } else { "  " + $line } }
+      | str join "\n"
+    )
+    "class " + $name + ":\n" + $body
+  }
+  [
+    $header
+    (do $namespace OmwConfig ./assets/schema.py)
+    ""
+    ""
+    (do $namespace OmwTestConfig ./assets/schema.test.py)
+    ""
+    ""
+    (open --raw ./src/wasm/omw-wasm-python-interpreter/omw.pyi)
+  ] | str join "\n"
+}
+
 def "omw guests" [] {
   [
     omw-wasm-rhai-interpreter
     omw-wasm-js-interpreter
+    omw-wasm-python-interpreter
     omw-wasm-mock
   ]
 }

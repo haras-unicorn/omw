@@ -35,7 +35,7 @@ declare namespace OmwTestConfig {
    */
   export type EndpointImpls =
     | (
-        | (Config6 & {
+        | (Config7 & {
             kind: "mock";
             [k: string]: unknown;
           })
@@ -58,7 +58,7 @@ declare namespace OmwTestConfig {
      */
     endpoint?:
       | (
-          | (Config6 & {
+          | (Config7 & {
               kind: "mock";
               [k: string]: unknown;
             })
@@ -108,9 +108,9 @@ declare namespace OmwTestConfig {
    * Impl-specific configuration for the endpoint mock.
    *
    * This interface was referenced by `Config`'s JSON-Schema
-   * via the `definition` "Config6".
+   * via the `definition` "Config7".
    */
-  export interface Config6 {
+  export interface Config7 {
     requests?: Request[];
     [k: string]: unknown;
   }
@@ -324,6 +324,10 @@ declare namespace OmwTestConfig {
           kind: "js";
           [k: string]: unknown;
         })
+      | (Config6 & {
+          kind: "python";
+          [k: string]: unknown;
+        })
       | ImplConfig;
   }
   /**
@@ -406,6 +410,35 @@ declare namespace OmwTestConfig {
    * via the `definition` "Config5".
    */
   export interface Config5 {
+    allow_blocking_current_thread?: boolean;
+    allow_ip_name_lookup?: boolean;
+    allow_tcp?: boolean;
+    allow_udp?: boolean;
+    args?: string[];
+    env?: {
+      [k: string]: Secret;
+    };
+    inherit_args?: boolean;
+    inherit_env?: boolean;
+    inherit_network?: boolean;
+    inherit_stderr?: boolean;
+    inherit_stdin?: boolean;
+    inherit_stdio?: boolean;
+    inherit_stdout?: boolean;
+    initial_cwd?: string | null;
+    insecure_random_seed?: number | null;
+    interpreter?: string | null;
+    max_random_size?: number | null;
+    preopens?: Preopen[];
+    [k: string]: unknown;
+  }
+  /**
+   * Impl-specific configuration for the python runtime.
+   *
+   * This interface was referenced by `Config`'s JSON-Schema
+   * via the `definition` "Config6".
+   */
+  export interface Config6 {
     allow_blocking_current_thread?: boolean;
     allow_ip_name_lookup?: boolean;
     allow_tcp?: boolean;
@@ -668,6 +701,10 @@ declare namespace OmwTestConfig {
         })
       | (Config5 & {
           kind: "js";
+          [k: string]: unknown;
+        })
+      | (Config6 & {
+          kind: "python";
           [k: string]: unknown;
         })
       | ImplConfig;
