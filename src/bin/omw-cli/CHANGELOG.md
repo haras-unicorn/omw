@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.6...omw-cli-v0.1.7) - 2026-10-05
+
+### Added
+
+- python runtime via rustpython ([#100](https://github.com/haras-unicorn/omw/pull/100))
+
 ## [0.1.6](https://github.com/haras-unicorn/omw/compare/omw-cli-v0.1.4...omw-cli-v0.1.6) - 2026-10-03
 
 ### Added
