@@ -16,6 +16,8 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod env;
+
 /// The on-disk format a configuration (or `[assertions]` section) is written
 /// in. Inferred from a file's extension, or chosen explicitly with `--format`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

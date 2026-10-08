@@ -152,10 +152,10 @@ pub fn load(
   path: &Path,
   format: Option<Format>,
   bases: &[PathBuf],
+  registries: &omw::agent::Registries,
 ) -> Result<(Config, Assertions)> {
   let merged = merged_value(path, format, bases)?;
-
-  let env = ::config::Environment::with_prefix("OMW_TEST").separator("__");
+  let overlay = registries.env_overlay("OMW_TEST");
   let source: ::config::Config = ::config::Config::builder()
     .add_source(
       ::config::File::from_str(
@@ -164,7 +164,14 @@ pub fn load(
       )
       .required(false),
     )
-    .add_source(env)
+    .add_source(
+      ::config::File::from_str(
+        &serde_json::to_string(&overlay)
+          .context("failed to encode the environment overlay")?,
+        ::config::FileFormat::Json,
+      )
+      .required(false),
+    )
     .build()
     .context("failed to build configuration")?;
   let config: Config = source
@@ -337,10 +344,19 @@ fn deep_merge(base: &mut Value, overlay: Value) {
 /// The process-wide testing tunables, read from the `OMW_TEST__` environment
 /// overlay (default when unset). Used by the `--watch` debounce, which is not
 /// tied to any single test config.
-pub fn env_tunables() -> Result<omw::config::Tunables> {
-  let env = ::config::Environment::with_prefix("OMW_TEST").separator("__");
+pub fn env_tunables(
+  registries: &omw::agent::Registries,
+) -> Result<omw::config::Tunables> {
+  let overlay = registries.env_overlay("OMW_TEST");
   let source = ::config::Config::builder()
-    .add_source(env)
+    .add_source(
+      ::config::File::from_str(
+        &serde_json::to_string(&overlay)
+          .context("failed to encode the environment overlay")?,
+        ::config::FileFormat::Json,
+      )
+      .required(false),
+    )
     .build()
     .context("failed to build the testing tunables")?;
   match source.get::<omw::config::Tunables>("tunables") {
@@ -435,6 +451,20 @@ mod tests {
   use serial_test::serial;
   use std::collections::HashMap;
   use tempfile::tempdir;
+
+  /// Load with the built-in registries; tests do not register custom back ends.
+  fn load(
+    path: &Path,
+    format: Option<Format>,
+    bases: &[PathBuf],
+  ) -> anyhow::Result<(Config, Assertions)> {
+    super::load(path, format, bases, &omw::agent::Registries::default())
+  }
+
+  /// Testing tunables with the built-in registries.
+  fn env_tunables() -> anyhow::Result<omw::config::Tunables> {
+    super::env_tunables(&omw::agent::Registries::default())
+  }
 
   fn write(dir: &Path, rel: &str, contents: &str) -> anyhow::Result<PathBuf> {
     let path = dir.join(rel);
@@ -969,6 +999,41 @@ mod tests {
       .ok_or_else(|| anyhow::anyhow!("missing openai provider"))?;
     assert_eq!(provider.kind, "openai");
     assert_eq!(provider.params["api_key"], "from-env");
+    Ok(())
+  }
+
+  #[test]
+  #[serial(env)]
+  fn env_overlay_keeps_free_form_map_keys() -> anyhow::Result<()> {
+    // Only rely on back ends `omw-test` enables: it builds without
+    // `tooling-mcp`, so MCP's `env` map is not a registered opaque path here.
+    // The mock tooling's `initial_resource_contents` is always available.
+    let dir = tempdir()?;
+    let path = write(
+      dir.path(),
+      "omw.test.toml",
+      r#"
+        [tooling.mock]
+        kind = "mock"
+      "#,
+    )?;
+
+    let mut vars = HashMap::new();
+    vars.insert(
+      "OMW_TEST__TOOLING__MOCK__INITIAL_RESOURCE_CONTENTS__SomeURI".to_owned(),
+      "content".to_owned(),
+    );
+    let _vars = EnvSet::new(vars);
+
+    let (cfg, _) = load(&path, None, &[])?;
+    let mock = cfg
+      .tooling
+      .get("mock")
+      .ok_or_else(|| anyhow::anyhow!("missing mock tooling"))?;
+    assert_eq!(
+      mock.params["initial_resource_contents"]["SomeURI"],
+      "content"
+    );
     Ok(())
   }
 

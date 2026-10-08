@@ -3934,6 +3934,7 @@ dependencies = [
  "omw-output",
  "predicates",
  "rustls",
+ "serde_json",
  "serial_test",
  "tempfile",
  "tokio",
