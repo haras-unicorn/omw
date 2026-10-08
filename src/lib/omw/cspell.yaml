@@ -7,7 +7,6 @@ ignoreWords:
   - wasmprinter
   - prebuild
   - wasms
-  - kanal
   - reqwest
   - chrono
   - serde

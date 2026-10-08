@@ -485,8 +485,9 @@ A Cargo workspace with the crates below plus a single WIT contract.
   `AgentContext` (`ctx.rt`). `provider.chat-stream` spawns a chat-stream pump on
   `rt` that delivers `chat-delta`/`chat-end` events into the inbox via
   `bus.deliver` (using `futures_util` + `tokio::select!`), and the
-  `tooling.*`/`host.try-recv` use `ctx.block_on_reload`. `kanal` is used only
-  for the per-agent `MessageBus` inboxes.
+  `tooling.*`/`host.try-recv` use `ctx.block_on_reload`. `crossbeam-channel` is
+  used only for the per-agent `MessageBus` inboxes (its `recv_timeout` parks the
+  thread rather than spinning).
 
 - Keep the `omw` WIT world(s) in sync with `runtime/bindings.rs` (host),
   `install_omw` (Rhai guest), the `omw` global (JS guest) and the `omw` global
