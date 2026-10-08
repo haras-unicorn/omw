@@ -1,10 +1,12 @@
-//! Per-agent memory that survives hot reloads.
+//! Per-agent memory that survives hot reloads and `loop` restarts.
 //!
-//! Each [`AgentContext`](crate::host::ctx::AgentContext) owns one `Memory`,
-//! so agents never share keys and cannot race each other. The same context is
-//! reused across reload iterations (see `agent::run_agent`), so values set
-//! before a reload are still visible after it. A fresh process (or a fresh
-//! context in tests) starts empty.
+//! Each agent owns one `Memory`, so agents never share keys and cannot race
+//! each other. Hot reloads reuse the same
+//! [`AgentContext`](crate::host::ctx::AgentContext), and `loop` builds a fresh
+//! context per iteration but adopts the agent's store from the supervisor's
+//! `Shared::memories` (see `agent::run_agent`), so values set in one iteration
+//! are still visible in the next. A fresh process (or a fresh context in
+//! tests) starts empty.
 //!
 //! Treat entries like variables: subscription handles, state-machine state,
 //! small checkpoints. Not a database, not a blob store.

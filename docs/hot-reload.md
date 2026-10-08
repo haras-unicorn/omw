@@ -35,6 +35,12 @@ Preserved across reload:
   same `AgentContext` is reused, so stored handles and state-machine state carry
   over. Treat entries like variables, not a database.
 
+The same holds for plain `loop` without `--watch`: a failed (or completed)
+iteration restarts the brain but keeps the agent's memory, exactly like the bus.
+`loop` builds a fresh `AgentContext` per iteration and adopts the agent's store
+from the supervisor, which seeds it once at startup — so an iteration never
+resets runtime values back to the configured `[memory.<agent>]` seeds.
+
 Discarded on reload:
 
 - Wasm memory/stack (a fresh `Store` per run).

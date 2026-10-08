@@ -12,15 +12,17 @@ A Cargo workspace with the crates below plus a single WIT contract.
 - `src/lib/omw` — the `omw` library crate: the agent runtime logic, a build
   script (`build.rs`) plus the vendored WIT contract under `wit/`.
   - `agent.rs` — bootstrap: turns a parsed config into provider + tooling +
-    bus + `AgentContext`, then runs the agent's runtime for one iteration or
-    loops it. `run_agents`/`loop_agents` also have `_traced` twins that attach
-    an optional `host/trace.rs` channel and, for `run`, return the collected
-    trace stream. Every public entry takes a caller-owned `shutdown::Shutdown`
-    latch: the library installs no OS signal subscription (the binary owns
-    that). A `pub(crate)` controlled path (`run_agents_controlled` +
-    `StopRegistry`) lets `omw::testing` seed memory and stop an
-    `outcome = "asserted"` agent on settle via a per-agent stop flag on the
-    context.
+    bus + per-agent memory + `AgentContext`, then runs the agent's runtime for
+    one iteration or loops it. The process-wide `Shared` holds the bus and one
+    seeded `Memory` per agent, so both survive `loop` restarts and `--watch`
+    reloads (each iteration builds a fresh context but adopts the shared store).
+    `run_agents`/`loop_agents` also have `_traced` twins that attach an optional
+    `host/trace.rs` channel and, for `run`, return the collected trace stream.
+    Every public entry takes a caller-owned `shutdown::Shutdown` latch: the
+    library installs no OS signal subscription (the binary owns that). A
+    `pub(crate)` controlled path (`run_agents_controlled` + `StopRegistry`) lets
+    `omw::testing` seed memory and stop an `outcome = "asserted"` agent on
+    settle via a per-agent stop flag on the context.
 
   - `config.rs` — the config model plus the `Format` enum (TOML / YAML / JSON,
     inferred from a path's extension or chosen explicitly with `--format`, with
@@ -204,9 +206,11 @@ A Cargo workspace with the crates below plus a single WIT contract.
       registers an injection instead.
 
     - `memory.rs` is the per-agent string store (`DashMap`) that survives hot
-      reloads via the reused `AgentContext`; guests expose a raw `memory_get` /
-      `memory_set` pair plus a JSON-parsing `memory_get_as` / `memory_set_as`
-      pair over it.
+      reloads via the reused `AgentContext` and `loop` restarts via the
+      supervisor's shared per-agent store (`Shared::memories`, seeded once at
+      bootstrap; `AgentContext::set_memory` adopts it); guests expose a raw
+      `memory_get` / `memory_set` pair plus a JSON-parsing `memory_get_as` /
+      `memory_set_as` pair over it.
 
     - `endpoint.rs` is the per-process endpoint session registry (`open` /
       `push` / `abort` / the normal `close`) that buffers an agent's streamed
