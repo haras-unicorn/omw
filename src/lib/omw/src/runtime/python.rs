@@ -66,6 +66,10 @@ impl Factory for PythonWasmRuntime {
     let config = Config::deserialize(params.into_deserializer())?;
     Ok(Arc::new(PythonWasmRuntime::new(name.to_owned(), config)?))
   }
+
+  fn opaque_fields() -> &'static [&'static str] {
+    &["env"]
+  }
 }
 
 #[async_trait::async_trait]

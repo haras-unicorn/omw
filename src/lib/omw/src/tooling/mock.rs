@@ -196,6 +196,10 @@ impl Factory for MockTooling {
       delay: Duration::from_millis(config.delay_ms),
     }))
   }
+
+  fn opaque_fields() -> &'static [&'static str] {
+    &["initial_resource_contents"]
+  }
 }
 
 impl MockTooling {

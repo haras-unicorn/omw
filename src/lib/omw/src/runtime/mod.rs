@@ -102,6 +102,15 @@ pub trait Factory: Send + Sync + 'static {
   fn build(name: &str, params: &Value) -> anyhow::Result<Arc<Self>>
   where
     Self: Sized;
+
+  /// Params of this back end that are free-form maps with user-chosen keys,
+  /// relative to the impl params root. The `OMW__` environment overlay keeps
+  /// the case of segments under these fields (a wasm runtime's WASI `env`);
+  /// everything else is lowercased so it still matches the config model.
+  /// Defaults to none.
+  fn opaque_fields() -> &'static [&'static str] {
+    &[]
+  }
 }
 
 type FactoryFn =
@@ -113,6 +122,7 @@ type FactoryFn =
 /// [`Registry::register_factory`] before the supervisor builds entries.
 pub struct Registry {
   factories: std::collections::HashMap<&'static str, FactoryFn>,
+  opaque: std::collections::HashMap<&'static str, &'static [&'static str]>,
 }
 
 impl Registry {
@@ -120,11 +130,20 @@ impl Registry {
   pub fn new() -> Self {
     Self {
       factories: std::collections::HashMap::new(),
+      opaque: std::collections::HashMap::new(),
     }
   }
 
-  fn insert(&mut self, kind: &'static str, factory: FactoryFn) {
+  fn insert(
+    &mut self,
+    kind: &'static str,
+    factory: FactoryFn,
+    opaque: &'static [&'static str],
+  ) {
     self.factories.insert(kind, factory);
+    if !opaque.is_empty() {
+      self.opaque.insert(kind, opaque);
+    }
   }
 
   /// Register a back-end type implementing [`Runtime`] plus [`Factory`].
@@ -139,7 +158,7 @@ impl Registry {
     }
     let factory: FactoryFn =
       Arc::new(|name, params| Ok(T::build(name, params)? as Arc<dyn Runtime>));
-    self.insert(kind, factory);
+    self.insert(kind, factory, T::opaque_fields());
     Ok(())
   }
 
@@ -159,7 +178,7 @@ impl Registry {
     if self.factories.contains_key(kind) {
       anyhow::bail!("duplicate runtime kind {kind:?}");
     }
-    self.insert(kind, Arc::new(factory));
+    self.insert(kind, Arc::new(factory), &[]);
     Ok(())
   }
 
@@ -168,6 +187,17 @@ impl Registry {
     let mut kinds: Vec<&'static str> = self.factories.keys().copied().collect();
     kinds.sort_unstable();
     kinds
+  }
+
+  /// Every free-form (case-preserving) param path the registered kinds
+  /// declare, relative to an entry. Each declared param is a single-segment
+  /// path here.
+  pub fn opaque_paths(&self) -> Vec<Vec<&'static str>> {
+    self
+      .opaque
+      .values()
+      .flat_map(|fields| fields.iter().map(|field| vec![*field]))
+      .collect()
   }
 
   /// Build a [`RuntimeEntry`] from a config entry via the registered factory.

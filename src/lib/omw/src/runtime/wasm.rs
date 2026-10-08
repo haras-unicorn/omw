@@ -39,6 +39,10 @@ impl Factory for WasmRuntime {
       last_good: Arc::new(Mutex::new(None)),
     }))
   }
+
+  fn opaque_fields() -> &'static [&'static str] {
+    &["env"]
+  }
 }
 
 #[async_trait::async_trait]

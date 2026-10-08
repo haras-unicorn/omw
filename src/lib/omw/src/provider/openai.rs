@@ -48,6 +48,10 @@ impl super::Factory for OpenAIProvider {
     tracing::debug!(name, config = ?config, "built openai provider");
     Ok(Arc::new(OpenAIProvider::new(config)?))
   }
+
+  fn opaque_fields() -> &'static [&'static str] {
+    &["params"]
+  }
 }
 
 impl OpenAIProvider {

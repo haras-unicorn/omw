@@ -54,6 +54,8 @@ Three things follow from this:
   separator, e.g. `OMW__PROVIDERS__OPENAI__API_KEY`) override file values at
   runtime, so API keys never have to live in the Nix store. Set them with the
   `environment` option (systemd `Environment=`) or an `environmentFile`.
+  Structural segments are lowercased, but keys inside a free-form map (an MCP
+  server's `env`, a provider's `params`, `memory` keys) keep their case.
 - **Logs go to the journal natively.** systemd connects the service's stdio to
   the journal, so omw's `auto` log format selects journald and writes structured
   fields instead of raw lines. Read them with `journalctl -u omw`, or `-o json`

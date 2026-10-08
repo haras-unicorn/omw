@@ -166,6 +166,10 @@ impl Factory for MCPTooling {
       connected: tokio::sync::Mutex::new(None),
     }))
   }
+
+  fn opaque_fields() -> &'static [&'static str] {
+    &["env"]
+  }
 }
 
 /// Establish an rmcp client over the configured transport and run the

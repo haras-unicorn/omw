@@ -35,7 +35,10 @@ pub async fn run() -> ExitCode {
   tracing::info!(command = ?cli.command, "omw-test starting");
 
   let RunResult { summary, result } = match cli.command {
-    Command::Run { args } => run_tests(args, live.as_ref()).await,
+    Command::Run { args } => {
+      let registries = std::sync::Arc::new(omw::agent::Registries::default());
+      run_tests(args, live.as_ref(), &registries).await
+    }
     Command::Schema { output } => RunResult::plain(generate_schema(&output)),
     #[cfg(feature = "compile-wasm")]
     Command::CompileWasm { args } => RunResult::plain(compile_wasm(&args)),
@@ -101,12 +104,13 @@ fn generate_schema(path: &Path) -> Result<()> {
 async fn run_tests(
   args: RunArgs,
   live: Option<&omw_output::Live>,
+  registries: &std::sync::Arc<omw::agent::Registries>,
 ) -> RunResult {
   // The live view is process-wide and starts before any test config is
   // loaded, so only the `OMW_TEST__` env overlay can drive it. Best-effort:
   // an unreadable overlay keeps the crate-local defaults (the watch branch
   // below still fails hard on it).
-  let tunables = collect::env_tunables();
+  let tunables = collect::env_tunables(registries);
   if let Some(live) = live
     && let Ok(tunables) = &tunables
   {
@@ -128,7 +132,7 @@ async fn run_tests(
         resolve_jobs(args.jobs),
       );
     }
-    let summary = match run_pass(&tests, &args, live).await {
+    let summary = match run_pass(&tests, &args, live, registries).await {
       Ok(summary) => summary,
       Err(error) => return RunResult::err(error),
     };
@@ -172,7 +176,7 @@ async fn run_tests(
       resolve_jobs(args.jobs),
     );
   }
-  report_pass(run_pass(&tests, &args, live).await);
+  report_pass(run_pass(&tests, &args, live, registries).await);
   let mut known: HashSet<PathBuf> = tests
     .iter()
     .map(|test| collect::canonical_path(&test.config))
@@ -218,7 +222,7 @@ async fn run_tests(
       total = tests.len(),
       "re-running affected tests"
     );
-    report_pass(run_pass(&affected, &args, live).await);
+    report_pass(run_pass(&affected, &args, live, registries).await);
   }
 }
 
@@ -314,6 +318,7 @@ async fn run_pass(
   tests: &[Test],
   args: &RunArgs,
   live: Option<&omw_output::Live>,
+  registries: &std::sync::Arc<omw::agent::Registries>,
 ) -> Result<PassSummary> {
   if tests.is_empty() {
     tracing::warn!(path = %args.path.display(), "no tests found");
@@ -355,11 +360,12 @@ async fn run_pass(
       let test = tests[index].clone();
       let format = args.format;
       let label = test.label().to_owned();
+      let registries = std::sync::Arc::clone(registries);
       if let Some(live) = live {
         live.begin_test(label.clone());
       }
       set.spawn(async move {
-        let dump = run_one(&test, format)
+        let dump = run_one(&test, format, &registries)
           .instrument(tracing::info_span!("test", test = %label))
           .await;
         (index, dump)
@@ -535,10 +541,14 @@ impl TestDump {
   }
 }
 
-async fn run_one(test: &Test, format: Option<Format>) -> TestDump {
+async fn run_one(
+  test: &Test,
+  format: Option<Format>,
+  registries: &std::sync::Arc<omw::agent::Registries>,
+) -> TestDump {
   let label = test.label().to_owned();
   let (mut config, assertions) =
-    match collect::load(&test.config, format, &test.bases) {
+    match collect::load(&test.config, format, &test.bases, registries) {
       Ok(pair) => pair,
       Err(error) => {
         return TestDump {
@@ -551,8 +561,7 @@ async fn run_one(test: &Test, format: Option<Format>) -> TestDump {
       }
     };
   collect::resolve_scripts(&mut config, &test.config);
-  let registries = omw::agent::Registries::default();
-  let report = omw::testing::Harness::new(&config, &registries, &assertions)
+  let report = omw::testing::Harness::new(&config, registries, &assertions)
     .run()
     .await;
   let passed = report.passed();

@@ -34,15 +34,23 @@ A Cargo workspace with the crates below plus a single WIT contract.
     seeded `[memory.<agent>]` values (a string seed is stored verbatim and
     anything else is JSON-stringified, then inserted into the agent's memory
     before its brain runs, so they persist across hot reloads like any other
-    memory). `Config::schema_json` emits the machine-readable schema; each impl
-    category contributes a `pub(crate)` implementation `JsonSchema` that unions
-    the built-in kinds enabled in the build (openai/mcp/openai-endpoint/wasm for
-    `omw-cli`, plus the `mock` doubles and any script runtimes for `omw-test`)
-    with the generic `ImplConfig` escape hatch, so the schema follows the
-    crate's features (`schema.rs` holds the shared `kind_variant` helper). The
-    global `[tunables]` (`Tunables`) carries the size/timeout/backoff knobs
-    (plus the live-view `tui_tick_ms` / `tui_tab_capacity`), each with a default
-    fn and accessor.
+    memory). The environment overlay is case-aware (`config/env.rs`, exposed as
+    `Registries::env_overlay`): it is handed full, config-root-relative _opaque
+    path_ patterns (with `*` matching one dynamic segment) and lowercases
+    segments up to a match while keeping the map keys after it, so an MCP
+    server's `env`, a provider's request-body `params` and `memory` keys keep
+    their case. Which params are free-form is declared by each back end through
+    the `opaque_fields` method on the four `Factory` traits; the registries
+    carry it and hand `Registries` their `opaque_paths`, so `config` never
+    hardcodes an impl field. `Config::schema_json` emits the machine-readable
+    schema; each impl category contributes a `pub(crate)` implementation
+    `JsonSchema` that unions the built-in kinds enabled in the build
+    (openai/mcp/openai-endpoint/wasm for `omw-cli`, plus the `mock` doubles and
+    any script runtimes for `omw-test`) with the generic `ImplConfig` escape
+    hatch, so the schema follows the crate's features (`schema.rs` holds the
+    shared `kind_variant` helper). The global `[tunables]` (`Tunables`) carries
+    the size/timeout/backoff knobs (plus the live-view `tui_tick_ms` /
+    `tui_tab_capacity`), each with a default fn and accessor.
 
   - `log.rs` — initializes the structured, leveled JSON tracing subscriber
     (`RUST_LOG`-driven via `EnvFilter`, default `info`).
@@ -463,8 +471,8 @@ of the library at all.
 
 | Module               | `pub` (embedding contract)                                                                                                                                                                                           | `pub(crate)` / private                                                                                                                                                                                                                              |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | `Registries`, `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced` (each takes a caller-owned `Shutdown`)                                                                                          | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                                                                                |
-| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`, `Format`                                                                                                                                                          | default fns private                                                                                                                                                                                                                                 |
+| `agent`              | `Registries` (`new` / `env_overlay`), `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced` (each takes a caller-owned `Shutdown`)                                                                  | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                                                                                |
+| `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`, `Format`                                                                                                                                                          | `env` (`env_overlay` + the `OpaquePath` pattern type) is `pub(crate)`; default fns private                                                                                                                                                          |
 | `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `Usage`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                                                               |
 | `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`, `ToolCallResult`), `register_toolings!`                                                   | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                                                            |
 | `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` / `python` plus `engine` / `bindings` / `host` private                                                                                                                                                                       |

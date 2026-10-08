@@ -19,7 +19,12 @@ from stdin, which needs `--format` since a stream has no extension.
 [Docker page](./docker.md#compose) walks through it. Secrets layer over the file
 from `OMW__`-prefixed environment variables (`__` separator), e.g.
 `OMW__PROVIDERS__OPENAI__API_KEY` overrides `providers.openai.api_key` — keep
-keys out of the file and supply them from the environment.
+keys out of the file and supply them from the environment. Structural segments
+are matched case-insensitively (they are lowercased), but the keys inside a
+free-form map keep the case you write, since those keys are chosen by you:
+`OMW__TOOLING__MCP__ENV__GITHUB_TOKEN` sets an MCP server env var named
+`GITHUB_TOKEN`, and `OMW__MEMORY__ALICE__FavoriteColor` seeds a `FavoriteColor`
+memory key.
 
 ## Workspace convention
 

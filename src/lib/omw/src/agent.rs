@@ -63,6 +63,49 @@ impl Registries {
       endpoints: crate::endpoint::Registry::new(),
     }
   }
+
+  /// Build the case-aware `OMW__` environment overlay from the free-form
+  /// params the registered back ends declare. Layered over the config file, it
+  /// keeps map keys the user chose (an MCP server's `env`, a provider's
+  /// request-body `params`, `memory` keys) in their original case while
+  /// lowercasing structural segments.
+  pub fn env_overlay(&self, prefix: &str) -> serde_json::Value {
+    let mut opaque: Vec<crate::config::env::OpaquePath> = Vec::new();
+    qualify(
+      &mut opaque,
+      "providers",
+      true,
+      self.providers.opaque_paths(),
+    );
+    qualify(&mut opaque, "tooling", true, self.tooling.opaque_paths());
+    qualify(&mut opaque, "runtime", true, self.runtimes.opaque_paths());
+    qualify(
+      &mut opaque,
+      "endpoint",
+      false,
+      self.endpoints.opaque_paths(),
+    );
+    opaque.push(vec!["memory", "*"]);
+    crate::config::env::env_overlay(prefix, &opaque)
+  }
+}
+
+/// Prefix each of `paths` with `category` (and the `*` name wildcard when the
+/// category's entries are keyed by name), appending the results to `out`.
+fn qualify(
+  out: &mut Vec<crate::config::env::OpaquePath>,
+  category: &'static str,
+  named: bool,
+  paths: Vec<Vec<&'static str>>,
+) {
+  for path in paths {
+    let mut full = vec![category];
+    if named {
+      full.push("*");
+    }
+    full.extend(path);
+    out.push(full);
+  }
 }
 
 impl Default for Registries {
