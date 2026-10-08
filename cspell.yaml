@@ -26,6 +26,10 @@ ignoreWords:
   - prebuild
   - wasms
   - wasi
+  - cwasm
+  - rustflags
+  - rustc
+  - cdylib
   - strftime
   - envsubst
   - rmcp

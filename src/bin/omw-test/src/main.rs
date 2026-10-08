@@ -15,8 +15,6 @@ mod log;
 mod run;
 mod stdio;
 mod tls;
-#[cfg(feature = "compile-wasm")]
-mod wasm;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {

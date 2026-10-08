@@ -1,28 +1,38 @@
 //! Cross-build one or more rust brains for `wasm32-wasip2` and write each
-//! ready-to-load component next to its source as `<stem>.wasm`. Mirrors the
-//! `omw` `build.rs`: a throwaway crate is scaffolded in the system temp dir
-//! around each single `brain.rs` (with the in-repo `omw-wasm-rust` SDK), built
-//! with a dedicated `--target-dir` (the outer `cargo` run may still hold the
-//! workspace build lock), then wrapped with `wasm-tools component new` when
-//! the output is a bare core module rather than a component already.
+//! ready-to-load component next to its source as `<stem>.wasm`. Backs the
+//! internal `omw-test compile-wasm` dev helper.
+//!
+//! Mirrors the component build in [`crate::build_component`]: a throwaway crate
+//! is scaffolded in the system temp dir around each single `brain.rs` (with the
+//! in-repo `omw-wasm-rust` SDK), built with a dedicated `--target-dir` (the
+//! outer `cargo` run may still hold the workspace build lock), then wrapped with
+//! `wasm-tools component new` when the output is a bare core module rather than
+//! a component already.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
-use crate::cli::CompileWasmArgs;
-
-/// The in-repo SDK, relative to this crate's manifest dir.
+/// The in-repo SDK, relative to this crate's manifest dir (same depth as
+/// `src/bin/omw-test`, so the path also works from there).
 const SDK: &str = "../../lib/omw-wasm-rust";
 
-/// Compile every rust brain under `args.path` and return the written
-/// `<stem>.wasm` paths.
-pub fn build(args: &CompileWasmArgs) -> Result<Vec<PathBuf>> {
-  let sources = collect_sources(&args.path)?;
-  let sdk = args.sdk.clone().unwrap_or_else(default_sdk);
+/// Compile every rust brain under `path` and return the written `<stem>.wasm`
+/// paths. `sdk` defaults to the in-repo `omw-wasm-rust` crate, `cargo` /
+/// `wasm_tools` default to the names on `PATH`, and `extra_args` are forwarded
+/// to the inner `cargo build`.
+pub fn build_brains(
+  path: &Path,
+  sdk: Option<&Path>,
+  cargo: Option<&str>,
+  wasm_tools: Option<&str>,
+  extra_args: &[String],
+) -> Result<Vec<PathBuf>> {
+  let sources = collect_sources(path)?;
+  let sdk = sdk.map(Path::to_path_buf).unwrap_or_else(default_sdk);
   let mut outputs = Vec::with_capacity(sources.len());
   for source in sources {
-    outputs.push(build_one(&source, &sdk, args)?);
+    outputs.push(build_one(&source, &sdk, cargo, wasm_tools, extra_args)?);
   }
   Ok(outputs)
 }
@@ -71,7 +81,9 @@ fn is_hidden(path: &Path) -> bool {
 fn build_one(
   source: &Path,
   sdk: &Path,
-  args: &CompileWasmArgs,
+  cargo: Option<&str>,
+  wasm_tools: Option<&str>,
+  extra_args: &[String],
 ) -> Result<PathBuf> {
   let crate_dir = crate_root(source);
   let _ = std::fs::remove_dir_all(&crate_dir);
@@ -99,8 +111,8 @@ fn build_one(
     .with_context(|| format!("failed to write {}", crate_dir.display()))?;
 
   let target = crate_dir.join("target");
-  let cargo = args.cargo.clone().unwrap_or_else(|| "cargo".to_owned());
-  let mut cmd = std::process::Command::new(&cargo);
+  let cargo = cargo.unwrap_or("cargo");
+  let mut cmd = std::process::Command::new(cargo);
   cmd.env_remove("RUSTFLAGS");
   cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
   for (key, _) in std::env::vars_os() {
@@ -117,7 +129,7 @@ fn build_one(
     .arg(crate_dir.join("Cargo.toml"))
     .arg("--target-dir")
     .arg(&target)
-    .args(&args.args)
+    .args(extra_args)
     .output()
     .with_context(|| format!("failed to run {cargo}"))?;
   if !output.status.success() {
@@ -132,7 +144,7 @@ fn build_one(
   let module = find_wasm(&profile).with_context(|| {
     format!("cross-build of {} produced no .wasm", source.display())
   })?;
-  let component = wrap(&module, args.wasm_tools.as_deref())?;
+  let component = wrap(&module, wasm_tools)?;
   let destination = source.with_extension("wasm");
   std::fs::copy(&component, &destination)
     .with_context(|| format!("failed to write {}", destination.display()))?;

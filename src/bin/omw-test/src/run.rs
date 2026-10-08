@@ -593,7 +593,14 @@ async fn run_one(
 
 #[cfg(feature = "compile-wasm")]
 fn compile_wasm(args: &CompileWasmArgs) -> Result<()> {
-  for wasm in crate::wasm::build(args)? {
+  let wasms = omw_build::build_brains(
+    &args.path,
+    args.sdk.as_deref(),
+    args.cargo.as_deref(),
+    args.wasm_tools.as_deref(),
+    &args.args,
+  )?;
+  for wasm in wasms {
     println!("{}", wasm.display());
   }
   Ok(())

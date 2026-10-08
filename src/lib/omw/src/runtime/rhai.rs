@@ -17,8 +17,8 @@ use crate::host::ctx::AgentContext;
 use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{Factory, RunOutcome, Runtime};
 
-const RHAI_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
-  include_bytes!(env!("OMW_WASM_RHAI_INTERPRETER_COMPONENT_NATIVE"));
+const RHAI_WASM_INTERPRETER_COMPONENT_WASM: &[u8] =
+  omw_runtime_rhai::COMPONENT_WASM;
 
 /// Impl-specific configuration for the Rhai runtime.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -50,7 +50,7 @@ impl RhaiWasmRuntime {
     let wasm = if let Some(interpreter) = config.interpreter.clone() {
       WasmEngine::from_path(&interpreter)?
     } else {
-      WasmEngine::from_native_bytes(RHAI_WASM_INTERPRETER_COMPONENT_NATIVE)?
+      WasmEngine::from_static_wasm(RHAI_WASM_INTERPRETER_COMPONENT_WASM)?
     };
     Ok(Self {
       name,

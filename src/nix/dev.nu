@@ -67,7 +67,7 @@ def "main test cli tenere" [] {
 def "main format" [] {
   cd (flake-root)
   for crate in (
-    (ls ./src/lib | get name | where $it != "omw-output")
+    (ls ./src/lib | get name)
     ++ (ls ./src/wasm | get name)
   ) {
     mkdir $"($crate)/wit"
@@ -122,7 +122,7 @@ def "main lint" [] {
 def "main lint check" [] {
   cd (flake-root)
   for crate in (
-    (ls ./src/lib | get name | where $it != "omw-output")
+    (ls ./src/lib | get name)
     ++ (ls ./src/wasm | get name)
   ) {
     if ((open --raw ./assets/omw.wit)
@@ -281,14 +281,17 @@ def "main release-pr" [] {
 def "main release" [] {
   cd (flake-root)
   omw setup git credentials
-  rm -rf ./src/lib/omw/wasm
-  touch ./src/lib/omw/build.rs
+  for component in (omw guests) {
+    rm -rf $"./src/lib/($component.crate)/wasm"
+    touch $"./src/lib/($component.crate)/build.rs"
+  }
   with-env { OMW_WASM_BUILD_VENDORED: "1" } {
     cargo build --release -p omw --features runtime-rhai,runtime-js,runtime-python,mock
   }
-  let dir = "./src/lib/omw/wasm"
-  for guest in (omw guests) {
-    let file = ($dir | path join $"($guest).component.wasm")
+  for component in (omw guests) {
+    let file = (
+      $"./src/lib/($component.crate)/wasm/($component.guest).component.wasm"
+    )
     if not ($file | path exists) {
       print -e $"prebuild did not produce ($file)"
       exit 1
@@ -512,10 +515,10 @@ def "omw all python types" [] {
 
 def "omw guests" [] {
   [
-    omw-wasm-rhai-interpreter
-    omw-wasm-js-interpreter
-    omw-wasm-python-interpreter
-    omw-wasm-mock
+    { guest: "omw-wasm-rhai-interpreter", crate: "omw-runtime-rhai" }
+    { guest: "omw-wasm-js-interpreter", crate: "omw-runtime-js" }
+    { guest: "omw-wasm-python-interpreter", crate: "omw-runtime-python" }
+    { guest: "omw-wasm-mock", crate: "omw-runtime-mock" }
   ]
 }
 
