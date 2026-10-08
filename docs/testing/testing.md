@@ -340,7 +340,8 @@ A string seed is stored verbatim; a table, array, number or bool is
 JSON-stringified. The brain reads a string with `memory_get` or a structured
 value with `memory_get_as` (which parses it back), like any other value. Seeded
 entries persist exactly like memory written at runtime (including across hot
-reloads). This is a first-class `omw` feature, not a test-only one.
+reloads and `loop` restarts). This is a first-class `omw` feature, not a
+test-only one.
 
 ## `outcome = "asserted"`
 

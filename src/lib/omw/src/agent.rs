@@ -6,13 +6,18 @@
 //! With `--watch`, a [`Scripts`](crate::watch::Scripts) tracks each
 //! agent's brain script: when the file changes, the agent's current run is
 //! ended cooperatively and the next iteration starts immediately. The shared
-//! registries (providers, tooling, bus, endpoint) are kept alive across
-//! reloads, so inboxes, agent subscriptions and endpoint models survive: the
-//! inbox queue is never drained or dropped on reload, and open
+//! registries (providers, tooling, bus, per-agent memory, endpoint) are kept
+//! alive across reloads, so inboxes, agent subscriptions and endpoint models
+//! survive: the inbox queue is never drained or dropped on reload, and open
 //! stream/timer/resource/tool-call pumps are cancelled unless
 //! `tunables.cancel_pumps_on_reload` is false. Rhai brains re-read
 //! `ctx.script` and wasm brains reload the component on every iteration, so no
 //! script cache needs invalidating.
+//!
+//! The same `Shared` also backs `loop`, so per-agent memory survives a failed
+//! (or completed) iteration the same way the bus does: each iteration builds a
+//! fresh `AgentContext` but adopts the agent's store from `Shared::memories`,
+//! seeded once at bootstrap.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +32,7 @@ use crate::host::bus::{MessageBus, new_uuid};
 use crate::host::ctx::AgentContext;
 use crate::host::endpoint::EndpointRegistry;
 use crate::host::events::Event;
+use crate::host::memory::Memory;
 use crate::host::streams::{CancelRegistry, StreamRegistry};
 use crate::host::trace::{TraceEvent, TraceSender};
 use crate::runtime::RunOutcome;
@@ -537,14 +543,14 @@ async fn run_agent(
     shared.trace.clone(),
     config.tunables,
   )?;
-  ctx.set_stop_flag(stop);
-  if let Some(seed) = config.memory.get(name) {
-    ctx.memory().seed(
-      seed
-        .iter()
-        .map(|(key, value)| (key.clone(), crate::config::memory_string(value))),
-    );
+  // Adopt the process-wide per-agent memory so it survives `loop` restarts
+  // exactly like the bus: a failed (or completed) iteration restarts the
+  // brain but keeps the agent's state. Seeds are applied once in
+  // `Shared::build`, so an iteration never resets runtime values.
+  if let Some(memory) = shared.memories.get(name) {
+    ctx.set_memory(Arc::clone(memory));
   }
+  ctx.set_stop_flag(stop);
   // Startup gate: a broken script never produces a first iteration.
   // Without `--watch` this fails fast, same as today. With `--watch` the
   // watcher is already registered below, so an edit fixing the script
@@ -884,6 +890,10 @@ struct Shared {
   tooling: HashMap<String, crate::tooling::ToolingEntry>,
   runtimes: HashMap<String, crate::runtime::RuntimeEntry>,
   bus: Arc<MessageBus>,
+  /// Process-wide per-agent memory, created and seeded once here so it
+  /// survives `loop` restarts (a fresh `AgentContext` is built per iteration,
+  /// but it adopts the agent's store from this map). Scoped per agent.
+  memories: HashMap<String, Arc<Memory>>,
   endpoint_registry: Option<Arc<EndpointRegistry>>,
   endpoint_task: Option<tokio::task::JoinHandle<()>>,
   shutdown: Shutdown,
@@ -948,6 +958,23 @@ impl Shared {
       } else {
         build()
       }?;
+    // One memory store per agent, seeded once here so it survives `loop`
+    // restarts. Building it from `cfg.agents` (rather than seeding per
+    // iteration) means an iteration never resets runtime values back to the
+    // configured seeds.
+    let memories = cfg
+      .agents
+      .keys()
+      .map(|name| {
+        let memory = Memory::new();
+        if let Some(seed) = cfg.memory.get(name) {
+          memory.seed(seed.iter().map(|(key, value)| {
+            (key.clone(), crate::config::memory_string(value))
+          }));
+        }
+        (name.clone(), Arc::new(memory))
+      })
+      .collect::<HashMap<_, _>>();
     let endpoint_entry = match pre_endpoint {
       Some(entry) => Some(entry),
       None => registries.endpoints.build_entry(cfg)?,
@@ -985,6 +1012,7 @@ impl Shared {
       tooling,
       runtimes,
       bus,
+      memories,
       endpoint_registry,
       endpoint_task,
       shutdown,
@@ -1276,6 +1304,91 @@ mod tests {
         .outcome,
       Some(RunOutcome::Exited("bob-uuid".to_string()))
     );
+    Ok(())
+  }
+
+  /// A runtime that bumps an `attempts` memory key and fails on the first
+  /// call, so a test can prove memory survives a failed loop iteration.
+  struct FlakyMemoryRuntime;
+
+  #[async_trait::async_trait]
+  impl crate::runtime::Runtime for FlakyMemoryRuntime {
+    fn kind() -> &'static str {
+      "flaky"
+    }
+
+    async fn run(&self, ctx: &AgentContext) -> anyhow::Result<RunOutcome> {
+      let attempts = ctx
+        .memory()
+        .get("attempts")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0)
+        + 1;
+      ctx
+        .memory()
+        .set("attempts".to_string(), attempts.to_string());
+      if attempts == 1 {
+        anyhow::bail!("first attempt fails");
+      }
+      Ok(RunOutcome::Exited(attempts.to_string()))
+    }
+
+    async fn validate(&self, _ctx: &AgentContext) -> anyhow::Result<()> {
+      Ok(())
+    }
+  }
+
+  fn flaky_config() -> Config {
+    Config {
+      agents: std::collections::BTreeMap::from([(
+        "alice".to_string(),
+        AgentConfig {
+          runtime: "flaky".to_string(),
+          script: "unused".to_string(),
+        },
+      )]),
+      providers: HashMap::new(),
+      tooling: HashMap::new(),
+      runtime: HashMap::from([(
+        "flaky".to_string(),
+        crate::config::ImplConfig {
+          kind: "flaky".to_string(),
+          params: serde_json::json!({}),
+        },
+      )]),
+      endpoint: None,
+      memory: std::collections::BTreeMap::new(),
+      tunables: crate::config::Tunables::default(),
+    }
+  }
+
+  #[tokio::test]
+  async fn memory_survives_a_failed_loop_iteration() -> anyhow::Result<()> {
+    let mut registries = Registries::new();
+    registries.runtimes.register_factory("flaky", |_, _| {
+      Ok(Arc::new(FlakyMemoryRuntime) as Arc<dyn crate::runtime::Runtime>)
+    })?;
+    let config = flaky_config();
+    let shared = Arc::new(
+      Shared::build(&config, &registries, Shutdown::new(), None, None).await?,
+    );
+    let agent = &config.agents["alice"];
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let first =
+      run_agent(&config, "alice", agent, &shared, None, Arc::clone(&stop))
+        .await;
+    assert!(first.is_err(), "the first iteration should fail");
+
+    let second =
+      run_agent(&config, "alice", agent, &shared, None, Arc::clone(&stop))
+        .await?;
+    match second {
+      AgentStop::Completed(RunOutcome::Exited(attempts)) => {
+        assert_eq!(attempts, "2");
+      }
+      other => anyhow::bail!("unexpected stop: {other:?}"),
+    }
     Ok(())
   }
 }

@@ -154,7 +154,7 @@ is reported in-band).
 
 ## Memory
 
-Per-agent store that survives hot reloads:
+Per-agent store that survives hot reloads and `loop` restarts:
 
 - `memory-get(key)` — read a value; none when absent.
 - `memory-set(key, value)` — store a string verbatim, overwriting.

@@ -101,6 +101,14 @@ impl AgentContext {
     &self.memory
   }
 
+  /// Adopt a shared memory store, replacing the fresh one created at
+  /// construction. The supervisor uses this so an agent's memory survives
+  /// `loop` restarts the same way the bus does; the same store is reused
+  /// across every iteration of an agent.
+  pub(crate) fn set_memory(&mut self, memory: Arc<Memory>) {
+    self.memory = memory;
+  }
+
   pub(crate) fn streams(&self) -> &Arc<StreamRegistry> {
     &self.streams
   }
