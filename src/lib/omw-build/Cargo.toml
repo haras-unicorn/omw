@@ -1,0 +1,17 @@
+[package]
+name = "omw-build"
+version = "0.1.7"
+description = "Shared build-script helpers for the omw interpreter component crates"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+wasmprinter.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

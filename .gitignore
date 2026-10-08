@@ -42,4 +42,7 @@ docs/book
 .env
 .cargo/config.toml
 *.wasm
-!src/lib/omw/wasm/*.wasm
+!src/lib/omw-runtime-rhai/wasm/*.wasm
+!src/lib/omw-runtime-js/wasm/*.wasm
+!src/lib/omw-runtime-python/wasm/*.wasm
+!src/lib/omw-runtime-mock/wasm/*.wasm

@@ -17,7 +17,7 @@ runtime-python = ["omw/runtime-python"]
 # Internal helper: cross-build single-file rust brains for wasm32-wasip2. Only
 # the dev shell enables it; it assumes the in-repo SDK layout and is not a
 # supported user workflow.
-compile-wasm = []
+compile-wasm = ["dep:omw-build"]
 
 [dependencies]
 anyhow.workspace = true
@@ -34,6 +34,7 @@ omw = { version = "0.1.7", path = "../../lib/omw", default-features = false, fea
   "mock",
 ] }
 omw-output = { version = "0.1.7", path = "../../lib/omw-output" }
+omw-build = { version = "0.1.7", path = "../../lib/omw-build", optional = true }
 glob = "0.3.4"
 
 [dev-dependencies]

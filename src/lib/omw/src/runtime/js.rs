@@ -17,8 +17,8 @@ use crate::host::ctx::AgentContext;
 use crate::runtime::engine::{WasiConfig, WasmEngine};
 use crate::runtime::{Factory, RunOutcome, Runtime};
 
-const JS_WASM_INTERPRETER_COMPONENT_NATIVE: &[u8] =
-  include_bytes!(env!("OMW_WASM_JS_INTERPRETER_COMPONENT_NATIVE"));
+const JS_WASM_INTERPRETER_COMPONENT_WASM: &[u8] =
+  omw_runtime_js::COMPONENT_WASM;
 
 /// Impl-specific configuration for the js runtime.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -50,7 +50,7 @@ impl JsWasmRuntime {
     let wasm = if let Some(interpreter) = config.interpreter.clone() {
       WasmEngine::from_path(&interpreter)?
     } else {
-      WasmEngine::from_native_bytes(JS_WASM_INTERPRETER_COMPONENT_NATIVE)?
+      WasmEngine::from_static_wasm(JS_WASM_INTERPRETER_COMPONENT_WASM)?
     };
     Ok(Self {
       name,

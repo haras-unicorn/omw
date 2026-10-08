@@ -5,10 +5,15 @@ release = false
 name = "omw"
 release = true
 version_group = "omw"
-publish_allow_dirty = true
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
-changelog_include = ["omw-cli", "omw-test"]
+changelog_include = [
+  "omw-cli",
+  "omw-test",
+  "omw-runtime-rhai",
+  "omw-runtime-js",
+  "omw-runtime-python",
+]
 
 [[package]]
 name = "omw-wasm-rust"
@@ -34,6 +39,50 @@ semver_check = false
 
 [[package]]
 name = "omw-output"
+release = true
+version_group = "omw"
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-runtime-rhai"
+release = true
+version_group = "omw"
+publish_allow_dirty = true
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-runtime-js"
+release = true
+version_group = "omw"
+publish_allow_dirty = true
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-runtime-python"
+release = true
+version_group = "omw"
+publish_allow_dirty = true
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-runtime-mock"
+release = true
+version_group = "omw"
+publish_allow_dirty = true
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "omw-build"
 release = true
 version_group = "omw"
 git_tag_enable = false

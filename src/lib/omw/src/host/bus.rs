@@ -37,6 +37,9 @@ pub(crate) struct Injection {
 }
 
 impl Injection {
+  /// Registered only by the test doubles and the bus's own tests, so it is
+  /// compiled out of production builds.
+  #[cfg(any(test, feature = "mock"))]
   pub(crate) fn new(
     run: impl Fn(&MessageBus, &[TraceEvent], &tokio::runtime::Handle) -> bool
     + Send
@@ -146,6 +149,9 @@ impl MessageBus {
 
   /// Register a pending call-boundary injection. It fires the next time the
   /// host flushes at a guest call boundary after its trigger is observed.
+  /// Registered only by the test doubles and the bus's own tests, so it is
+  /// compiled out of production builds.
+  #[cfg(any(test, feature = "mock"))]
   pub(crate) fn register_injection(&self, injection: Injection) {
     lock(&self.inner).injections.push(injection);
   }

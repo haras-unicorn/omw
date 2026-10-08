@@ -3897,6 +3897,10 @@ dependencies = [
  "kanal",
  "notify",
  "notify-debouncer-full",
+ "omw-runtime-js",
+ "omw-runtime-mock",
+ "omw-runtime-python",
+ "omw-runtime-rhai",
  "os-memlock",
  "regex",
  "reqwest",
@@ -3913,12 +3917,21 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "uuid",
- "wasmprinter 0.258.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
  "wiremock",
  "zeroize",
+]
+
+[[package]]
+name = "omw-build"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "tempfile",
+ "tracing",
+ "wasmprinter 0.258.0",
 ]
 
 [[package]]
@@ -3956,6 +3969,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "omw-runtime-js"
+version = "0.1.7"
+dependencies = [
+ "omw-build",
+]
+
+[[package]]
+name = "omw-runtime-mock"
+version = "0.1.7"
+dependencies = [
+ "omw-build",
+]
+
+[[package]]
+name = "omw-runtime-python"
+version = "0.1.7"
+dependencies = [
+ "omw-build",
+]
+
+[[package]]
+name = "omw-runtime-rhai"
+version = "0.1.7"
+dependencies = [
+ "omw-build",
+]
+
+[[package]]
 name = "omw-test"
 version = "0.1.7"
 dependencies = [
@@ -3966,6 +4007,7 @@ dependencies = [
  "glob",
  "nix 0.31.3",
  "omw",
+ "omw-build",
  "omw-output",
  "predicates",
  "rustls",

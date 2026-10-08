@@ -157,6 +157,18 @@ pub struct WasmEngine {
   component: Component,
 }
 
+/// Compiled engines for `'static` components, keyed by the byte slice's address
+/// and length. A bundled interpreter/mock component is a `'static` constant, so
+/// every agent (and every test) that references one shares a single compiled
+/// `Engine` + `Component` instead of recompiling it.
+#[allow(
+  dead_code,
+  reason = "generic engine cache; only the built-in runtimes use it today"
+)]
+static STATIC_WASM_ENGINES: std::sync::OnceLock<
+  std::sync::Mutex<HashMap<(usize, usize), WasmEngine>>,
+> = std::sync::OnceLock::new();
+
 /// WASM file type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WasmFileType {
@@ -228,7 +240,33 @@ impl WasmEngine {
     Ok(Self { engine, component })
   }
 
+  /// Load a component from a `'static` byte slice, compiling it **once** per
+  /// distinct slice and returning a cheap clone of the shared engine
+  /// afterwards. Both [`Engine`] and [`Component`] are internally `Arc`-backed,
+  /// so the clone is just a pair of refcount bumps. A process with many agents
+  /// of the same runtime kind compiles the component a single time instead of
+  /// once per agent.
+  ///
+  /// This is a generic engine helper, not specific to the built-in script
+  /// interpreters: any runtime backed by a `'static` component can use it.
+  #[allow(
+    dead_code,
+    reason = "generic engine helper; only the built-in runtimes use it today"
+  )]
+  pub fn from_static_wasm(bytes: &'static [u8]) -> anyhow::Result<Self> {
+    let key = (bytes.as_ptr() as usize, bytes.len());
+    let cache =
+      STATIC_WASM_ENGINES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(engine) = guard.get(&key) {
+      return Ok(engine.clone());
+    }
+    let engine = Self::from_wasm_bytes(bytes)?;
+    Ok(guard.entry(key).or_insert(engine).clone())
+  }
+
   /// Load an AOT compiled WASM component from an in-memory byte slice.
+  #[cfg(test)]
   pub fn from_native_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
     let (engine, component) = Self::load(|engine| {
       #[allow(unsafe_code, reason = "need to load it somehow")]
@@ -339,6 +377,19 @@ impl WasmEngine {
         wasi: wasi.build_ctx()?,
       },
     );
+    // The engine may be shared by many agents (see `from_static_wasm`), so an
+    // epoch bump from one agent's preemptive interrupt must not trap the
+    // others: only the store whose own run has a pending shutdown/reload traps,
+    // and every other store extends its deadline and keeps running.
+    store.epoch_deadline_callback(|host| {
+      if host.data().ctx.shutdown_requested()
+        || host.data().ctx.reload_requested()
+      {
+        Err(wasmtime::Error::msg("epoch deadline exceeded"))
+      } else {
+        Ok(wasmtime::UpdateDeadline::Continue(1))
+      }
+    });
     store.set_epoch_deadline(1);
     let mut linker: Linker<Host> = Linker::new(&self.engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -430,16 +481,10 @@ mod trap_tests {
 }
 
 #[cfg(all(test, feature = "mock"))]
-pub const WASM_MOCK_COMPONENT_WAT: &[u8] =
-  include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_WAT"));
+pub const WASM_MOCK_COMPONENT_WAT: &[u8] = omw_runtime_mock::COMPONENT_WAT;
 
 #[cfg(all(test, feature = "mock"))]
-pub const WASM_MOCK_COMPONENT_WASM: &[u8] =
-  include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_WASM"));
-
-#[cfg(all(test, feature = "mock"))]
-pub const WASM_MOCK_COMPONENT_NATIVE: &[u8] =
-  include_bytes!(env!("OMW_WASM_MOCK_COMPONENT_NATIVE"));
+pub const WASM_MOCK_COMPONENT_WASM: &[u8] = omw_runtime_mock::COMPONENT_WASM;
 
 #[cfg(test)]
 mod tests {
@@ -472,10 +517,24 @@ mod tests {
     )?)
   }
 
+  /// Precompiles the portable mock component into a `cwasm`, mirroring the
+  /// engine's runtime config, so the `from_native_*`/`from_path` paths keep
+  /// coverage without baking a host-specific cwasm into the crate.
+  #[cfg(feature = "mock")]
+  fn mock_native() -> anyhow::Result<Vec<u8>> {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.epoch_interruption(true);
+    let engine = wasmtime::Engine::new(&config)?;
+    let component =
+      wasmtime::component::Component::new(&engine, WASM_MOCK_COMPONENT_WASM)?;
+    Ok(component.serialize()?)
+  }
+
   #[test]
   #[cfg(feature = "mock")]
   fn from_native_bytes_loads_mock_component() -> anyhow::Result<()> {
-    let _engine = WasmEngine::from_native_bytes(WASM_MOCK_COMPONENT_NATIVE)?;
+    let _engine = WasmEngine::from_native_bytes(&mock_native()?)?;
     Ok(())
   }
 
@@ -485,7 +544,7 @@ mod tests {
     let dir = tempdir()?;
 
     let native = dir.path().join("brain.cwasm");
-    std::fs::write(&native, WASM_MOCK_COMPONENT_NATIVE)?;
+    std::fs::write(&native, mock_native()?)?;
     let _engine = WasmEngine::from_native_path(&native)?;
     Ok(())
   }
@@ -527,7 +586,7 @@ mod tests {
   fn from_path_dispatch_loads_native_component() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let native = dir.path().join("brain.cwasm");
-    std::fs::write(&native, WASM_MOCK_COMPONENT_NATIVE)?;
+    std::fs::write(&native, mock_native()?)?;
     let _engine = WasmEngine::from_path(&native)?;
     Ok(())
   }

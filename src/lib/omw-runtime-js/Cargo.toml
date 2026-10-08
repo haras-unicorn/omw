@@ -1,0 +1,12 @@
+[package]
+name = "omw-runtime-js"
+version = "0.1.7"
+description = "The bundled JavaScript interpreter component for the omw agent runtime"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+omw-build = { version = "0.1.7", path = "../omw-build" }
