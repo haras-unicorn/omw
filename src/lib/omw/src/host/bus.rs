@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use kanal::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use tokio::sync::broadcast;
 
 use crate::host::events::{EndpointMessage, Event, EventEnvelope};
@@ -507,12 +507,12 @@ impl MessageBus {
   fn try_recv_raw(&self, name: &str) -> anyhow::Result<Option<EventEnvelope>> {
     let (_, rx) = self.channels(name);
     match rx.try_recv() {
-      Ok(Some(envelope)) => {
+      Ok(envelope) => {
         tracing::trace!(name, "polled an event from the inbox");
         Ok(Some(envelope))
       }
-      // Empty, closed, or disconnected all read as "nothing right now".
-      Ok(None) | Err(_) => Ok(None),
+      // Empty or disconnected both read as "nothing right now".
+      Err(_) => Ok(None),
     }
   }
 
@@ -574,7 +574,7 @@ impl MessageBus {
     inner
       .inboxes
       .entry(name.to_string())
-      .or_insert_with(|| kanal::bounded(bound))
+      .or_insert_with(|| crossbeam_channel::bounded(bound))
       .clone()
   }
 }

@@ -23,7 +23,6 @@ ignoreWords:
   - wasmtime
   - wasi
   - mdbook
-  - kanal
   - strftime
   - tokio
   - reqwest

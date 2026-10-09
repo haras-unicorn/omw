@@ -17,7 +17,6 @@ ignoreWords:
   - bindgen
   - wasip
   - mdbook
-  - kanal
   - nixfmt
   - clippy
   - taplo
