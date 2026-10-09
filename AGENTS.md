@@ -265,13 +265,15 @@ A Cargo workspace with the crates below plus a single WIT contract.
   portable across machines and CPU feature sets. The guest source lives outside
   the component package (`src/wasm/*`), so setting `OMW_WASM_BUILD_VENDORED`
   (only the release prebuild) also vendors the component into the package's
-  `wasm/`; when the source is absent (a registry checkout) the helper embeds the
-  vendored copy instead of cross-building. It is a `build-dependency` of each
-  `omw-runtime-*` crate (`omw` itself has no build script), and it also exposes
-  `build_brains`, the rust→`wasm32-wasip2` brain cross-build that backs the
-  `omw-test compile-wasm` dev helper (`omw-test` enables it through its
-  non-default `compile-wasm` feature, so the default binary does not depend on
-  it).
+  `wasm/`; a packaged crate - a registry checkout, or a copy extracted under
+  `<workspace>/target/package` while `cargo publish` verifies it - has no guest
+  source under its own `<workspace>/src/lib`, so the helper embeds the vendored
+  copy instead of cross-building (the source lookup is scoped to the crate's own
+  workspace). It is a `build-dependency` of each `omw-runtime-*` crate (`omw`
+  itself has no build script), and it also exposes `build_brains`, the
+  rust→`wasm32-wasip2` brain cross-build that backs the `omw-test compile-wasm`
+  dev helper (`omw-test` enables it through its non-default `compile-wasm`
+  feature, so the default binary does not depend on it).
 
 - `src/lib/omw-runtime-rhai` / `-js` / `-python` / `-mock` — the bundled
   interpreter/mock component crates, each published so the `omw` package can
