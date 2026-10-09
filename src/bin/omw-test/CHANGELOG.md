@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.6...omw-test-v0.1.8) - 2026-10-09
+
+### Added
+
+- runtime crates ([#112](https://github.com/haras-unicorn/omw/pull/112))
+- parallel testing ([#101](https://github.com/haras-unicorn/omw/pull/101))
+- python runtime via rustpython ([#100](https://github.com/haras-unicorn/omw/pull/100))
+- testing improvements ([#98](https://github.com/haras-unicorn/omw/pull/98))
+
+### Fixed
+
+- env vars in opaque config respects casing ([#109](https://github.com/haras-unicorn/omw/pull/109))
+
+### Other
+
+- release ([#99](https://github.com/haras-unicorn/omw/pull/99))
+
 ## [0.1.7](https://github.com/haras-unicorn/omw/compare/omw-test-v0.1.6...omw-test-v0.1.7) - 2026-10-05
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "omw-cli"
-version = "0.1.7"
+version = "0.1.8"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -31,8 +31,8 @@ clap.workspace = true
 config.workspace = true
 serde_json.workspace = true
 toml.workspace = true
-omw = { version = "0.1.7", path = "../../lib/omw", default-features = false }
-omw-output = { version = "0.1.7", path = "../../lib/omw-output" }
+omw = { version = "0.1.8", path = "../../lib/omw", default-features = false }
+omw-output = { version = "0.1.8", path = "../../lib/omw-output" }
 
 [dev-dependencies]
 nix.workspace = true
