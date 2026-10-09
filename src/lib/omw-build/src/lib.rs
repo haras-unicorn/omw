@@ -25,10 +25,11 @@
 //! (`<root>/src/wasm/*`), so a published crate cannot cross-build it. To make
 //! the published crate self-contained, setting `OMW_WASM_BUILD_VENDORED` makes
 //! this helper also copy the produced component into `<package>/wasm/`. A
-//! registry checkout - where the guest source is absent but the vendored
-//! component is shipped - embeds that component instead of cross-compiling. Only
-//! the release prebuild sets that variable, so normal development never writes
-//! into the package.
+//! packaged crate - a registry checkout, or a copy extracted under
+//! `<workspace>/target/package` while `cargo publish` verifies it - has no guest
+//! source under its own `<workspace>/src/lib`, so this helper embeds the
+//! vendored component instead of cross-compiling. Only the release prebuild sets
+//! that variable, so normal development never writes into the package.
 //!
 //! The nested `cargo` builds use a dedicated `--target-dir` so that they do not
 //! contend for the global build lock held by the outer `cargo` invocation (which
@@ -122,15 +123,20 @@ fn require_env(key: &str) -> String {
   env::var(key).unwrap_or_else(|_| panic!("{key} not set"))
 }
 
-/// Finds `<ancestor>/src/wasm/<guest>` by walking up from `manifest_dir`, so the
-/// same helper works from any `src/lib/omw-runtime-*` crate. Returns `None` for
-/// a published crate whose guest source is absent.
+/// Finds `<workspace>/src/wasm/<guest>` by walking up from `manifest_dir`, so
+/// the same helper works from any `src/lib/omw-runtime-*` crate. The candidate
+/// only counts when `manifest_dir` is itself under that workspace's `src/lib`,
+/// so a packaged copy - extracted under `<workspace>/target/package` during
+/// `cargo publish` verification - never walks back into the live workspace
+/// source. Returns `None` for a published crate whose guest source is absent.
 fn find_guest(manifest_dir: &Path, guest: &str) -> Option<PathBuf> {
   let mut current = Some(manifest_dir);
   while let Some(dir) = current {
-    let candidate = dir.join("src").join("wasm").join(guest);
-    if candidate.is_dir() {
-      return Some(candidate);
+    if manifest_dir.starts_with(dir.join("src").join("lib")) {
+      let candidate = dir.join("src").join("wasm").join(guest);
+      if candidate.is_dir() {
+        return Some(candidate);
+      }
     }
     current = dir.parent();
   }
@@ -220,5 +226,29 @@ fn compile_from_source(
     std::fs::copy(&core_wasm, component_wasm).unwrap_or_else(|e| {
       panic!("failed to copy component to {:?}: {e}", component_wasm)
     });
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tempfile::tempdir;
+
+  #[test]
+  fn find_guest_scopes_to_the_calling_workspace() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    let crate_dir = root.path().join("src/lib/omw-runtime-js");
+    let guest_dir = root.path().join("src/wasm/omw-wasm-js-interpreter");
+    std::fs::create_dir_all(&crate_dir)?;
+    std::fs::create_dir_all(&guest_dir)?;
+    assert_eq!(
+      find_guest(&crate_dir, "omw-wasm-js-interpreter"),
+      Some(guest_dir)
+    );
+
+    let packaged = root.path().join("target/package/omw-runtime-js-0.1.7");
+    std::fs::create_dir_all(&packaged)?;
+    assert_eq!(find_guest(&packaged, "omw-wasm-js-interpreter"), None);
+    Ok(())
   }
 }
