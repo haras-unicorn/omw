@@ -1,6 +1,6 @@
 [package]
 name = "omw"
-version = "0.1.7"
+version = "0.1.8"
 description.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -55,10 +55,10 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wat = { workspace = true, optional = true }
-omw-runtime-rhai = { version = "0.1.7", path = "../omw-runtime-rhai", optional = true }
-omw-runtime-js = { version = "0.1.7", path = "../omw-runtime-js", optional = true }
-omw-runtime-python = { version = "0.1.7", path = "../omw-runtime-python", optional = true }
-omw-runtime-mock = { version = "0.1.7", path = "../omw-runtime-mock", optional = true }
+omw-runtime-rhai = { version = "0.1.8", path = "../omw-runtime-rhai", optional = true }
+omw-runtime-js = { version = "0.1.8", path = "../omw-runtime-js", optional = true }
+omw-runtime-python = { version = "0.1.8", path = "../omw-runtime-python", optional = true }
+omw-runtime-mock = { version = "0.1.8", path = "../omw-runtime-mock", optional = true }
 zeroize = { version = "1.9.0", features = ["derive", "serde"] }
 regex = "1.13.1"
 notify-debouncer-full = { version = "0.7.0", features = ["serde"] }

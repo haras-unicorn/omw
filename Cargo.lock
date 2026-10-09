@@ -3880,7 +3880,7 @@ dependencies = [
 
 [[package]]
 name = "omw"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -3925,7 +3925,7 @@ dependencies = [
 
 [[package]]
 name = "omw-build"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -3935,7 +3935,7 @@ dependencies = [
 
 [[package]]
 name = "omw-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3956,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "omw-output"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -3969,35 +3969,35 @@ dependencies = [
 
 [[package]]
 name = "omw-runtime-js"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-mock"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-python"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-rhai"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-test"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
