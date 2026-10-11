@@ -290,7 +290,7 @@ def "main release" [] {
   }
   for component in (omw guests) {
     let file = (
-      $"./src/lib/($component.crate)/wasm/($component.guest).component.wasm"
+      $"./src/lib/($component.crate)/wasm/($component.guest).component.wasm.br"
     )
     if not ($file | path exists) {
       print -e $"prebuild did not produce ($file)"

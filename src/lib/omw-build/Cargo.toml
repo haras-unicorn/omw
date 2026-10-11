@@ -1,6 +1,6 @@
 [package]
 name = "omw-build"
-version = "0.1.8"
+version = "0.1.9"
 description = "Shared build-script helpers for the omw interpreter component crates"
 repository.workspace = true
 authors.workspace = true
@@ -12,6 +12,7 @@ edition.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 wasmprinter.workspace = true
+brotli = "9.0.0"
 
 [dev-dependencies]
 tempfile.workspace = true

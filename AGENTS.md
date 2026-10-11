@@ -255,31 +255,41 @@ A Cargo workspace with the crates below plus a single WIT contract.
   does not depend on it.
 
 - `src/lib/omw-build` — the published build-script helper crate: its
-  `build_component(guest)` cross-compiles a bundled guest
-  (`src/wasm/omw-wasm-*`) for `wasm32-wasip2`, wraps a core module into a
-  component with `wasm-tools component new` when needed, prints it to WAT with
-  the `wasmprinter` dependency, and exposes the **portable** component to the
-  calling crate via `cargo:rustc-env` (`<PREFIX>_COMPONENT_WASM` /
-  `_COMPONENT_WAT`). It deliberately never AOT-compiles to a `cwasm`: the
-  runtime compiles the component in-process, so the embedding binary stays
-  portable across machines and CPU feature sets. The guest source lives outside
-  the component package (`src/wasm/*`), so setting `OMW_WASM_BUILD_VENDORED`
-  (only the release prebuild) also vendors the component into the package's
-  `wasm/`; a packaged crate - a registry checkout, or a copy extracted under
-  `<workspace>/target/package` while `cargo publish` verifies it - has no guest
-  source under its own `<workspace>/src/lib`, so the helper embeds the vendored
-  copy instead of cross-building (the source lookup is scoped to the crate's own
-  workspace). It is a `build-dependency` of each `omw-runtime-*` crate (`omw`
-  itself has no build script), and it also exposes `build_brains`, the
-  rust→`wasm32-wasip2` brain cross-build that backs the `omw-test compile-wasm`
-  dev helper (`omw-test` enables it through its non-default `compile-wasm`
-  feature, so the default binary does not depend on it).
+  `build_component(guest, opt_level)` cross-compiles a bundled guest
+  (`src/wasm/omw-wasm-*`) for `wasm32-wasip1` into a **core module** (Binaryen's
+  `wasm-opt` cannot read a component) using the `OptLevel`'s release profile
+  (`wasm-size`/`-Oz` for python, `wasm-speed`/`-O3` otherwise), size-optimizes
+  the core with `wasm-opt` (the requested level in release, the cheaper `-O1` in
+  debug), wraps it into a component with `wasm-tools component new --adapt`
+  using the preview1 adapter at `OMW_WASM_PREVIEW1_ADAPTER`, shrinks it with
+  `wasm-tools strip`, prints it to WAT with the `wasmprinter` dependency, and
+  exposes the **portable** component to the calling crate via `cargo:rustc-env`
+  (`<PREFIX>_COMPONENT_WASM` / `_COMPONENT_WAT`). It deliberately never
+  AOT-compiles to a `cwasm`: the runtime compiles the component in-process, so
+  the embedding binary stays portable across machines and CPU feature sets. The
+  guest source lives outside the component package (`src/wasm/*`), so setting
+  `OMW_WASM_BUILD_VENDORED` (only the release prebuild) also brotli-compresses
+  the component into the package's `wasm/<guest>.component.wasm.br` (cargo gzips
+  the tarball and gzip cannot shrink this data, so a stronger codec is what fits
+  the Python component under the registry limit); a packaged crate - a registry
+  checkout, or a copy extracted under `<workspace>/target/package` while
+  `cargo publish` verifies it - has no guest source under its own
+  `<workspace>/src/lib`, so the helper decompresses the vendored blob instead of
+  cross-building (the source lookup is scoped to the crate's own workspace). It
+  is a `build-dependency` of each `omw-runtime-*` crate (`omw` itself has no
+  build script), and it also exposes `build_brains`, the rust→`wasm32-wasip2`
+  brain cross-build that backs the `omw-test compile-wasm` dev helper
+  (`omw-test` enables it through its non-default `compile-wasm` feature, so the
+  default binary does not depend on it).
 
 - `src/lib/omw-runtime-rhai` / `-js` / `-python` / `-mock` — the bundled
   interpreter/mock component crates, each published so the `omw` package can
-  stay under the crates.io size limit. Every crate's one-line `build.rs` calls
-  `omw-build` for its guest (`src/wasm/omw-wasm-*`), and the crate exposes the
-  portable component as `pub const COMPONENT_WASM: &[u8]` (the mock also exports
+  stay under the crates.io size limit (the `wasm-size`/`-Oz` treatment above
+  exists so the bulky RustPython component in `omw-runtime-python` itself fits
+  under the registry's 10 MiB cap). Every crate's `build.rs` calls `omw-build`
+  for its guest (`src/wasm/omw-wasm-*`) with its `OptLevel` (`Size`/`-Oz` for
+  python, `Speed`/`-O3` for the rest), and the crate exposes the portable
+  component as `pub const COMPONENT_WASM: &[u8]` (the mock also exports
   `COMPONENT_WAT` for the engine's WAT-loading tests). `omw` depends on each
   optionally (the `runtime-rhai` / `runtime-js` / `runtime-python` / `mock`
   feature), and its `runtime/{rhai,js,python}.rs` (and the engine's mock tests)
@@ -343,12 +353,12 @@ A Cargo workspace with the crates below plus a single WIT contract.
   argv/exit codes, the stdio convention, the `OMW_TEST__` env overlay, and `run`
   PASS/FAIL/discovery/filter semantics.
 - `src/wasm/omw-wasm-rhai-interpreter` — the Rhai guest component
-  (`#![no_main]`), compiled to `wasm32-wasip2`. Exports the `runtime` interface
+  (`#![no_main]`), compiled to `wasm32-wasip1`. Exports the `runtime` interface
   (`kind` + `run(script)`) and registers the `omw` static module whose
   `provider`/`tooling`/`host` functions route to the host.
 
 - `src/wasm/omw-wasm-js-interpreter` — the JS guest component (`#![no_main]`),
-  compiled to `wasm32-wasip2`. Exports the `runtime` interface (`kind` +
+  compiled to `wasm32-wasip1`. Exports the `runtime` interface (`kind` +
   `run(script)`) and registers the `omw` global (Boa) whose
   `provider`/`tooling`/`host` namespaces route to the host (camelCase). Ships
   the JS-side declarations: the hand-written `omw.d.ts` for the `omw` global
@@ -358,7 +368,7 @@ A Cargo workspace with the crates below plus a single WIT contract.
   the file to vendor next to a `brain.js` (see `docs/runtime/js.md`).
 
 - `src/wasm/omw-wasm-python-interpreter` — the Python guest component
-  (`#![no_main]`), compiled to `wasm32-wasip2` on the bundled RustPython
+  (`#![no_main]`), compiled to `wasm32-wasip1` on the bundled RustPython
   interpreter. Exports the `runtime` interface (`kind` + `run(script)`) and
   installs the `omw` global whose `provider`/`tooling`/`host` namespaces route
   to the host (snake_case; records surface as attribute objects). A script that
@@ -593,7 +603,11 @@ until you need to do a final pass on all tests. Do not use anything other than
 `dev test fast` unless the user specifically demands for it.
 
 Because each `omw-runtime-*` crate's `build.rs` (via `omw-build`) cross-compiles
-its bundled guest for `wasm32-wasip2`, building those features **from source**
-needs that target and `wasm-tools` on PATH (both provided by the dev shell). The
-published crates embed the vendored portable components instead, so consumers
-need neither (the WAT comes from the `wasmprinter` dependency of `omw-build`).
+its bundled guest for `wasm32-wasip1`, size-optimizes the core module with
+`wasm-opt`, and wraps it with the preview1 adapter, building those features
+**from source** needs the `wasm32-wasip1` target, `wasm-tools`, Binaryen's
+`wasm-opt` and the adapter file `OMW_WASM_PREVIEW1_ADAPTER` (all provided by the
+dev shell; the adapter is pinned to the `wasmtime` version in `Cargo.lock`). The
+published crates ship the vendored, already-optimized component as a
+brotli-compressed blob (decompressed in `build.rs`), so consumers need none of
+them (the WAT comes from the `wasmprinter` dependency of `omw-build`).

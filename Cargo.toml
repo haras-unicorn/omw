@@ -66,6 +66,14 @@ lto = false
 codegen-units = 16
 opt-level = 1
 
+[profile.wasm-speed]
+inherits = "release"
+
+[profile.wasm-size]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+
 [profile.dev]
 debug = 1
 
