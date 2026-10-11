@@ -24,6 +24,7 @@ ignoreWords:
   - memlock
   - unsloth
   - gnutar
+  - binaryen
   - prebuild
   - wasms
   - bcherny

@@ -22,6 +22,7 @@ ignoreWords:
   - taplo
   - wasmtime
   - wasmprinter
+  - binaryen
   - prebuild
   - wasms
   - wasi

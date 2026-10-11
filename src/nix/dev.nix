@@ -83,7 +83,28 @@ let
         hash = "sha256-MXfr1nr+RDg3TaGeaQvBuYdW9+D+qSQOG+QEM2FWp7U=";
       };
 
+      # The `wasi_snapshot_preview1` reactor adapter from the wasmtime release
+      # that `Cargo.lock` resolves, so it cannot drift from the runtime's WASI
+      # world. Guest cores are compiled for `wasm32-wasip1` (Binaryen cannot read
+      # a component) and wrapped back into a component with this adapter by
+      # `omw-build`. Bumping wasmtime in `Cargo.lock` moves the URL; refresh
+      # `hash` from the (then-current) release asset to match.
+      wasmtimeVersion =
+        (builtins.head (
+          builtins.filter (package: package.name == "wasmtime")
+            (builtins.fromTOML (builtins.readFile ../../Cargo.lock)).package
+        )).version;
+
+      wasiPreview1Adapter = pkgs.fetchurl {
+        name = "wasi_snapshot_preview1.reactor.wasm";
+        url =
+          "https://github.com/bytecodealliance/wasmtime/releases/download"
+          + "/v${wasmtimeVersion}/wasi_snapshot_preview1.reactor.wasm";
+        hash = "sha256-MFGWyF8hvLzVNMRdEpzKQe0w8kre2ghUub4wz4hMyLQ=";
+      };
+
       targets = [
+        "wasm32-wasip1"
         "wasm32-wasip2"
         "x86_64-unknown-linux-musl"
         "aarch64-unknown-linux-musl"
@@ -122,6 +143,7 @@ let
       nativeBuildInputs = [
         pkgs.pkg-config
         pkgs.wasm-tools
+        pkgs.binaryen
         pkgs.mold
       ];
 
@@ -136,6 +158,7 @@ let
           default = {
             CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
+            OMW_WASM_PREVIEW1_ADAPTER = "${wasiPreview1Adapter}";
           };
 
           extraTests = {

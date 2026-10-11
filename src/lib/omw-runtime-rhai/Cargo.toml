@@ -1,6 +1,6 @@
 [package]
 name = "omw-runtime-rhai"
-version = "0.1.8"
+version = "0.1.9"
 description = "The bundled rhai interpreter component for the omw agent runtime"
 repository.workspace = true
 authors.workspace = true
@@ -9,4 +9,4 @@ readme.workspace = true
 edition.workspace = true
 
 [build-dependencies]
-omw-build = { version = "0.1.8", path = "../omw-build" }
+omw-build = { version = "0.1.9", path = "../omw-build" }
