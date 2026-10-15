@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use super::{Endpoint, Factory};
 use crate::host::bus::MessageBus;
 use crate::host::endpoint::{EndpointRegistry, OpenSession, Outbound};
-use crate::provider::{ChatDelta, ChatMessage, Role, ToolCall};
+use crate::provider::{ChatDelta, ChatMessage, ToolCall, ToolCallDelta};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the OpenAI-compatible endpoint.
@@ -175,7 +175,8 @@ async fn chat_completions(
   } else {
     let mut content = String::new();
     let mut reasoning = String::new();
-    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut tool_calls: std::collections::BTreeMap<u32, ToolCall> =
+      std::collections::BTreeMap::new();
     let mut finish_reason = None;
     let mut normal = false;
     while let Some(outbound) = open.rx.recv().await {
@@ -187,9 +188,10 @@ async fn chat_completions(
           if let Some(chunk) = d.reasoning {
             reasoning.push_str(&chunk);
           }
-          if let Some(tc) = d.tool_call {
-            merge_tool_call(&mut tool_calls, tc);
-          }
+          crate::provider::merge_tool_call_deltas(
+            &mut tool_calls,
+            d.tool_calls,
+          );
           if d.finish_reason.is_some() {
             finish_reason = d.finish_reason;
           }
@@ -212,7 +214,7 @@ async fn chat_completions(
       &body.model,
       &content,
       &reasoning,
-      &tool_calls,
+      &tool_calls.into_values().collect::<Vec<_>>(),
       finish_reason,
     ))
     .into_response()
@@ -276,6 +278,29 @@ struct SseState {
   done: bool,
 }
 
+/// Serialize one streaming tool-call fragment onto the OpenAI
+/// `delta.tool_calls` entry shape, carrying the fragment's own index so
+/// parallel calls stay distinct.
+fn tool_call_delta_to_wire(tc: &ToolCallDelta) -> serde_json::Value {
+  let mut call = serde_json::Map::new();
+  call.insert("index".into(), serde_json::Value::from(tc.index));
+  if let Some(id) = &tc.id {
+    call.insert("id".into(), id.clone().into());
+    call.insert("type".into(), "function".into());
+  }
+  let mut function = serde_json::Map::new();
+  if let Some(name) = &tc.name {
+    function.insert("name".into(), name.clone().into());
+  }
+  if let Some(arguments) = &tc.arguments {
+    function.insert("arguments".into(), arguments.clone().into());
+  }
+  if !function.is_empty() {
+    call.insert("function".into(), serde_json::Value::Object(function));
+  }
+  serde_json::Value::Object(call)
+}
+
 fn delta_sse(
   d: &ChatDelta,
   completion_id: &str,
@@ -292,16 +317,13 @@ fn delta_sse(
   if let Some(reasoning) = &d.reasoning {
     delta.insert("reasoning_content".into(), reasoning.clone().into());
   }
-  if let Some(tc) = &d.tool_call {
-    delta.insert(
-      "tool_calls".into(),
-      serde_json::json!([{
-        "index": 0,
-        "id": tc.id,
-        "type": "function",
-        "function": { "name": tc.name, "arguments": tc.arguments },
-      }]),
-    );
+  if !d.tool_calls.is_empty() {
+    let calls = d
+      .tool_calls
+      .iter()
+      .map(tool_call_delta_to_wire)
+      .collect::<Vec<_>>();
+    delta.insert("tool_calls".into(), serde_json::Value::Array(calls));
   }
   let data = serde_json::json!({
     "id": completion_id,
@@ -372,14 +394,7 @@ fn parse_messages(
   messages
     .iter()
     .map(|m| {
-      let role = match m.role.as_str() {
-        "system" => Role::System,
-        "assistant" => Role::Assistant,
-        "tool" => Role::Tool,
-
-        "user" => Role::User,
-        other => return Err(format!("unknown role {other:?}")),
-      };
+      let role = m.role.clone();
       let content = match &m.content {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(s)) => Some(s.clone()),
@@ -402,33 +417,35 @@ fn parse_messages(
           return Err(format!("malformed message content: {other}"));
         }
       };
-      let tool_call =
-        match m.tool_calls.as_ref().and_then(|calls| calls.first()) {
-          None => None,
-          Some(tc) => {
-            let id = tc
-              .id
-              .clone()
-              .ok_or_else(|| "malformed tool call: missing id".to_string())?;
-            let name = tc.function.name.clone().ok_or_else(|| {
-              "malformed tool call: missing function name".to_string()
-            })?;
-            Some(ToolCall {
-              id,
-              name,
-              arguments: match &tc.function.arguments {
-                Some(serde_json::Value::String(s)) => s.clone(),
-                Some(v) => v.to_string(),
-                None => String::new(),
-              },
-            })
-          }
-        };
+      let tool_calls = m
+        .tool_calls
+        .iter()
+        .flatten()
+        .map(|tc| {
+          let id = tc
+            .id
+            .clone()
+            .ok_or_else(|| "malformed tool call: missing id".to_string())?;
+          let name = tc.function.name.clone().ok_or_else(|| {
+            "malformed tool call: missing function name".to_string()
+          })?;
+          Ok(ToolCall {
+            id,
+            name,
+            arguments: match &tc.function.arguments {
+              Some(serde_json::Value::String(s)) => s.clone(),
+              Some(v) => v.to_string(),
+              None => String::new(),
+            },
+          })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
       Ok(ChatMessage {
         role,
         content,
         reasoning: m.reasoning.clone(),
-        tool_call,
+        tool_calls,
+        tool_call_id: m.tool_call_id.clone(),
       })
     })
     .collect()
@@ -447,12 +464,14 @@ fn parse_tools(tools: Option<&[WireTool]>) -> Result<Vec<Tool>, String> {
         }
         Ok(Tool {
           name: function.name.clone(),
+          title: None,
           description: function.description.clone(),
           input_schema: function
             .parameters
             .clone()
             .unwrap_or(serde_json::Value::Null),
           output_schema: None,
+          annotations: None,
         })
       }
       WireTool::Flat {
@@ -461,25 +480,14 @@ fn parse_tools(tools: Option<&[WireTool]>) -> Result<Vec<Tool>, String> {
         parameters,
       } => Ok(Tool {
         name: name.clone(),
+        title: None,
         description: description.clone(),
         input_schema: parameters.clone().unwrap_or(serde_json::Value::Null),
         output_schema: None,
+        annotations: None,
       }),
     })
     .collect()
-}
-
-fn merge_tool_call(tool_calls: &mut Vec<ToolCall>, incoming: ToolCall) {
-  if let Some(existing) = tool_calls.iter_mut().find(|c| c.id == incoming.id) {
-    let args = &incoming.arguments;
-    if args.starts_with(&existing.arguments) {
-      existing.arguments = args.clone();
-    } else if !args.is_empty() {
-      existing.arguments.push_str(args);
-    }
-  } else {
-    tool_calls.push(incoming);
-  }
 }
 
 #[derive(Deserialize)]
@@ -506,6 +514,9 @@ struct WireMessage {
   reasoning: Option<String>,
   #[serde(default)]
   tool_calls: Option<Vec<WireToolCall>>,
+  /// The assistant tool call a `"tool"` message answers (`tool_call_id`).
+  #[serde(default)]
+  tool_call_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -634,7 +645,7 @@ mod tests {
         ChatDelta {
           content: Some("Hello".to_string()),
           reasoning: Some("pondering".to_string()),
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: None,
           usage: None,
         },
@@ -647,7 +658,7 @@ mod tests {
         ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: Some("stop".to_string()),
           usage: None,
         },
@@ -760,24 +771,13 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn chat_completions_rejects_unknown_role_and_malformed_body()
-  -> anyhow::Result<()> {
+  async fn chat_completions_rejects_malformed_body() -> anyhow::Result<()> {
     let bus = Arc::new(MessageBus::new());
     let registry = Arc::new(EndpointRegistry::new(Arc::clone(&bus)));
     bus
       .endpoint_subscribe("alice", "gpt-4o".to_string())
       .map_err(|e| anyhow::anyhow!(e))?;
     let (client, base) = spawn_server(bus, registry).await?;
-    let (status, _) = post_completion(
-      &client,
-      &base,
-      serde_json::json!({
-        "model": "gpt-4o",
-        "messages": [{ "role": "wizard", "content": "hi" }],
-      }),
-    )
-    .await?;
-    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
     let (status, _) =
       post_completion(&client, &base, serde_json::json!({ "model": "gpt-4o" }))
         .await?;
@@ -874,7 +874,7 @@ mod tests {
         ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: Some("stop".to_string()),
           usage: None,
         },
@@ -1021,7 +1021,7 @@ mod tests {
         ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: Some("stop".to_string()),
           usage: None,
         },
@@ -1037,7 +1037,7 @@ mod tests {
         ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: Some("stop".to_string()),
           usage: None,
         },

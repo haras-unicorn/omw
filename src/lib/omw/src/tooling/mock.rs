@@ -29,7 +29,7 @@ use serde_json::Value;
 
 use super::{
   Factory, ResourceContent, ResourceInfo, ResourceInjections,
-  ResourceNotification, Tool, ToolCallResult, Tooling,
+  ResourceNotification, ResourceTemplate, Tool, ToolCallResult, Tooling,
 };
 use crate::host::bus::{Injection, MessageBus};
 use crate::host::events::{Event, ToolResult};
@@ -61,9 +61,14 @@ pub(crate) struct Config {
   #[serde(default)]
   pub initial_resource_list: Vec<ResourceInfo>,
 
-  /// Canned resource content keyed by URI, returned by `read-resource`.
+  /// Canned resource contents keyed by URI, returned by `read-resource`. Each
+  /// value is the ordered list of content items a read yields.
   #[serde(default)]
-  pub initial_resource_contents: HashMap<String, String>,
+  pub initial_resource_contents: HashMap<String, Vec<String>>,
+
+  /// Resource templates `list-resource-templates` returns.
+  #[serde(default)]
+  pub resource_templates: Vec<ResourceTemplate>,
 
   /// Ordered, full-replacement resource-list updates driven by
   /// `subscribe-resource-list`.
@@ -92,6 +97,10 @@ pub(crate) struct ScriptedToolCall {
   /// Fail the call with this error (after the gate and delay).
   #[serde(default)]
   error: Option<String>,
+  /// Succeed, but mark the result a tool-execution error (MCP `isError`);
+  /// `result` still supplies the content text.
+  #[serde(default)]
+  is_error: bool,
   /// Never complete: the call stays pending forever (for cancellation tests).
   #[serde(default)]
   pending: bool,
@@ -122,7 +131,8 @@ pub(crate) struct ResourceListUpdate {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(crate) struct ResourceContentUpdate {
   uri: String,
-  content: String,
+  /// The ordered content items the resource holds after this step.
+  contents: Vec<String>,
   /// Yield this error for the step instead of an `Updated`.
   #[serde(default)]
   error: Option<String>,
@@ -137,7 +147,7 @@ pub(crate) struct ResourceContentUpdate {
 #[derive(Debug, Default)]
 struct State {
   resources: Vec<ResourceInfo>,
-  contents: HashMap<String, String>,
+  contents: HashMap<String, Vec<String>>,
 }
 
 /// A single recorded `call-tool` invocation.
@@ -165,6 +175,7 @@ pub struct MockTooling {
   tool_call_next: Arc<Mutex<usize>>,
   resource_list_updates: Vec<ResourceListUpdate>,
   resource_content_updates: Vec<ResourceContentUpdate>,
+  resource_templates: Vec<ResourceTemplate>,
   state: Arc<Mutex<State>>,
   calls: Arc<Mutex<Vec<RecordedToolCall>>>,
   /// The append-only trace log, attached once before the run so any gate can
@@ -187,6 +198,7 @@ impl Factory for MockTooling {
       tool_call_next: Arc::new(Mutex::new(0)),
       resource_list_updates: config.resource_list_updates,
       resource_content_updates: config.resource_content_updates,
+      resource_templates: config.resource_templates,
       state: Arc::new(Mutex::new(State {
         resources: config.initial_resource_list,
         contents: config.initial_resource_contents,
@@ -216,6 +228,7 @@ impl MockTooling {
         result: result.to_string(),
         structured_content: None,
         error: None,
+        is_error: false,
         pending: false,
         after: After::Start,
       }],
@@ -247,15 +260,18 @@ impl MockTooling {
     let resources = vec![ResourceInfo {
       uri: uri.to_string(),
       name: uri.to_string(),
+      title: None,
       description: None,
       mime_type: Some("text/plain".to_string()),
+      size: None,
+      annotations: None,
     }];
     let mut contents = HashMap::new();
-    contents.insert(uri.to_string(), content.to_string());
+    contents.insert(uri.to_string(), vec![content.to_string()]);
     Arc::new(Self {
       resource_content_updates: vec![ResourceContentUpdate {
         uri: uri.to_string(),
-        content: content.to_string(),
+        contents: vec![content.to_string()],
         error: None,
         pending: false,
         after: After::Start,
@@ -275,6 +291,7 @@ impl MockTooling {
       tool_call_next: Arc::new(Mutex::new(0)),
       resource_list_updates: Vec::new(),
       resource_content_updates: Vec::new(),
+      resource_templates: Vec::new(),
       state: Arc::new(Mutex::new(State::default())),
       calls: Arc::new(Mutex::new(Vec::new())),
       trace: Arc::new(OnceLock::new()),
@@ -360,6 +377,7 @@ impl Tooling for MockTooling {
     let result = ToolCallResult {
       content: text_content(&step.result),
       structured_content: step.structured_content,
+      is_error: step.is_error,
     };
     if let Some(record) = lock(&self.calls).get_mut(record_index) {
       record.result = Some(result.clone());
@@ -371,9 +389,18 @@ impl Tooling for MockTooling {
     Ok(lock(&self.state).resources.clone())
   }
 
-  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
+  async fn list_resource_templates(
+    &self,
+  ) -> anyhow::Result<Vec<ResourceTemplate>> {
+    Ok(self.resource_templates.clone())
+  }
+
+  async fn read_resource(
+    &self,
+    uri: &str,
+  ) -> anyhow::Result<Vec<ResourceContent>> {
     let state = lock(&self.state);
-    let content = state
+    let contents = state
       .contents
       .get(uri)
       .cloned()
@@ -383,11 +410,16 @@ impl Tooling for MockTooling {
       .iter()
       .find(|r| r.uri == uri)
       .and_then(|r| r.mime_type.clone());
-    Ok(ResourceContent {
-      uri: uri.to_string(),
-      mime_type,
-      content,
-    })
+    Ok(
+      contents
+        .into_iter()
+        .map(|content| ResourceContent {
+          uri: uri.to_string(),
+          mime_type: mime_type.clone(),
+          content,
+        })
+        .collect(),
+    )
   }
 
   async fn subscribe_resource_list(
@@ -454,7 +486,9 @@ impl Tooling for MockTooling {
           if let Some(error) = step.error {
             return Some((Err(error), (steps, index.saturating_add(1))));
           }
-          lock(&state).contents.insert(step.uri.clone(), step.content);
+          lock(&state)
+            .contents
+            .insert(step.uri.clone(), step.contents.clone());
           Some((
             Ok(ResourceNotification::Updated { uri }),
             (steps, index.saturating_add(1)),
@@ -511,17 +545,26 @@ fn after_ready(after: &After, observed: &[TraceEvent]) -> bool {
 
 /// Build a `resource-updated` event for a content step, resolving the MIME
 /// type from the mock's current resource list.
-fn content_event(state: &Mutex<State>, uri: &str, content: String) -> Event {
+fn content_event(
+  state: &Mutex<State>,
+  uri: &str,
+  contents: Vec<String>,
+) -> Event {
   let mime_type = lock(state)
     .resources
     .iter()
     .find(|r| r.uri == uri)
     .and_then(|r| r.mime_type.clone());
-  Event::ResourceUpdated(ResourceContent {
-    uri: uri.to_string(),
-    mime_type,
-    content,
-  })
+  Event::ResourceUpdated(
+    contents
+      .into_iter()
+      .map(|content| ResourceContent {
+        uri: uri.to_string(),
+        mime_type: mime_type.clone(),
+        content,
+      })
+      .collect(),
+  )
 }
 
 /// The mock's call-boundary injection hook. Instead of a pump racing the guest,
@@ -612,8 +655,8 @@ impl ResourceInjections for MockTooling {
         } else {
           lock(&state)
             .contents
-            .insert(step.uri.clone(), step.content.clone());
-          let event = content_event(&state, &step.uri, step.content.clone());
+            .insert(step.uri.clone(), step.contents.clone());
+          let event = content_event(&state, &step.uri, step.contents.clone());
           bus.deliver(&agent, &uuid, event);
         }
         *lock(&cursor) = index.saturating_add(1);
@@ -689,6 +732,7 @@ impl ResourceInjections for MockTooling {
       let result = ToolCallResult {
         content: text_content(&step.result),
         structured_content: step.structured_content.clone(),
+        is_error: step.is_error,
       };
       if let Some(record) = lock(&calls).get_mut(record_index) {
         record.result = Some(result.clone());
@@ -701,6 +745,7 @@ impl ResourceInjections for MockTooling {
           arguments: arguments.clone(),
           content: result.content.to_string(),
           structured_content: result.structured_content.map(|v| v.to_string()),
+          is_error: result.is_error,
         }),
       );
       true
@@ -816,14 +861,14 @@ mod tests {
         "initial_resource_list": [
           { "uri": "mem://a", "name": "a" },
         ],
-        "initial_resource_contents": { "mem://a": "v0" },
+        "initial_resource_contents": { "mem://a": ["v0"] },
         "resource_list_updates": [
           { "resources": [{ "uri": "mem://a", "name": "a" }] },
           { "resources": [{ "uri": "mem://b", "name": "b" }] },
         ],
         "resource_content_updates": [
-          { "uri": "mem://a", "content": "v1" },
-          { "uri": "mem://a", "content": "v2" },
+          { "uri": "mem://a", "contents": ["v1"] },
+          { "uri": "mem://a", "contents": ["v2"] },
         ],
       }),
       crate::config::Tunables::default(),
@@ -835,7 +880,7 @@ mod tests {
       Some(Ok(ResourceNotification::Updated { .. }))
     ));
     assert_eq!(
-      tooling.read_resource("mem://a").await?.content,
+      tooling.read_resource("mem://a").await?[0].content,
       "v1",
       "the first update should already be applied"
     );
@@ -843,7 +888,7 @@ mod tests {
       updates.next().await,
       Some(Ok(ResourceNotification::Updated { .. }))
     ));
-    assert_eq!(tooling.read_resource("mem://a").await?.content, "v2");
+    assert_eq!(tooling.read_resource("mem://a").await?[0].content, "v2");
     assert!(updates.next().await.is_none());
 
     let mut list = tooling.subscribe_resource_list().await?;
@@ -963,7 +1008,7 @@ mod tests {
       &serde_json::json!({
         "resource_list_updates": [{ "resources": [], "error": "boom" }],
         "resource_content_updates": [
-          { "uri": "mem://a", "content": "x", "error": "boom" },
+          { "uri": "mem://a", "contents": ["x"], "error": "boom" },
         ],
       }),
       crate::config::Tunables::default(),

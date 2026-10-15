@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use omw::provider::{ChatMessage, ProviderEntry, Role, ToolCall};
+use omw::provider::{ChatMessage, ProviderEntry, ToolCall};
 use serde_json::json;
 use wiremock::matchers::{bearer_token, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -37,10 +37,11 @@ async fn chat_all(
 
 fn user(content: &str) -> ChatMessage {
   ChatMessage {
-    role: Role::User,
+    role: "user".to_string(),
     content: Some(content.to_string()),
     reasoning: None,
-    tool_call: None,
+    tool_calls: Vec::new(),
+    tool_call_id: None,
   }
 }
 
@@ -82,12 +83,13 @@ async fn content_deltas_stream_in_order() -> anyhow::Result<()> {
   let content: Vec<Option<&str>> =
     deltas.iter().map(|d| d.content.as_deref()).collect();
   assert_eq!(content, vec![Some("Hello"), Some(", world")]);
-  assert!(deltas.iter().all(|d| d.tool_call.is_none()));
+  assert!(deltas.iter().all(|d| d.tool_calls.is_empty()));
   Ok(())
 }
 
 #[tokio::test]
-async fn reassembles_tool_call_end_to_end() -> anyhow::Result<()> {
+async fn surfaces_tool_call_fragments_and_reassembles_in_blocking_chat()
+-> anyhow::Result<()> {
   let server = MockServer::start().await;
   let body = format!(
     "{}data: [DONE]\n\n",
@@ -107,17 +109,83 @@ async fn reassembles_tool_call_end_to_end() -> anyhow::Result<()> {
   let entry = build_provider(&server.uri())?;
   let deltas =
     chat_all(&entry, "gpt-test", vec![user("what's the weather?")]).await?;
-  let tool_calls: Vec<Option<&ToolCall>> =
-    deltas.iter().map(|d| d.tool_call.as_ref()).collect();
-  // The `[DONE]` flush carries the fully reassembled arguments.
-  let last = tool_calls
-    .into_iter()
-    .flatten()
-    .last()
-    .ok_or_else(|| anyhow::anyhow!("no tool call observed"))?;
-  assert_eq!(last.id, "call_1");
-  assert_eq!(last.name, "get_weather");
-  assert_eq!(last.arguments, r#"{"city":"Paris"}"#);
+  // Streaming surfaces the fragments verbatim, tagged with their index.
+  let fragments: Vec<&omw::provider::ToolCallDelta> =
+    deltas.iter().flat_map(|d| d.tool_calls.iter()).collect();
+  assert_eq!(fragments.len(), 3);
+  assert!(fragments.iter().all(|f| f.index == 0));
+  assert_eq!(fragments[0].id.as_deref(), Some("call_1"));
+  assert_eq!(fragments[0].name.as_deref(), Some("get_weather"));
+  assert_eq!(fragments[2].arguments.as_deref(), Some(r#""Paris"}"#));
+
+  // The blocking `chat` path reassembles them into one complete call.
+  let result = entry
+    .inner()
+    .chat(
+      "gpt-test",
+      vec![user("what's the weather?")],
+      Vec::new(),
+      None,
+    )
+    .await?;
+  assert_eq!(result.tool_calls.len(), 1);
+  assert_eq!(result.tool_calls[0].id, "call_1");
+  assert_eq!(result.tool_calls[0].name, "get_weather");
+  assert_eq!(result.tool_calls[0].arguments, r#"{"city":"Paris"}"#);
+  Ok(())
+}
+
+#[tokio::test]
+async fn sends_parallel_tool_calls_and_tool_call_id() -> anyhow::Result<()> {
+  let server = MockServer::start().await;
+  Mock::given(method("POST"))
+    .and(path("/v1/chat/completions"))
+    .and(body_partial_json(json!({
+      "messages": [
+        { "role": "assistant", "tool_calls": [
+          { "id": "call_1", "type": "function", "function": { "name": "a", "arguments": "{}" } },
+          { "id": "call_2", "type": "function", "function": { "name": "b", "arguments": "{}" } },
+        ]},
+        { "role": "tool", "content": "ok", "tool_call_id": "call_1" },
+      ],
+    })))
+    .respond_with(ResponseTemplate::new(200).set_body_string(
+      "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+    ))
+    .expect(1)
+    .mount(&server)
+    .await;
+
+  let entry = build_provider(&server.uri())?;
+  let messages = vec![
+    ChatMessage {
+      role: "assistant".to_string(),
+      content: None,
+      reasoning: None,
+      tool_calls: vec![
+        ToolCall {
+          id: "call_1".to_string(),
+          name: "a".to_string(),
+          arguments: "{}".to_string(),
+        },
+        ToolCall {
+          id: "call_2".to_string(),
+          name: "b".to_string(),
+          arguments: "{}".to_string(),
+        },
+      ],
+      tool_call_id: None,
+    },
+    ChatMessage {
+      role: "tool".to_string(),
+      content: Some("ok".to_string()),
+      reasoning: None,
+      tool_calls: Vec::new(),
+      tool_call_id: Some("call_1".to_string()),
+    },
+  ];
+  chat_all(&entry, "gpt-test", messages).await?;
+  server.verify().await;
   Ok(())
 }
 

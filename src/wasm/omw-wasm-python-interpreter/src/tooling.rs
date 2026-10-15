@@ -90,6 +90,14 @@ fn tooling_handle(vm: &VirtualMachine, name: &str) -> PyResult<PyObjectRef> {
   };
   handle.set_attr("read_resource", read_resource, vm)?;
 
+  let list_resource_templates = {
+    let name = name.to_owned();
+    vm.new_function("list_resource_templates", move |vm: &VirtualMachine| {
+      tooling_list_resource_templates(&name, vm)
+    })
+  };
+  handle.set_attr("list_resource_templates", list_resource_templates, vm)?;
+
   let subscribe_resource_list = {
     let name = name.to_owned();
     vm.new_function("subscribe_resource_list", move |vm: &VirtualMachine| {
@@ -231,11 +239,30 @@ fn tooling_read_resource(
   uri: &PyStrRef,
   vm: &VirtualMachine,
 ) -> PyResult<PyObjectRef> {
-  let content = crate::omw::omw::tooling::get(name)
+  let contents = crate::omw::omw::tooling::get(name)
     .map_err(|e| vm.new_runtime_error(e))?
     .read_resource(&convert::str_of(uri))
     .map_err(|e| vm.new_runtime_error(e))?;
-  convert::resource_content_to_py(vm, content)
+  let values: PyResult<Vec<PyObjectRef>> = contents
+    .into_iter()
+    .map(|content| convert::resource_content_to_py(vm, content))
+    .collect();
+  Ok(vm.ctx.new_list(values?).into())
+}
+
+fn tooling_list_resource_templates(
+  name: &str,
+  vm: &VirtualMachine,
+) -> PyResult<PyObjectRef> {
+  let templates = crate::omw::omw::tooling::get(name)
+    .map_err(|e| vm.new_runtime_error(e))?
+    .list_resource_templates()
+    .map_err(|e| vm.new_runtime_error(e))?;
+  let values: PyResult<Vec<PyObjectRef>> = templates
+    .into_iter()
+    .map(|template| convert::resource_template_to_py(vm, template))
+    .collect();
+  Ok(vm.ctx.new_list(values?).into())
 }
 
 fn tooling_subscribe_resource_list(

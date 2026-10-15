@@ -132,8 +132,9 @@ pub mod prelude {
   pub use crate::Brain;
   pub use crate::omw::omw::types::{
     ChatDelta, ChatMessage, ChatResult, EndpointMessage, EndpointSessionEnd,
-    Event, EventEnvelope, ResourceContent, ResourceInfo, Role, Tool, ToolCall,
-    ToolResult, Usage,
+    Event, EventEnvelope, ResourceAnnotations, ResourceContent, ResourceInfo,
+    ResourceTemplate, Tool, ToolAnnotations, ToolCall, ToolCallDelta,
+    ToolResult,
   };
   pub use crate::provider::Provider;
   pub use crate::tooling::Tooling;

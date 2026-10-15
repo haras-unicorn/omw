@@ -44,9 +44,10 @@ The provider reads reasoning output from both spellings endpoints use —
 `reasoning` field and concatenated on `chat-result.reasoning`. A `reasoning`
 field on an outgoing assistant message is sent back as `reasoning`. Token counts
 are read from any chunk's `usage` (many endpoints only send it on the final
-chunk, or after a `stream_options.include_usage` request); each delta and the
-result carry a `usage` block with `prompt_tokens`, `completion_tokens`, and
-`total_tokens` when reported.
+chunk, or after a `stream_options.include_usage` request); the provider
+serializes that object verbatim into the delta's and the result's opaque `usage`
+string, without parsing it, so every provider-specific detail key passes
+through.
 
 ## How a chat stream works
 
@@ -60,13 +61,16 @@ decoded line by line:
 - a `[DONE]` marker ends the stream with a final `chat-end`,
 - each JSON chunk contributes one `delta` event.
 
-### Tool-call reassembly
+### Tool-call fragments
 
-OpenAI streams tool-call arguments in fragments. The provider accumulates
-`arguments` per tool-index and only surfaces a `tool-call` once both its `id`
-and `name` are known; when all fragments have arrived it emits the fully
-reassembled call. The lowest tool index is surfaced first, keeping order
-deterministic.
+OpenAI streams tool-call arguments in fragments. The provider emits each wire
+fragment **verbatim**, tagged with its own `index`: one `tool-call-delta` per
+fragment, carrying only the fields the fragment actually had (`id` and the
+function `name` on the first fragment, `arguments` fragments thereafter). It
+performs no reassembly, no lowest-index re-surfacing and no end-of-stream flush,
+so a consumer groups fragments by `index` to build complete calls. The blocking
+`chat` path and the endpoint's buffered (non-streaming) reply path do
+reassemble, because they return a full result.
 
 ## OpenAI vs. anything else
 

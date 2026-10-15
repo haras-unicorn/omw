@@ -14,6 +14,8 @@ pub struct ToolResult {
   pub content: String,
   /// MCP `structuredContent` as JSON, when the tool produced one.
   pub structured_content: Option<String>,
+  /// MCP `isError`: whether this is a tool-execution error, not a success.
+  pub is_error: bool,
 }
 
 /// An inbound endpoint request routed to a subscribed agent. `session`
@@ -64,8 +66,9 @@ pub enum Event {
   ToolResult(ToolResult),
   /// The subscribed resource list changed.
   ResourceListUpdated(Vec<crate::tooling::ResourceInfo>),
-  /// A subscribed resource updated in place; carries the freshly read content.
-  ResourceUpdated(ResourceContent),
+  /// A subscribed resource updated in place; carries the freshly read
+  /// contents (one or more).
+  ResourceUpdated(Vec<ResourceContent>),
   /// An inbound endpoint request routed to a subscribed agent.
   EndpointMessage(EndpointMessage),
   /// An endpoint session ended: normal or abrupt.

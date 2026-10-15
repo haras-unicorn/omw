@@ -28,8 +28,13 @@ interfaces. Only one listener is supported.
 `POST /v1/chat/completions` accepts an OpenAI-style request. `stream: true`
 delivers SSE deltas ending with `data: [DONE]`; `stream: false` buffers deltas
 into one JSON `chat.completion`. `tools` (OpenAI tool schema) is optional.
-Errors — unknown roles, malformed tools, unknown models — are reported as OpenAI
-`error` responses with matching status codes.
+Errors — malformed message content, malformed tools, unknown models — are
+reported as OpenAI `error` responses with matching status codes.
+
+Every tool call on an inbound assistant message is mapped (not just the first),
+and a `"tool"` message's `tool_call_id` is read and forwarded. On the way back,
+the SSE relay emits each tool-call fragment with its own `index`, and the
+buffered reply reassembles the fragments per `index` into complete calls.
 
 Any other request fields the client sends (`temperature`, `max_tokens`,
 `reasoning_effort`, …) are collected verbatim and forwarded to the owning agent

@@ -70,27 +70,44 @@ A Cargo workspace with the crates below plus a single WIT contract.
   - `provider/` — the `Provider` abstraction over an OpenAI-family chat stream,
     implemented for OpenAI in `openai.rs` (behind the `provider-openai` feature)
     and as a scripted in-memory double in `mock.rs` (behind
-    `any(test, feature = "mock")`; sequenced `turns` — each optionally ending
-    with an `error` after its deltas or `pending` forever — plus `models`). The
-    `build` factory dispatches on the configured `kind`.
+    `any(test, feature = "mock")`; sequenced `turns` — each optionally carrying
+    `tool_calls`, ending with an `error` after its deltas, or `pending` forever
+    — plus `models`). The OpenAI decoder emits each tool-call fragment verbatim,
+    tagged with its wire `index`, and does no reassembly; the blocking `chat`
+    default path reassembles fragments per index (`merge_tool_call_deltas`), as
+    does the endpoint's buffered reply path. `ToolCall` and `ToolCallDelta` are
+    the DTOs for a complete call and one raw streaming fragment; `ChatMessage`
+    carries an opaque `role` string, `tool_calls: Vec<ToolCall>` and an optional
+    `tool_call_id`; `ChatDelta` carries `tool_calls: Vec<ToolCallDelta>` and an
+    opaque-JSON `usage` string; `ChatResult` carries reassembled `tool_calls`
+    and an opaque `usage`. The `build` factory dispatches on the configured
+    `kind`.
 
   - `tooling/` — the `Tooling` abstraction over MCP-style tool servers,
-    implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature)
-    with a `transport`-tagged config enum (`stdio` / `http`), and as a scripted
-    in-memory double in `mock.rs` (behind `any(test, feature = "mock")`: static
-    `tools`, an ordered name-verified `tool_calls` list (each a text `result`
-    convenience plus optional `structured_content`, `error` or `pending`),
-    `initial_resource_*` plus ordered `resource_*_updates` (each optionally
+    implemented as an MCP client in `mcp.rs` (behind the `tooling-mcp` feature:
+    it walks `tools/list` pagination, carries MCP tool/resource metadata and
+    resource templates, and maps `isError`) with a `transport`-tagged config
+    enum (`stdio` / `http`), and as a scripted in-memory double in `mock.rs`
+    (behind `any(test, feature = "mock")`: static `tools`, an ordered
+    name-verified `tool_calls` list (each a text `result` convenience plus
+    optional `structured_content`, `is_error`, `error` or `pending`),
+    `initial_resource_*` (contents keyed by URI to a list of strings) plus a
+    `resource_templates` list and ordered `resource_*_updates` (each optionally
     `error` or `pending`), each step gated by a shared `after` and paced by
     `delay_ms`; it learns the trace through `Tooling::attach_trace`, a default
     no-op the supervisor calls after building entries). `call_tool` returns a
-    `ToolCallResult` (`content` + optional `structured_content`, both JSON). The
-    `build` factory dispatches on the configured `kind`. For deterministic runs,
-    the host takes a mock-only `pub(crate) ResourceInjections` hook carried on
-    the `ToolingEntry` (set by `Registry::register_mock`, off the public
-    `Tooling` trait) and registers the mock's gated steps as call-boundary
-    injections instead of pumping them; the host's `call_tool` /
-    `subscribe_resource*` use it when present, otherwise the pump.
+    `ToolCallResult` (`content` + optional `structured_content`, both JSON, plus
+    `is_error`). The DTOs carry the MCP metadata: `Tool` has optional `title`
+    and `annotations`, `ResourceInfo` optional `title`, `size` and
+    `annotations`, and `ResourceTemplate` (`uri_template` + metadata);
+    `read_resource` returns a `Vec<ResourceContent>` (one read may yield
+    several) and `list_resource_templates` the templates. The `build` factory
+    dispatches on the configured `kind`. For deterministic runs, the host takes
+    a mock-only `pub(crate) ResourceInjections` hook carried on the
+    `ToolingEntry` (set by `Registry::register_mock`, off the public `Tooling`
+    trait) and registers the mock's gated steps as call-boundary injections
+    instead of pumping them; the host's `call_tool` / `subscribe_resource*` use
+    it when present, otherwise the pump.
 
   - `runtime/` — the `Runtime` abstraction (`Runtime::run(&AgentContext)`), with
     `bindings.rs` (the single `bindgen!` for the `omw` world, mapped onto host
@@ -127,26 +144,29 @@ A Cargo workspace with the crates below plus a single WIT contract.
     `POST /v1/chat/completions`, routing each request as an `endpoint-message`
     inbox event under the model name the calling agent subscribed to, and
     streaming the agent's `stream-endpoint` deltas back as SSE or a buffered
-    JSON completion. The `build` factory dispatches on the configured `kind`;
-    transport-agnostic state lives in `host/bus.rs` (`endpoint_subscribe` /
-    `endpoint_route`) and `host/endpoint.rs` (`EndpointRegistry`), and a
-    scripted `mock.rs` client double (behind `any(test, feature = "mock")`)
-    drives sessions for `omw-test`: each of its `requests` (carrying a required
-    `session_id` label) is registered synchronously — before any agent runs — as
-    a call-boundary injection that fires once the model is subscribed and its
-    `after` pattern (if any) has been observed, so concurrent requests are
-    routed deterministically; an optional `session_end = { close = N }` /
-    `{ abort = N }` ends the session after `N` deltas (normal `close`, since
-    `EndpointRegistry::close` delivers the normal end, or erroring `abort`)
-    instead of the default silent drain. A request fires once the model is
-    subscribed, or — when gated by an `after` pattern — once a matching trace
-    event has been observed (order-only, via the bus's append-only `observed`
-    log). `serve` only keeps the endpoint task alive. The agent's
-    `stream-endpoint` call detail carries the delta (`session`, `content`,
-    `tool_call`, `finish_reason`), so the reply is observable as the brain's own
-    calls and no separate endpoint trace event exists; each reply records both
-    the `session_id` and the opaque session UUID plus its ending (`closed` /
-    `aborted` / `error`) in the snapshot.
+    JSON completion. The inbound parser maps **all** tool calls (not just the
+    first) and reads each `"tool"` message's `tool_call_id`; the SSE relay emits
+    each tool-call fragment's own `index`, and the buffered reply reassembles
+    fragments per index. The `build` factory dispatches on the configured
+    `kind`; transport-agnostic state lives in `host/bus.rs`
+    (`endpoint_subscribe` / `endpoint_route`) and `host/endpoint.rs`
+    (`EndpointRegistry`), and a scripted `mock.rs` client double (behind
+    `any(test, feature = "mock")`) drives sessions for `omw-test`: each of its
+    `requests` (carrying a required `session_id` label) is registered
+    synchronously — before any agent runs — as a call-boundary injection that
+    fires once the model is subscribed and its `after` pattern (if any) has been
+    observed, so concurrent requests are routed deterministically; an optional
+    `session_end = { close = N }` / `{ abort = N }` ends the session after `N`
+    deltas (normal `close`, since `EndpointRegistry::close` delivers the normal
+    end, or erroring `abort`) instead of the default silent drain. A request
+    fires once the model is subscribed, or — when gated by an `after` pattern —
+    once a matching trace event has been observed (order-only, via the bus's
+    append-only `observed` log). `serve` only keeps the endpoint task alive. The
+    agent's `stream-endpoint` call detail carries the delta (`session`,
+    `content`, `tool_calls`, `finish_reason`), so the reply is observable as the
+    brain's own calls and no separate endpoint trace event exists; each reply
+    records both the `session_id` and the opaque session UUID plus its ending
+    (`closed` / `aborted` / `error`) in the snapshot.
 
   - `bindings.rs` — the single `bindgen!` for the `omw` world, mapped onto host
     types.
@@ -183,7 +203,9 @@ A Cargo workspace with the crates below plus a single WIT contract.
       triggered injection synchronously at a guest call boundary and drops the
       consumed ones; registration order is preserved (never a `HashMap`).
 
-    - `events.rs` is the `Event`/`EventEnvelope` type every I/O source pushes.
+    - `events.rs` is the `Event`/`EventEnvelope` type every I/O source pushes
+      (`tool-result` carries the tool result's `is_error`; `resource-updated`
+      carries a list of `resource-content`).
 
     - `time.rs` is the tick/timer helpers + cancellable timer pump.
 
@@ -195,9 +217,10 @@ A Cargo workspace with the crates below plus a single WIT contract.
       only for a natural `ended` / `failed` end.
 
     - `resources.rs` is the cancellable resource-subscription pump that delivers
-      `resource-list-updated`/`resource-updated` events into inboxes. Real
-      tooling uses the pump; the mock registers call-boundary injections instead
-      (see `tooling/mock.rs`).
+      `resource-list-updated`/`resource-updated` events into inboxes (the latter
+      carrying the list of resource contents a read yielded). Real tooling uses
+      the pump; the mock registers call-boundary injections instead (see
+      `tooling/mock.rs`).
 
     - `tool_calls.rs` is the cancellable tool-call pump that delivers
       `tool-result` events into inboxes. Real tooling uses the pump; the mock
@@ -386,8 +409,10 @@ A Cargo workspace with the crates below plus a single WIT contract.
   lifetime guards, and re-exports `serde`/`serde_json`. Provides `_as` helpers
   for opaque JSON: `host::memory_get_as` / `memory_set_as`, and record accessors
   (`ToolCall::arguments_as`, `ToolResult::content_as`,
-  `EndpointMessage::params_as`, …). JSON inputs to the typed handles take a
-  `serde_json::Value` directly (`Provider::chat`/`chat_stream` `params`,
+  `EndpointMessage::params_as`, …), plus `ChatMessage`'s `with_tool_call` /
+  `with_tool_call_id` and `ToolCallDelta`'s fragment builders. JSON inputs to
+  the typed handles take a `serde_json::Value` directly
+  (`Provider::chat`/`chat_stream` `params`,
   `Tooling::call_tool`/`call_tool_blocking` `arguments`). Vendors the WIT
   contract under `wit/` (kept in sync with `src/lib/omw/wit/`).
 
@@ -396,7 +421,12 @@ A Cargo workspace with the crates below plus a single WIT contract.
   crates.io; its manifest carries `publish = false`).
 
 - `src/lib/omw/wit/omw.wit` — the single WIT contract, used by host (`bindgen!`)
-  and guests (`wit-bindgen::generate!`). Changes here ripple into both crates.
+  and guests (`wit-bindgen::generate!`). The `types` interface carries the
+  shared records: `chat-message` with an opaque `role` string plus `tool-calls`
+  / `tool-call-id`, `chat-delta` with `tool-calls: list<tool-call-delta>` (raw
+  `index` / optional `id` / `name` / `arguments` fragments) and an opaque
+  `usage` string, and `chat-result` with reassembled `tool-calls` and an opaque
+  `usage`. Changes here ripple into both crates.
 
 - `src/lib/omw/examples/` — runnable _library_ examples (the `omw` package's
   `examples/`, built with `--all-features`), each a self-contained `main` that
@@ -424,7 +454,8 @@ A Cargo workspace with the crates below plus a single WIT contract.
 
 - `docs/` — mdbook documentation, published to GitHub Pages. `docs/testing/`
   (the binary plus per-mock pages) and `docs/examples.md` cover the test and
-  example features.
+  example features; `docs/compliance.md` records the external-standards
+  baseline, the drifts and gaps, and the plan to close them.
 
 - `src/nix/dev.nix` / `src/nix/dev.nu` — the flake's `dev` wrapper: `dev.nix`
   builds the dev shells, owns the `binaries`/`variants`/`formats` build-matrix
@@ -518,8 +549,8 @@ of the library at all.
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`              | `Registries` (`new` / `env_overlay`), `run_agents`, `loop_agents`, `run_agents_traced`, `loop_agents_traced` (each takes a caller-owned `Shutdown`)                                                                  | supervisor internals (`Shared`, `run_agent`) private                                                                                                                                                                                         |
 | `config`             | `Config`, `AgentConfig`, `ImplConfig`, `Tunables`, `Format`                                                                                                                                                          | `env` (`env_overlay` + the `OpaquePath` pattern type) is `pub(crate)`; default fns private                                                                                                                                                   |
-| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`Role`, `ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `Usage`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                                                        |
-| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceContent`, `ResourceNotification`, `ToolCallResult`), `register_toolings!`                                                   | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                                                     |
+| `provider`           | `Provider`, `Factory`, `Registry`, `ProviderEntry`, DTOs (`ChatMessage`, `ChatDelta`, `ChatResult`, `ToolCall`, `ToolCallDelta`), `register_providers!`                                                              | `openai` private mod, `mock` `pub(crate)` (test only)                                                                                                                                                                                        |
+| `tooling`            | `Tooling`, `Factory`, `Registry`, `ToolingEntry`, DTOs (`Tool`, `ResourceInfo`, `ResourceTemplate`, `ResourceContent`, `ResourceNotification`, `ToolCallResult`), `register_toolings!`                               | `mcp` still `pub mod` (impl detail), `mock` `pub(crate)`                                                                                                                                                                                     |
 | `runtime`            | `Runtime`, `Factory`, `Registry`, `RuntimeEntry`, `RunOutcome`, `register_runtimes!`                                                                                                                                 | `wasm` / `rhai` / `js` / `python` plus `engine` / `bindings` / `host` private                                                                                                                                                                |
 | `endpoint`           | `Endpoint`, `Factory`, `Registry`, `EndpointEntry`, `register_endpoints!`                                                                                                                                            | `openai` still `pub mod` (impl detail)                                                                                                                                                                                                       |
 | `host`               | `AgentContext` (`name()` only), `Event`, `EventEnvelope` (plus `ToolResult`, `EndpointMessage`, `EndpointSessionEnd`, `trace` types (`TraceEvent`, `TraceSender`, `AgentTrace`, `group`))                            | `bus` / `ctx` / `endpoint` / `events` are `pub` mods, `trace` is a `pub` mod (`memory` / `resources` / `streams` / `time` / `tool_calls` are `pub(crate)`)                                                                                   |

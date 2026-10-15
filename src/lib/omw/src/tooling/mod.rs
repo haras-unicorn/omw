@@ -15,6 +15,24 @@ pub mod mcp;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) mod mock;
 
+/// Behavioral hints a tool declares about itself (MCP `ToolAnnotations`).
+#[derive(
+  Debug,
+  Clone,
+  PartialEq,
+  Eq,
+  Default,
+  serde::Deserialize,
+  serde::Serialize,
+  schemars::JsonSchema,
+)]
+pub struct ToolAnnotations {
+  pub read_only_hint: Option<bool>,
+  pub destructive_hint: Option<bool>,
+  pub idempotent_hint: Option<bool>,
+  pub open_world_hint: Option<bool>,
+}
+
 /// A tool exposed by a tooling.
 #[derive(
   Debug,
@@ -27,16 +45,62 @@ pub(crate) mod mock;
 )]
 pub struct Tool {
   pub name: String,
+  /// Optional human-readable display title (MCP `title`).
+  pub title: Option<String>,
   pub description: Option<String>,
   /// JSON Schema for the tool's arguments.
   pub input_schema: Value,
   /// Optional JSON Schema for the tool's structured output (MCP
   /// `outputSchema`). Absent when the tool declares no output shape.
   pub output_schema: Option<Value>,
+  /// Optional behavioral hints the tool declares (MCP `annotations`).
+  pub annotations: Option<ToolAnnotations>,
+}
+
+/// Hints a resource declares about its audience and freshness (MCP resource
+/// `annotations`). Not `Eq`: `priority` is a float.
+#[derive(
+  Debug,
+  Clone,
+  PartialEq,
+  Default,
+  serde::Deserialize,
+  serde::Serialize,
+  schemars::JsonSchema,
+)]
+pub struct ResourceAnnotations {
+  /// Intended audience roles; empty means any.
+  pub audience: Vec<String>,
+  /// Relative importance in `[0, 1]`, when the server expresses one.
+  pub priority: Option<f64>,
+  /// The resource's last-modified time as an ISO 8601 string, when known.
+  pub last_modified: Option<String>,
 }
 
 /// An MCP resource (a URI-addressed, readable data value) exposed by a
 /// tooling.
+#[derive(
+  Debug,
+  Clone,
+  PartialEq,
+  serde::Deserialize,
+  serde::Serialize,
+  schemars::JsonSchema,
+)]
+pub struct ResourceInfo {
+  pub uri: String,
+  pub name: String,
+  /// Optional human-readable display title (MCP `title`).
+  pub title: Option<String>,
+  pub description: Option<String>,
+  pub mime_type: Option<String>,
+  /// Raw content size in bytes, when known.
+  pub size: Option<u64>,
+  /// Optional hints about the resource's audience and freshness.
+  pub annotations: Option<ResourceAnnotations>,
+}
+
+/// A parameterized resource (MCP `ResourceTemplate`).
 #[derive(
   Debug,
   Clone,
@@ -46,9 +110,11 @@ pub struct Tool {
   serde::Serialize,
   schemars::JsonSchema,
 )]
-pub struct ResourceInfo {
-  pub uri: String,
+pub struct ResourceTemplate {
+  /// An RFC 6570 URI template for constructing resource URIs.
+  pub uri_template: String,
   pub name: String,
+  pub title: Option<String>,
   pub description: Option<String>,
   pub mime_type: Option<String>,
 }
@@ -84,6 +150,10 @@ pub struct ToolCallResult {
   pub content: Value,
   /// MCP `structuredContent`, when the tool produced one.
   pub structured_content: Option<Value>,
+  /// Whether this is a tool-execution error rather than a success (MCP
+  /// `isError`). A tool-level failure is a normal result whose `content`
+  /// carries the error text.
+  pub is_error: bool,
 }
 
 /// A configured tooling instance: the impl plus its config-derived name and
@@ -198,8 +268,19 @@ pub trait Tooling: Send + Sync {
   ) -> anyhow::Result<ToolCallResult>;
   /// Every resource visible on this instance.
   async fn list_resources(&self) -> anyhow::Result<Vec<ResourceInfo>>;
-  /// Read one resource's current content by URI.
-  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent>;
+  /// Every resource template visible on this instance. Back ends that expose
+  /// no templates return an empty list.
+  async fn list_resource_templates(
+    &self,
+  ) -> anyhow::Result<Vec<ResourceTemplate>> {
+    Ok(Vec::new())
+  }
+  /// Read one resource's current contents by URI. A single read may yield
+  /// several items (for example, every file behind a directory resource).
+  async fn read_resource(
+    &self,
+    uri: &str,
+  ) -> anyhow::Result<Vec<ResourceContent>>;
   /// Subscribe to the resource *list* changing; yielded notifications arrive
   /// on the returned stream (dropping the stream cancels the subscription).
   async fn subscribe_resource_list(

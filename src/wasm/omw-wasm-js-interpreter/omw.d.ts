@@ -10,8 +10,8 @@
 //
 // See docs/runtime/js.md for the prose reference.
 
-/** A sender role in a chat conversation. */
-type Role = "system" | "user" | "assistant" | "tool";
+/** A sender role in a chat conversation (an opaque role string). */
+type Role = string;
 
 /** A request for the model to invoke one named tool. */
 interface ToolCall {
@@ -28,9 +28,24 @@ interface ToolCall {
   arguments: unknown;
 }
 
+/** One incremental fragment of a streaming tool call. */
+interface ToolCallDelta {
+  /** Position of the call within the response's tool-call list. */
+  index: number;
+
+  /** Tool call identifier; present on the call's first fragment. */
+  id?: string;
+
+  /** Tool name; present on the call's first fragment. */
+  name?: string;
+
+  /** A raw fragment of the tool's opaque JSON arguments. */
+  arguments?: unknown;
+}
+
 /** A single message in a chat conversation. */
 interface ChatMessage {
-  /** The sender; defaults to `"user"` when omitted. */
+  /** The sender role; defaults to `"user"` when omitted. */
   role?: Role;
 
   /** Optional text content; absent on messages bearing only a tool call. */
@@ -42,21 +57,21 @@ interface ChatMessage {
    */
   reasoning?: string;
 
-  /** Optional tool call attached to this message. */
-  toolCall?: ToolCall;
+  /**
+   * The tool calls this message carries; an assistant message may carry
+   * several in parallel.
+   */
+  toolCalls?: ToolCall[];
+
+  /**
+   * For a `"tool"` message, the identifier of the assistant tool call this
+   * message answers.
+   */
+  toolCallId?: string;
 }
 
-/** Token accounting for one chat response. */
-interface Usage {
-  /** Tokens in the prompt/request. */
-  promptTokens?: number;
-
-  /** Tokens generated in the response. */
-  completionTokens?: number;
-
-  /** Total tokens, when the provider reports it. */
-  totalTokens?: number;
-}
+/** Token accounting for one chat response, as an opaque JSON object. */
+type Usage = Record<string, unknown>;
 
 /** One incremental chunk of a streaming chat response. */
 interface ChatDelta {
@@ -66,8 +81,8 @@ interface ChatDelta {
   /** Optional reasoning/thinking content produced by this chunk. */
   reasoning?: string;
 
-  /** Optional tool call announced by this chunk. */
-  toolCall?: ToolCall;
+  /** The tool-call fragments this chunk carries, each tagged with its index. */
+  toolCalls?: ToolCallDelta[];
 
   /** Optional terminal reason the stream stopped (`"stop"`, `"length"`, …). */
   finishReason?: string;
@@ -76,10 +91,28 @@ interface ChatDelta {
   usage?: Usage;
 }
 
+/** Behavioral hints a tool declares about itself (MCP `ToolAnnotations`). */
+interface ToolAnnotations {
+  /** The tool does not modify its environment. */
+  readOnlyHint?: boolean;
+
+  /** The tool may perform destructive updates. */
+  destructiveHint?: boolean;
+
+  /** Repeated calls with the same arguments have no additional effect. */
+  idempotentHint?: boolean;
+
+  /** The tool may interact with entities outside its environment. */
+  openWorldHint?: boolean;
+}
+
 /** A callable tool offered to the model, as passed to `chat`/`chatStream`. */
 interface ChatTool {
   /** The tool's name. */
   name: string;
+
+  /** Optional human-readable display title. */
+  title?: string;
 
   /** Optional human-readable description of what the tool does. */
   description?: string;
@@ -89,12 +122,18 @@ interface ChatTool {
 
   /** Optional JSON-schema document; absent when omitted. */
   outputSchema?: unknown;
+
+  /** Optional behavioral hints the tool declares. */
+  annotations?: ToolAnnotations;
 }
 
 /** A tool as returned by `listTools`. */
 interface Tool {
   /** The tool's name. */
   name: string;
+
+  /** Optional human-readable display title. */
+  title?: string;
 
   /** Optional human-readable description of what the tool does. */
   description?: string;
@@ -104,6 +143,9 @@ interface Tool {
 
   /** The tool's optional output JSON-schema document, parsed from JSON. */
   outputSchema?: unknown;
+
+  /** Optional behavioral hints the tool declares. */
+  annotations?: ToolAnnotations;
 }
 
 /** The full result of a blocking `chat` call. */
@@ -146,6 +188,24 @@ interface ToolResult {
    * when possible; absent when the tool produced none.
    */
   structuredContent?: unknown;
+
+  /**
+   * Whether this result is a tool-execution error rather than a success
+   * (MCP `isError`).
+   */
+  isError: boolean;
+}
+
+/** Hints a resource declares about its audience and freshness. */
+interface ResourceAnnotations {
+  /** Intended audience roles (`"user"`, `"assistant"`, …); empty means any. */
+  audience: string[];
+
+  /** Relative importance in `[0, 1]`, when the server expresses one. */
+  priority?: number;
+
+  /** The resource's last-modified time as an ISO 8601 string, when known. */
+  lastModified?: string;
 }
 
 /** A tooling resource as returned by `listResources`. */
@@ -156,10 +216,40 @@ interface ResourceInfo {
   /** The programmatic name of the resource. */
   name: string;
 
+  /** Optional human-readable display title. */
+  title?: string;
+
   /** Optional description of what this resource represents. */
   description?: string;
 
   /** The MIME type of the resource, if known. */
+  mimeType?: string;
+
+  /** The raw content size in bytes (before base64/tokenization), if known. */
+  size?: number;
+
+  /** Optional hints about the resource's audience and freshness. */
+  annotations?: ResourceAnnotations;
+}
+
+/**
+ * A parameterized resource (MCP `ResourceTemplate`): fill the URI template to
+ * a concrete URI, then read or subscribe it.
+ */
+interface ResourceTemplate {
+  /** An RFC 6570 URI template for constructing resource URIs. */
+  uriTemplate: string;
+
+  /** The programmatic name of the template. */
+  name: string;
+
+  /** Optional human-readable display title. */
+  title?: string;
+
+  /** Optional description of what the template is for. */
+  description?: string;
+
+  /** The MIME type for resources matching this template, if uniform. */
   mimeType?: string;
 }
 
@@ -218,7 +308,7 @@ type OmwEvent =
   | { id: string; kind: "chat-end"; payload: null }
   | { id: string; kind: "tool-result"; payload: ToolResult }
   | { id: string; kind: "resource-list-updated"; payload: ResourceInfo[] }
-  | { id: string; kind: "resource-updated"; payload: ResourceContent }
+  | { id: string; kind: "resource-updated"; payload: ResourceContent[] }
   | { id: string; kind: "endpoint-message"; payload: EndpointMessage }
   | { id: string; kind: "endpoint-session-end"; payload: EndpointSessionEnd };
 
@@ -320,8 +410,14 @@ interface ToolingHandle<Impl = unknown> {
   /** Enumerate every resource this tooling exposes. */
   listResources(): ResourceInfo[];
 
-  /** Read one resource's current content. */
-  readResource(uri: string): ResourceContent;
+  /** Read one resource's current contents (a read may yield several). */
+  readResource(uri: string): ResourceContent[];
+
+  /**
+   * Enumerate every resource template this tooling exposes. Fill a template to
+   * a concrete URI, then read or subscribe it.
+   */
+  listResourceTemplates(): ResourceTemplate[];
 
   /** Subscribe to the resource list changing; returns a UUID handle. */
   subscribeResourceList(): string;

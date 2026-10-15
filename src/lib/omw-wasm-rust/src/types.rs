@@ -5,26 +5,14 @@
 
 use crate::omw::omw::types::{
   ChatDelta, ChatMessage, ChatResult, EndpointMessage, Event, EventEnvelope,
-  Tool, ToolCall, ToolResult, Usage,
+  ResourceAnnotations, ResourceTemplate, Tool, ToolAnnotations, ToolCall,
+  ToolCallDelta, ToolResult,
 };
 use serde::de::DeserializeOwned;
 
 /// Parse one opaque JSON string field, surfacing the underlying error.
 fn parse_json<T: DeserializeOwned>(raw: &str) -> Result<T, String> {
   serde_json::from_str(raw).map_err(|e| e.to_string())
-}
-
-impl crate::omw::omw::types::Role {
-  /// The role as the lowercase string the docs use.
-  pub fn as_str(&self) -> &'static str {
-    use crate::omw::omw::types::Role;
-    match self {
-      Role::System => "system",
-      Role::User => "user",
-      Role::Assistant => "assistant",
-      Role::Tool => "tool",
-    }
-  }
 }
 
 impl ToolCall {
@@ -46,36 +34,45 @@ impl ChatMessage {
   /// A user message with text content.
   pub fn user(content: impl Into<String>) -> Self {
     Self {
-      role: crate::omw::omw::types::Role::User,
+      role: "user".to_string(),
       content: Some(content.into()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     }
   }
 
   /// A system prompt message.
   pub fn system(content: impl Into<String>) -> Self {
     Self {
-      role: crate::omw::omw::types::Role::System,
+      role: "system".to_string(),
       content: Some(content.into()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     }
   }
 
   /// An assistant message with text content.
   pub fn assistant(content: impl Into<String>) -> Self {
     Self {
-      role: crate::omw::omw::types::Role::Assistant,
+      role: "assistant".to_string(),
       content: Some(content.into()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     }
   }
 
   /// Attach a tool call to this message.
   pub fn with_tool_call(mut self, call: ToolCall) -> Self {
-    self.tool_call = Some(call);
+    self.tool_calls.push(call);
+    self
+  }
+
+  /// Set the identifier of the assistant tool call this message answers.
+  pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
+    self.tool_call_id = Some(tool_call_id.into());
     self
   }
 
@@ -93,13 +90,50 @@ impl ChatMessage {
   }
 }
 
+impl ToolCallDelta {
+  /// One tool-call fragment: `index` positions the call within the
+  /// response's list, `id`/`name` appear on its first fragment, and
+  /// `arguments` is a raw fragment of the opaque JSON string.
+  pub fn new(
+    index: u32,
+    id: Option<String>,
+    name: Option<String>,
+    arguments: Option<String>,
+  ) -> Self {
+    Self {
+      index,
+      id,
+      name,
+      arguments,
+    }
+  }
+
+  /// Attach the tool call identifier (present on the first fragment).
+  pub fn with_id(mut self, id: impl Into<String>) -> Self {
+    self.id = Some(id.into());
+    self
+  }
+
+  /// Attach the tool name (present on the first fragment).
+  pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    self.name = Some(name.into());
+    self
+  }
+
+  /// Attach a raw fragment of the opaque JSON arguments string.
+  pub fn with_arguments(mut self, arguments: impl Into<String>) -> Self {
+    self.arguments = Some(arguments.into());
+    self
+  }
+}
+
 impl ChatDelta {
   /// A delta carrying a text chunk.
   pub fn text(content: impl Into<String>) -> Self {
     Self {
       content: Some(content.into()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     }
@@ -110,7 +144,7 @@ impl ChatDelta {
     Self {
       content: None,
       reasoning: Some(content.into()),
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     }
@@ -121,7 +155,7 @@ impl ChatDelta {
     Self {
       content: None,
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: Some(reason.into()),
       usage: None,
     }
@@ -141,6 +175,11 @@ impl ChatDelta {
   pub fn reasoning_content(&self) -> Option<&str> {
     self.reasoning.as_deref()
   }
+
+  /// Parse the optional opaque JSON `usage` into `T`.
+  pub fn usage_as<T: DeserializeOwned>(&self) -> Option<Result<T, String>> {
+    self.usage.as_deref().map(parse_json)
+  }
 }
 
 impl Tool {
@@ -148,10 +187,18 @@ impl Tool {
   pub fn new(name: impl Into<String>, input_schema: impl Into<String>) -> Self {
     Self {
       name: name.into(),
+      title: None,
       description: None,
       input_schema: input_schema.into(),
       output_schema: None,
+      annotations: None,
     }
+  }
+
+  /// Attach a human-readable display title.
+  pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    self.title = Some(title.into());
+    self
   }
 
   /// Attach a human-readable description.
@@ -166,6 +213,56 @@ impl Tool {
     self.output_schema = Some(schema.into());
     self
   }
+
+  /// Attach behavioral hints the tool declares about itself.
+  pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
+    self.annotations = Some(annotations);
+    self
+  }
+}
+
+impl ToolAnnotations {
+  /// No hints declared; callers opt in with the builders.
+  pub fn new() -> Self {
+    Self {
+      read_only_hint: None,
+      destructive_hint: None,
+      idempotent_hint: None,
+      open_world_hint: None,
+    }
+  }
+
+  /// Declare whether the tool modifies its environment.
+  pub fn with_read_only_hint(mut self, hint: bool) -> Self {
+    self.read_only_hint = Some(hint);
+    self
+  }
+
+  /// Declare whether the tool may perform destructive updates.
+  pub fn with_destructive_hint(mut self, hint: bool) -> Self {
+    self.destructive_hint = Some(hint);
+    self
+  }
+
+  /// Declare whether repeated calls with the same arguments have no
+  /// additional effect.
+  pub fn with_idempotent_hint(mut self, hint: bool) -> Self {
+    self.idempotent_hint = Some(hint);
+    self
+  }
+
+  /// Declare whether the tool may interact with entities outside its
+  /// environment.
+  pub fn with_open_world_hint(mut self, hint: bool) -> Self {
+    self.open_world_hint = Some(hint);
+    self
+  }
+}
+
+impl Default for ToolAnnotations {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl ChatResult {
@@ -179,15 +276,10 @@ impl ChatResult {
   pub fn reasoning(&self) -> Option<&str> {
     self.reasoning.as_deref()
   }
-}
 
-impl Usage {
-  /// The total tokens, falling back to prompt + completion when the provider
-  /// did not report a total.
-  pub fn total(&self) -> Option<u64> {
-    self
-      .total_tokens
-      .or_else(|| self.prompt_tokens?.checked_add(self.completion_tokens?))
+  /// Parse the optional opaque JSON `usage` into `T`.
+  pub fn usage_as<T: DeserializeOwned>(&self) -> Option<Result<T, String>> {
+    self.usage.as_deref().map(parse_json)
   }
 }
 
@@ -258,6 +350,75 @@ impl ToolResult {
   }
 }
 
+impl ResourceAnnotations {
+  /// No annotations declared; callers opt in with the builders.
+  pub fn new() -> Self {
+    Self {
+      audience: Vec::new(),
+      priority: None,
+      last_modified: None,
+    }
+  }
+
+  /// Add one audience role this resource is intended for.
+  pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
+    self.audience.push(audience.into());
+    self
+  }
+
+  /// Set the resource's relative importance in `[0, 1]`.
+  pub fn with_priority(mut self, priority: f64) -> Self {
+    self.priority = Some(priority);
+    self
+  }
+
+  /// Set the resource's last-modified time as an ISO 8601 string.
+  pub fn with_last_modified(
+    mut self,
+    last_modified: impl Into<String>,
+  ) -> Self {
+    self.last_modified = Some(last_modified.into());
+    self
+  }
+}
+
+impl Default for ResourceAnnotations {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl ResourceTemplate {
+  /// A parameterized resource: an RFC 6570 `uri_template` and its `name`.
+  pub fn new(uri_template: impl Into<String>, name: impl Into<String>) -> Self {
+    Self {
+      uri_template: uri_template.into(),
+      name: name.into(),
+      title: None,
+      description: None,
+      mime_type: None,
+    }
+  }
+
+  /// Attach a human-readable display title.
+  pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    self.title = Some(title.into());
+    self
+  }
+
+  /// Attach a description of what the template is for.
+  pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+    self.description = Some(desc.into());
+    self
+  }
+
+  /// Attach the MIME type for resources matching this template.
+  pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+    self.mime_type = Some(mime_type.into());
+    self
+  }
+}
+
 impl EndpointMessage {
   /// Parse the endpoint request's optional opaque JSON `params` into `T`.
   pub fn params_as<T: DeserializeOwned>(&self) -> Option<Result<T, String>> {
@@ -268,30 +429,40 @@ impl EndpointMessage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::omw::omw::types::Role;
 
   #[test]
-  fn role_names_match_docs() {
-    assert_eq!(Role::System.as_str(), "system");
-    assert_eq!(Role::User.as_str(), "user");
-    assert_eq!(Role::Assistant.as_str(), "assistant");
-    assert_eq!(Role::Tool.as_str(), "tool");
+  fn tool_call_delta_builder_sets_fields() {
+    let delta = ToolCallDelta::new(0, None, None, None)
+      .with_id("1")
+      .with_name("search")
+      .with_arguments("{\"q\":");
+    assert_eq!(delta.index, 0);
+    assert_eq!(delta.id.as_deref(), Some("1"));
+    assert_eq!(delta.name.as_deref(), Some("search"));
+    assert_eq!(delta.arguments.as_deref(), Some("{\"q\":"));
   }
 
   #[test]
   fn message_builders_set_role_and_content() {
     let msg = ChatMessage::user("hi");
-    assert!(matches!(msg.role, Role::User));
+    assert_eq!(msg.role, "user");
     assert_eq!(msg.content.as_deref(), Some("hi"));
-    assert!(msg.tool_call.is_none());
+    assert!(msg.tool_calls.is_empty());
+    assert!(msg.tool_call_id.is_none());
 
     let call = ToolCall::new("1", "search", "{}");
     let msg = ChatMessage::system("be nice").with_tool_call(call);
-    assert!(matches!(msg.role, Role::System));
-    assert_eq!(msg.tool_call.map(|c| c.name), Some("search".to_string()));
+    assert_eq!(msg.role, "system");
+    assert_eq!(
+      msg.tool_calls.first().map(|c| c.name.clone()),
+      Some("search".to_string())
+    );
 
     let msg = ChatMessage::assistant("hello").with_content("bye");
     assert_eq!(msg.content.as_deref(), Some("bye"));
+
+    let msg = ChatMessage::user("hi").with_tool_call_id("1");
+    assert_eq!(msg.tool_call_id.as_deref(), Some("1"));
   }
 
   #[test]
@@ -299,6 +470,7 @@ mod tests {
     let delta = ChatDelta::text("chunk");
     assert!(!delta.is_terminal());
     assert_eq!(delta.text_content(), Some("chunk"));
+    assert!(delta.tool_calls.is_empty());
 
     let delta = ChatDelta::reasoning("thinking");
     assert!(!delta.is_terminal());
@@ -323,15 +495,14 @@ mod tests {
       reasoning: Some("why".to_string()),
       tool_calls: Vec::new(),
       finish_reason: Some("stop".to_string()),
-      usage: Some(Usage {
-        prompt_tokens: Some(2),
-        completion_tokens: Some(3),
-        total_tokens: None,
-      }),
+      usage: Some("{\"total_tokens\":5}".to_string()),
     };
     assert_eq!(result.text(), Some("answer"));
     assert_eq!(result.reasoning(), Some("why"));
-    assert_eq!(result.usage.as_ref().and_then(Usage::total), Some(5));
+    assert_eq!(
+      result.usage_as::<serde_json::Value>().and_then(Result::ok),
+      Some(serde_json::json!({ "total_tokens": 5 }))
+    );
   }
 
   #[test]

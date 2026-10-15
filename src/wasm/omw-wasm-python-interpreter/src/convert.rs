@@ -109,6 +109,13 @@ fn opt_str(
   }
 }
 
+fn opt_bool(
+  object: &serde_json::Map<String, serde_json::Value>,
+  key: &str,
+) -> Option<bool> {
+  object.get(key).and_then(|value| value.as_bool())
+}
+
 fn req_str(
   vm: &VirtualMachine,
   object: &serde_json::Map<String, serde_json::Value>,
@@ -125,6 +132,31 @@ fn opaque_json(value: &serde_json::Value) -> String {
       serde_json::to_string(other).unwrap_or_else(|_| "null".to_string())
     }
   }
+}
+
+/// Read an optional opaque JSON field: absent/null become `None`, a string is
+/// passed through verbatim, anything else is serialized.
+fn opt_opaque_json(
+  object: &serde_json::Map<String, serde_json::Value>,
+  key: &str,
+) -> Option<String> {
+  match object.get(key) {
+    None | Some(serde_json::Value::Null) => None,
+    Some(value) => Some(opaque_json(value)),
+  }
+}
+
+/// Read a required `u32` field.
+fn req_u32(
+  vm: &VirtualMachine,
+  object: &serde_json::Map<String, serde_json::Value>,
+  key: &str,
+) -> PyResult<u32> {
+  object
+    .get(key)
+    .and_then(|value| value.as_u64())
+    .and_then(|number| u32::try_from(number).ok())
+    .ok_or_else(|| vm.new_type_error(format!("{key} must be a u32")))
 }
 
 fn tool_call_from_json(
@@ -144,6 +176,21 @@ fn tool_call_from_json(
   })
 }
 
+fn tool_call_delta_from_json(
+  vm: &VirtualMachine,
+  value: &serde_json::Value,
+) -> PyResult<types::ToolCallDelta> {
+  let object = value
+    .as_object()
+    .ok_or_else(|| vm.new_type_error("tool call delta must be an object"))?;
+  Ok(types::ToolCallDelta {
+    index: req_u32(vm, object, "index")?,
+    id: opt_str(object, "id"),
+    name: opt_str(object, "name"),
+    arguments: opt_opaque_json(object, "arguments"),
+  })
+}
+
 fn msg_from_json(
   vm: &VirtualMachine,
   value: &serde_json::Value,
@@ -151,20 +198,28 @@ fn msg_from_json(
   let object = value
     .as_object()
     .ok_or_else(|| vm.new_type_error("chat message must be an object"))?;
-  let role = match object.get("role").and_then(|role| role.as_str()) {
-    Some("system") => provider::Role::System,
-    Some("assistant") => provider::Role::Assistant,
-    Some("tool") => provider::Role::Tool,
-    _ => provider::Role::User,
-  };
+  let role = opt_str(object, "role").unwrap_or_else(|| "user".to_string());
   Ok(provider::ChatMessage {
     role,
     content: opt_str(object, "content"),
     reasoning: opt_str(object, "reasoning"),
-    tool_call: match object.get("tool_call") {
-      None | Some(serde_json::Value::Null) => None,
-      Some(value) => Some(tool_call_from_json(vm, value)?),
-    },
+    tool_calls: tool_calls_from_json(vm, object)?,
+    tool_call_id: opt_str(object, "tool_call_id"),
+  })
+}
+
+fn tool_annotations_from_json(
+  vm: &VirtualMachine,
+  value: &serde_json::Value,
+) -> PyResult<types::ToolAnnotations> {
+  let object = value
+    .as_object()
+    .ok_or_else(|| vm.new_type_error("annotations must be an object"))?;
+  Ok(types::ToolAnnotations {
+    read_only_hint: opt_bool(object, "read_only_hint"),
+    destructive_hint: opt_bool(object, "destructive_hint"),
+    idempotent_hint: opt_bool(object, "idempotent_hint"),
+    open_world_hint: opt_bool(object, "open_world_hint"),
   })
 }
 
@@ -183,11 +238,17 @@ fn tool_from_json(
     None | Some(serde_json::Value::Null) => None,
     Some(value) => Some(opaque_json(value)),
   };
+  let annotations = match object.get("annotations") {
+    None | Some(serde_json::Value::Null) => None,
+    Some(value) => Some(tool_annotations_from_json(vm, value)?),
+  };
   Ok(provider::Tool {
     name: req_str(vm, object, "name")?,
+    title: opt_str(object, "title"),
     description: opt_str(object, "description"),
     input_schema,
     output_schema,
+    annotations,
   })
 }
 
@@ -199,6 +260,32 @@ fn array_of<'a>(
   value
     .as_array()
     .ok_or_else(|| vm.new_type_error(format!("{what} must be an array")))
+}
+
+fn tool_calls_from_json(
+  vm: &VirtualMachine,
+  object: &serde_json::Map<String, serde_json::Value>,
+) -> PyResult<Vec<types::ToolCall>> {
+  match object.get("tool_calls") {
+    None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+    Some(value) => array_of(vm, value, "tool_calls")?
+      .iter()
+      .map(|item| tool_call_from_json(vm, item))
+      .collect(),
+  }
+}
+
+fn tool_call_deltas_from_json(
+  vm: &VirtualMachine,
+  object: &serde_json::Map<String, serde_json::Value>,
+) -> PyResult<Vec<types::ToolCallDelta>> {
+  match object.get("tool_calls") {
+    None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+    Some(value) => array_of(vm, value, "tool_calls")?
+      .iter()
+      .map(|item| tool_call_delta_from_json(vm, item))
+      .collect(),
+  }
 }
 
 /// Parse a Python list of message dicts into WIT chat messages.
@@ -250,26 +337,6 @@ pub(crate) fn params_from_py(
     .map_err(|e| vm.new_value_error(e.to_string()))
 }
 
-fn usage_from_json(
-  vm: &VirtualMachine,
-  value: &serde_json::Value,
-) -> PyResult<types::Usage> {
-  let object = value
-    .as_object()
-    .ok_or_else(|| vm.new_type_error("usage must be an object"))?;
-  fn token(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-  ) -> Option<u64> {
-    object.get(key).and_then(|value| value.as_u64())
-  }
-  Ok(types::Usage {
-    prompt_tokens: token(object, "prompt_tokens"),
-    completion_tokens: token(object, "completion_tokens"),
-    total_tokens: token(object, "total_tokens"),
-  })
-}
-
 /// Parse a Python dict into a WIT chat delta.
 pub(crate) fn delta_from_py(
   vm: &VirtualMachine,
@@ -282,25 +349,10 @@ pub(crate) fn delta_from_py(
   Ok(types::ChatDelta {
     content: opt_str(object, "content"),
     reasoning: opt_str(object, "reasoning"),
-    tool_call: match object.get("tool_call") {
-      None | Some(serde_json::Value::Null) => None,
-      Some(value) => Some(tool_call_from_json(vm, value)?),
-    },
+    tool_calls: tool_call_deltas_from_json(vm, object)?,
     finish_reason: opt_str(object, "finish_reason"),
-    usage: match object.get("usage") {
-      None | Some(serde_json::Value::Null) => None,
-      Some(value) => Some(usage_from_json(vm, value)?),
-    },
+    usage: opt_opaque_json(object, "usage"),
   })
-}
-
-fn role_to_str(role: &provider::Role) -> &'static str {
-  match role {
-    provider::Role::System => "system",
-    provider::Role::User => "user",
-    provider::Role::Assistant => "assistant",
-    provider::Role::Tool => "tool",
-  }
 }
 
 fn tool_call_to_json(call: types::ToolCall) -> serde_json::Value {
@@ -311,12 +363,27 @@ fn tool_call_to_json(call: types::ToolCall) -> serde_json::Value {
   })
 }
 
+fn tool_call_delta_to_json(delta: types::ToolCallDelta) -> serde_json::Value {
+  let mut object = serde_json::Map::new();
+  object.insert("index".to_string(), serde_json::Value::from(delta.index));
+  if let Some(id) = delta.id {
+    object.insert("id".to_string(), serde_json::Value::String(id));
+  }
+  if let Some(name) = delta.name {
+    object.insert("name".to_string(), serde_json::Value::String(name));
+  }
+  if let Some(arguments) = delta.arguments {
+    object.insert(
+      "arguments".to_string(),
+      serde_json::Value::String(arguments),
+    );
+  }
+  serde_json::Value::Object(object)
+}
+
 fn chat_message_to_json(message: types::ChatMessage) -> serde_json::Value {
   let mut object = serde_json::Map::new();
-  object.insert(
-    "role".to_string(),
-    serde_json::Value::String(role_to_str(&message.role).to_string()),
-  );
+  object.insert("role".to_string(), serde_json::Value::String(message.role));
   if let Some(content) = message.content {
     object.insert("content".to_string(), serde_json::Value::String(content));
   }
@@ -326,8 +393,52 @@ fn chat_message_to_json(message: types::ChatMessage) -> serde_json::Value {
       serde_json::Value::String(reasoning),
     );
   }
-  if let Some(call) = message.tool_call {
-    object.insert("tool_call".to_string(), tool_call_to_json(call));
+  object.insert(
+    "tool_calls".to_string(),
+    serde_json::Value::Array(
+      message
+        .tool_calls
+        .into_iter()
+        .map(tool_call_to_json)
+        .collect(),
+    ),
+  );
+  if let Some(tool_call_id) = message.tool_call_id {
+    object.insert(
+      "tool_call_id".to_string(),
+      serde_json::Value::String(tool_call_id),
+    );
+  }
+  serde_json::Value::Object(object)
+}
+
+fn tool_annotations_to_json(
+  annotations: types::ToolAnnotations,
+) -> serde_json::Value {
+  let mut object = serde_json::Map::new();
+  if let Some(read_only_hint) = annotations.read_only_hint {
+    object.insert(
+      "read_only_hint".to_string(),
+      serde_json::Value::Bool(read_only_hint),
+    );
+  }
+  if let Some(destructive_hint) = annotations.destructive_hint {
+    object.insert(
+      "destructive_hint".to_string(),
+      serde_json::Value::Bool(destructive_hint),
+    );
+  }
+  if let Some(idempotent_hint) = annotations.idempotent_hint {
+    object.insert(
+      "idempotent_hint".to_string(),
+      serde_json::Value::Bool(idempotent_hint),
+    );
+  }
+  if let Some(open_world_hint) = annotations.open_world_hint {
+    object.insert(
+      "open_world_hint".to_string(),
+      serde_json::Value::Bool(open_world_hint),
+    );
   }
   serde_json::Value::Object(object)
 }
@@ -335,6 +446,9 @@ fn chat_message_to_json(message: types::ChatMessage) -> serde_json::Value {
 fn tool_to_json(tool: types::Tool) -> serde_json::Value {
   let mut object = serde_json::Map::new();
   object.insert("name".to_string(), serde_json::Value::String(tool.name));
+  if let Some(title) = tool.title {
+    object.insert("title".to_string(), serde_json::Value::String(title));
+  }
   if let Some(description) = tool.description {
     object.insert(
       "description".to_string(),
@@ -348,22 +462,11 @@ fn tool_to_json(tool: types::Tool) -> serde_json::Value {
   if let Some(output_schema) = tool.output_schema {
     object.insert("output_schema".to_string(), json_or_string(&output_schema));
   }
-  serde_json::Value::Object(object)
-}
-
-fn usage_to_json(usage: types::Usage) -> serde_json::Value {
-  let mut object = serde_json::Map::new();
-  if let Some(prompt) = usage.prompt_tokens {
-    object.insert("prompt_tokens".to_string(), serde_json::Value::from(prompt));
-  }
-  if let Some(completion) = usage.completion_tokens {
+  if let Some(annotations) = tool.annotations {
     object.insert(
-      "completion_tokens".to_string(),
-      serde_json::Value::from(completion),
+      "annotations".to_string(),
+      tool_annotations_to_json(annotations),
     );
-  }
-  if let Some(total) = usage.total_tokens {
-    object.insert("total_tokens".to_string(), serde_json::Value::from(total));
   }
   serde_json::Value::Object(object)
 }
@@ -379,9 +482,16 @@ fn delta_to_json(delta: types::ChatDelta) -> serde_json::Value {
       serde_json::Value::String(reasoning),
     );
   }
-  if let Some(call) = delta.tool_call {
-    object.insert("tool_call".to_string(), tool_call_to_json(call));
-  }
+  object.insert(
+    "tool_calls".to_string(),
+    serde_json::Value::Array(
+      delta
+        .tool_calls
+        .into_iter()
+        .map(tool_call_delta_to_json)
+        .collect(),
+    ),
+  );
   if let Some(finish_reason) = delta.finish_reason {
     object.insert(
       "finish_reason".to_string(),
@@ -389,7 +499,7 @@ fn delta_to_json(delta: types::ChatDelta) -> serde_json::Value {
     );
   }
   if let Some(usage) = delta.usage {
-    object.insert("usage".to_string(), usage_to_json(usage));
+    object.insert("usage".to_string(), json_or_string(&usage));
   }
   serde_json::Value::Object(object)
 }
@@ -405,6 +515,36 @@ fn tool_result_to_json(result: types::ToolResult) -> serde_json::Value {
       json_or_string(&structured),
     );
   }
+  object.insert(
+    "is_error".to_string(),
+    serde_json::Value::Bool(result.is_error),
+  );
+  serde_json::Value::Object(object)
+}
+
+fn resource_annotations_to_json(
+  annotations: types::ResourceAnnotations,
+) -> serde_json::Value {
+  let mut object = serde_json::Map::new();
+  object.insert(
+    "audience".to_string(),
+    serde_json::Value::Array(
+      annotations
+        .audience
+        .into_iter()
+        .map(serde_json::Value::String)
+        .collect(),
+    ),
+  );
+  if let Some(priority) = annotations.priority {
+    object.insert("priority".to_string(), serde_json::Value::from(priority));
+  }
+  if let Some(last_modified) = annotations.last_modified {
+    object.insert(
+      "last_modified".to_string(),
+      serde_json::Value::String(last_modified),
+    );
+  }
   serde_json::Value::Object(object)
 }
 
@@ -412,6 +552,9 @@ fn resource_to_json(resource: types::ResourceInfo) -> serde_json::Value {
   let mut object = serde_json::Map::new();
   object.insert("uri".to_string(), serde_json::Value::String(resource.uri));
   object.insert("name".to_string(), serde_json::Value::String(resource.name));
+  if let Some(title) = resource.title {
+    object.insert("title".to_string(), serde_json::Value::String(title));
+  }
   if let Some(description) = resource.description {
     object.insert(
       "description".to_string(),
@@ -422,6 +565,15 @@ fn resource_to_json(resource: types::ResourceInfo) -> serde_json::Value {
     object.insert(
       "mime_type".to_string(),
       serde_json::Value::String(mime_type),
+    );
+  }
+  if let Some(size) = resource.size {
+    object.insert("size".to_string(), serde_json::Value::from(size));
+  }
+  if let Some(annotations) = resource.annotations {
+    object.insert(
+      "annotations".to_string(),
+      resource_annotations_to_json(annotations),
     );
   }
   serde_json::Value::Object(object)
@@ -442,6 +594,33 @@ fn resource_content_to_json(
     "content".to_string(),
     serde_json::Value::String(content.content),
   );
+  serde_json::Value::Object(object)
+}
+
+fn resource_template_to_json(
+  template: types::ResourceTemplate,
+) -> serde_json::Value {
+  let mut object = serde_json::Map::new();
+  object.insert(
+    "uri_template".to_string(),
+    serde_json::Value::String(template.uri_template),
+  );
+  object.insert("name".to_string(), serde_json::Value::String(template.name));
+  if let Some(title) = template.title {
+    object.insert("title".to_string(), serde_json::Value::String(title));
+  }
+  if let Some(description) = template.description {
+    object.insert(
+      "description".to_string(),
+      serde_json::Value::String(description),
+    );
+  }
+  if let Some(mime_type) = template.mime_type {
+    object.insert(
+      "mime_type".to_string(),
+      serde_json::Value::String(mime_type),
+    );
+  }
   serde_json::Value::Object(object)
 }
 
@@ -477,7 +656,7 @@ pub(crate) fn chat_result_to_py(
     );
   }
   if let Some(usage) = result.usage {
-    object.insert("usage".to_string(), usage_to_json(usage));
+    object.insert("usage".to_string(), json_or_string(&usage));
   }
   json_to_py(vm, &serde_json::Value::Object(object))
 }
@@ -514,6 +693,14 @@ pub(crate) fn resource_content_to_py(
   json_to_py(vm, &resource_content_to_json(content))
 }
 
+/// Convert a resource template into a namespace.
+pub(crate) fn resource_template_to_py(
+  vm: &VirtualMachine,
+  template: types::ResourceTemplate,
+) -> PyResult<PyObjectRef> {
+  json_to_py(vm, &resource_template_to_json(template))
+}
+
 /// Convert an event envelope into a namespace `{ id, kind, payload }`.
 pub(crate) fn envelope_to_py(
   vm: &VirtualMachine,
@@ -540,9 +727,12 @@ pub(crate) fn envelope_to_py(
         resources.into_iter().map(resource_to_json).collect(),
       ),
     ),
-    types::Event::ResourceUpdated(content) => {
-      ("resource-updated", resource_content_to_json(content))
-    }
+    types::Event::ResourceUpdated(contents) => (
+      "resource-updated",
+      serde_json::Value::Array(
+        contents.into_iter().map(resource_content_to_json).collect(),
+      ),
+    ),
     types::Event::EndpointMessage(message) => {
       let messages = message.messages.into_iter().map(chat_message_to_json);
       let tools = message.tools.into_iter().map(tool_to_json);

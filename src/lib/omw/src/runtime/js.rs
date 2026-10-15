@@ -338,7 +338,7 @@ mod tests {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].model, "gpt-test");
     assert_eq!(calls[0].messages.len(), 1);
-    assert_eq!(calls[0].messages[0].role, crate::provider::Role::User);
+    assert_eq!(calls[0].messages[0].role, "user");
     assert_eq!(calls[0].messages[0].content.as_deref(), Some("hi"));
     assert!(calls[0].tools.is_empty());
 
@@ -541,7 +541,7 @@ mod tests {
         let t = omw.tooling.get("mock-tooling");
         let rid = t.subscribeResource("file:///a");
         let e = omw.host.recv();
-        (e.id === rid) + "|" + e.kind + "|" + e.payload.content
+        (e.id === rid) + "|" + e.kind + "|" + e.payload[0].content
       "#,
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
@@ -639,7 +639,7 @@ mod tests {
     let path = dir.path().join("read_resource.js");
     std::fs::write(
       &path,
-      r#"let t = omw.tooling.get("mock-tooling"); let c = t.readResource("file:///a"); c.uri + "|" + c.content"#,
+      r#"let t = omw.tooling.get("mock-tooling"); let c = t.readResource("file:///a"); c[0].uri + "|" + c[0].content"#,
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
 
@@ -704,16 +704,19 @@ mod tests {
         "gpt-4o",
         &session,
         vec![crate::provider::ChatMessage {
-          role: crate::provider::Role::User,
+          role: "user".to_string(),
           content: Some("hi".to_string()),
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
+          tool_call_id: None,
         }],
         vec![crate::tooling::Tool {
           name: "get_weather".to_string(),
+          title: None,
           description: Some("weather".to_string()),
           input_schema: serde_json::json!({ "type": "object" }),
           output_schema: None,
+          annotations: None,
         }],
         None,
       )

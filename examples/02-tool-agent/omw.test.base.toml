@@ -8,7 +8,7 @@
 [providers.openai]
 kind = "mock"
 turns = [
-  { tool_call = { id = "call-1", name = "echo", arguments = '{"input":"hi"}' } },
+  { tool_calls = [{ id = "call-1", name = "echo", arguments = '{"input":"hi"}' }] },
   { content = "done" },
 ]
 

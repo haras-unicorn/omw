@@ -20,7 +20,7 @@ use omw::endpoint::openai::{ServerState, router};
 use omw::host::bus::MessageBus;
 use omw::host::endpoint::EndpointRegistry;
 use omw::host::events::Event;
-use omw::provider::{ChatDelta, ChatMessage, Role, ToolCall};
+use omw::provider::{ChatDelta, ChatMessage, ToolCallDelta};
 use omw::tooling::Tool;
 
 /// A mock agent: subscribes `model`, then answers every routed request with
@@ -68,7 +68,7 @@ impl MockAgent {
           ChatDelta {
             content: None,
             reasoning: None,
-            tool_call: None,
+            tool_calls: Vec::new(),
             finish_reason: Some("stop".to_string()),
             usage: None,
           },
@@ -132,7 +132,7 @@ async fn non_streaming_completion_through_sdk() -> anyhow::Result<()> {
     vec![ChatDelta {
       content: Some("Hello".to_string()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     }],
@@ -164,14 +164,14 @@ async fn streaming_completion_through_sdk() -> anyhow::Result<()> {
       ChatDelta {
         content: Some("Hel".to_string()),
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
         finish_reason: None,
         usage: None,
       },
       ChatDelta {
         content: Some("lo".to_string()),
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
         finish_reason: None,
         usage: None,
       },
@@ -208,11 +208,12 @@ async fn tool_call_round_trip_through_sdk() -> anyhow::Result<()> {
     vec![ChatDelta {
       content: None,
       reasoning: None,
-      tool_call: Some(ToolCall {
-        id: "call_1".to_string(),
-        name: "get_weather".to_string(),
-        arguments: r#"{"location":"Boston"}"#.to_string(),
-      }),
+      tool_calls: vec![ToolCallDelta {
+        index: 0,
+        id: Some("call_1".to_string()),
+        name: Some("get_weather".to_string()),
+        arguments: Some(r#"{"location":"Boston"}"#.to_string()),
+      }],
       finish_reason: None,
       usage: None,
     }],
@@ -330,19 +331,22 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
   assert_eq!(
     messages,
     vec![ChatMessage {
-      role: Role::User,
+      role: "user".to_string(),
       content: Some("hi".to_string()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     }]
   );
   assert_eq!(
     tools,
     vec![Tool {
       name: "get_weather".to_string(),
+      title: None,
       description: None,
       input_schema: serde_json::json!({ "type": "object" }),
       output_schema: None,
+      annotations: None,
     }]
   );
   // Answer so the POST completes, then assert the terminal end event fires
@@ -354,7 +358,7 @@ async fn inbound_messages_and_tools_land_in_agent_inbox() -> anyhow::Result<()>
       ChatDelta {
         content: None,
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
         finish_reason: Some("stop".to_string()),
         usage: None,
       },

@@ -341,7 +341,7 @@ mod tests {
     ChatDelta {
       content,
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason,
       usage: None,
     }

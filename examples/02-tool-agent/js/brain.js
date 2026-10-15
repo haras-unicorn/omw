@@ -13,8 +13,8 @@ const second = provider.chat(
   "gpt-test",
   [
     { role: "user", content: "use echo" },
-    { role: "assistant", toolCall: call },
-    { role: "tool", content: result.content[0].text },
+    { role: "assistant", toolCalls: [call] },
+    { role: "tool", toolCallId: call.id, content: result.content[0].text },
   ],
   [],
 );

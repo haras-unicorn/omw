@@ -3,7 +3,10 @@
 The `mcp` tooling (`tooling::mcp`, kind `mcp`) is a client for the Model Context
 Protocol, built on the official `rmcp` Rust SDK. It owns the wire protocol and
 the `initialize` lifecycle itself, mapping `rmcp`'s typed results onto omw's
-`tool` / `resource-info` types and joining text tool results.
+`tool` / `resource-info` types and joining text tool results. Tool and resource
+metadata (`title`, `annotations`, resource `size`) is carried through, resource
+templates are surfaced, and `tools/list` pagination is walked so every tool a
+server advertises is returned.
 
 ## Transports
 
@@ -44,20 +47,25 @@ first tool or resource use. The first use retries with exponential backoff
 first use surfaces as `Err` for blocking callers and as the `error` event
 variant for event-driven callers; dropping the call (pump cancel, reload, or
 shutdown) cancels the wait. Tool results keep only their text content blocks,
-joined with newlines; binary content is dropped.
+joined with newlines; binary content is dropped. A call that fails at the tool
+level returns normally with MCP `isError` set, so its error text reaches the
+brain in the content; only a protocol failure surfaces as an `error` event.
 
 ## Resources
 
-`mcp` surfaces every resource the peer advertises via `list-resources`. The two
-subscription modes map onto `rmcp` subscription filters:
+`mcp` surfaces every resource the peer advertises via `list-resources`,
+including each one's `title`, `size` and `annotations`, and every parameterized
+resource via `list-resource-templates` (MCP `resources/templates/list`). A
+single `resources/read` may yield several contents, so `read-resource` returns a
+list. The two subscription modes map onto `rmcp` subscription filters:
 
 - `subscribe-resource-list()` subscribes to list-changed notifications and
   delivers `resource-list-updated` events carrying the freshly fetched list;
 - `subscribe-resource(uri)` subscribes to a single resource and, at each update,
   the host reads the resource back (`resources/read`) and delivers a
-  `resource-updated` event carrying the content. Textual resource content is
-  passed through as-is; binary content arrives base64-encoded, so match on the
-  content's `mime-type` to decide whether to decode it.
+  `resource-updated` event carrying the contents (a list). Textual resource
+  content is passed through as-is; binary content arrives base64-encoded, so
+  match on the content's `mime-type` to decide whether to decode it.
 
 Both return `BoxStream`s; the host's resource pump drains them and pushes tagged
 events into the agent inbox, and dropping the stream cancels the subscription.

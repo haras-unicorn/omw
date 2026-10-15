@@ -7,62 +7,86 @@ point your type checker at it. See docs/runtime/python.md for the prose
 reference.
 """
 
-from typing import Any, Literal, Optional
-
-Role = Literal["system", "user", "assistant", "tool"]
+from typing import Any, Optional
 
 class ToolCall:
   id: str
   name: str
   arguments: Any
 
+class ToolCallDelta:
+  index: int
+  id: Optional[str]
+  name: Optional[str]
+  arguments: Optional[str]
+
 class ChatMessage:
-  role: Role
+  role: str
   content: Optional[str]
   reasoning: Optional[str]
-  tool_call: Optional[ToolCall]
-
-class Usage:
-  prompt_tokens: Optional[int]
-  completion_tokens: Optional[int]
-  total_tokens: Optional[int]
+  tool_calls: list[ToolCall]
+  tool_call_id: Optional[str]
 
 class ChatDelta:
   content: Optional[str]
   reasoning: Optional[str]
-  tool_call: Optional[ToolCall]
+  tool_calls: list[ToolCallDelta]
   finish_reason: Optional[str]
-  usage: Optional[Usage]
+  usage: Optional[Any]
+
+class ToolAnnotations:
+  read_only_hint: Optional[bool]
+  destructive_hint: Optional[bool]
+  idempotent_hint: Optional[bool]
+  open_world_hint: Optional[bool]
 
 class Tool:
   name: str
+  title: Optional[str]
   description: Optional[str]
   input_schema: Any
   output_schema: Any
+  annotations: Optional[ToolAnnotations]
 
 class ChatResult:
   content: Optional[str]
   reasoning: Optional[str]
   tool_calls: list[ToolCall]
   finish_reason: Optional[str]
-  usage: Optional[Usage]
+  usage: Optional[Any]
 
 class ToolResult:
   name: str
   arguments: Any
   content: Any
   structured_content: Any
+  is_error: bool
+
+class ResourceAnnotations:
+  audience: list[str]
+  priority: Optional[float]
+  last_modified: Optional[str]
 
 class ResourceInfo:
   uri: str
   name: str
+  title: Optional[str]
   description: Optional[str]
   mime_type: Optional[str]
+  size: Optional[int]
+  annotations: Optional[ResourceAnnotations]
 
 class ResourceContent:
   uri: str
   mime_type: Optional[str]
   content: str
+
+class ResourceTemplate:
+  uri_template: str
+  name: str
+  title: Optional[str]
+  description: Optional[str]
+  mime_type: Optional[str]
 
 class EventEnvelope:
   id: str
@@ -99,7 +123,8 @@ class Tooling:
   def cancel(self, uuid: str) -> None: ...
   def kind(self) -> str: ...
   def list_resources(self) -> list[ResourceInfo]: ...
-  def read_resource(self, uri: str) -> ResourceContent: ...
+  def read_resource(self, uri: str) -> list[ResourceContent]: ...
+  def list_resource_templates(self) -> list[ResourceTemplate]: ...
   def subscribe_resource_list(self) -> str: ...
   def subscribe_resource(self, uri: str) -> str: ...
   def unsubscribe_resource_list(self, uuid: str) -> None: ...

@@ -97,6 +97,10 @@ fn install_omw(engine: &mut Engine) {
   engine.register_fn("tooling_list_resources", tooling_list_resources);
   engine.register_fn("tooling_read_resource", tooling_read_resource);
   engine.register_fn(
+    "tooling_list_resource_templates",
+    tooling_list_resource_templates,
+  );
+  engine.register_fn(
     "tooling_subscribe_resource_list",
     tooling_subscribe_resource_list,
   );

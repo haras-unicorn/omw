@@ -31,12 +31,13 @@ omw_wasm_rust::brain!(|| {
     "gpt-test",
     &[
       ChatMessage::user("use echo"),
-      ChatMessage::assistant("").with_tool_call(call),
+      ChatMessage::assistant("").with_tool_call(call.clone()),
       ChatMessage {
-        role: Role::Tool,
+        role: "tool".to_string(),
         content: Some(text),
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
+        tool_call_id: Some(call.id),
       },
     ],
     &[],

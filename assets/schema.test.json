@@ -126,10 +126,13 @@
           "minimum": 0
         },
         "initial_resource_contents": {
-          "description": "Canned resource content keyed by URI, returned by `read-resource`.",
+          "description": "Canned resource contents keyed by URI, returned by `read-resource`. Each\nvalue is the ordered list of content items a read yields.",
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "default": {}
         },
@@ -153,6 +156,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/ResourceListUpdate"
+          }
+        },
+        "resource_templates": {
+          "description": "Resource templates `list-resource-templates` returns.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResourceTemplate"
           }
         },
         "tool_calls": {
@@ -717,6 +728,29 @@
       },
       "required": ["model", "session_id"]
     },
+    "ResourceAnnotations": {
+      "description": "Hints a resource declares about its audience and freshness (MCP resource\n`annotations`). Not `Eq`: `priority` is a float.",
+      "type": "object",
+      "properties": {
+        "audience": {
+          "description": "Intended audience roles; empty means any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "last_modified": {
+          "description": "The resource's last-modified time as an ISO 8601 string, when known.",
+          "type": ["string", "null"]
+        },
+        "priority": {
+          "description": "Relative importance in `[0, 1]`, when the server expresses one.",
+          "type": ["number", "null"],
+          "format": "double"
+        }
+      },
+      "required": ["audience"]
+    },
     "ResourceContentUpdate": {
       "description": "One scripted, one-by-one resource-content update.",
       "type": "object",
@@ -724,8 +758,12 @@
         "after": {
           "$ref": "#/$defs/After"
         },
-        "content": {
-          "type": "string"
+        "contents": {
+          "description": "The ordered content items the resource holds after this step.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "error": {
           "description": "Yield this error for the step instead of an `Updated`.",
@@ -741,12 +779,23 @@
           "type": "string"
         }
       },
-      "required": ["uri", "content"]
+      "required": ["uri", "contents"]
     },
     "ResourceInfo": {
       "description": "An MCP resource (a URI-addressed, readable data value) exposed by a\ntooling.",
       "type": "object",
       "properties": {
+        "annotations": {
+          "description": "Optional hints about the resource's audience and freshness.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": ["string", "null"]
         },
@@ -755,6 +804,16 @@
         },
         "name": {
           "type": "string"
+        },
+        "size": {
+          "description": "Raw content size in bytes, when known.",
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Optional human-readable display title (MCP `title`).",
+          "type": ["string", "null"]
         },
         "uri": {
           "type": "string"
@@ -787,6 +846,29 @@
         }
       },
       "required": ["resources"]
+    },
+    "ResourceTemplate": {
+      "description": "A parameterized resource (MCP `ResourceTemplate`).",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": ["string", "null"]
+        },
+        "mime_type": {
+          "type": ["string", "null"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": ["string", "null"]
+        },
+        "uri_template": {
+          "description": "An RFC 6570 URI template for constructing resource URIs.",
+          "type": "string"
+        }
+      },
+      "required": ["uri_template", "name"]
     },
     "RuntimeImpls": {
       "type": "object",
@@ -874,6 +956,11 @@
           "type": ["string", "null"],
           "default": null
         },
+        "is_error": {
+          "description": "Succeed, but mark the result a tool-execution error (MCP `isError`);\n`result` still supplies the content text.",
+          "type": "boolean",
+          "default": false
+        },
         "name": {
           "type": "string"
         },
@@ -917,6 +1004,17 @@
       "description": "A tool exposed by a tooling.",
       "type": "object",
       "properties": {
+        "annotations": {
+          "description": "Optional behavioral hints the tool declares (MCP `annotations`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": ["string", "null"]
         },
@@ -928,9 +1026,31 @@
         },
         "output_schema": {
           "description": "Optional JSON Schema for the tool's structured output (MCP\n`outputSchema`). Absent when the tool declares no output shape."
+        },
+        "title": {
+          "description": "Optional human-readable display title (MCP `title`).",
+          "type": ["string", "null"]
         }
       },
       "required": ["name", "input_schema"]
+    },
+    "ToolAnnotations": {
+      "description": "Behavioral hints a tool declares about itself (MCP `ToolAnnotations`).",
+      "type": "object",
+      "properties": {
+        "destructive_hint": {
+          "type": ["boolean", "null"]
+        },
+        "idempotent_hint": {
+          "type": ["boolean", "null"]
+        },
+        "open_world_hint": {
+          "type": ["boolean", "null"]
+        },
+        "read_only_hint": {
+          "type": ["boolean", "null"]
+        }
+      }
     },
     "ToolingImpls": {
       "type": "object",
@@ -1110,16 +1230,12 @@
           "type": ["string", "null"],
           "default": null
         },
-        "tool_call": {
-          "description": "A tool call, which makes the terminal finish reason `\"tool_calls\"`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MockToolCallSpec"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "tool_calls": {
+          "description": "Tool calls, emitted as one fragment per call (each tagged with its\nindex) and a terminal `\"tool_calls\"` finish reason.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MockToolCallSpec"
+          }
         },
         "usage": {
           "description": "Token accounting attached to the terminal delta.",

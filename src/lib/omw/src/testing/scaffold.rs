@@ -139,9 +139,11 @@ async fn mock_tooling(
             Ok(list) => {
               for resource in &list {
                 match tooling.read_resource(&resource.uri).await {
-                  Ok(content) => {
-                    resource_contents
-                      .insert(resource.uri.clone(), content.content);
+                  Ok(contents) => {
+                    resource_contents.insert(
+                      resource.uri.clone(),
+                      contents.into_iter().map(|c| c.content).collect(),
+                    );
                   }
                   Err(error) => tracing::warn!(
                     tooling = name,
@@ -265,6 +267,9 @@ fn tools_array(tools: &[Tool]) -> toml::Value {
   for tool in tools {
     let mut table = toml::Table::new();
     table.insert("name".to_string(), toml::Value::String(tool.name.clone()));
+    if let Some(title) = &tool.title {
+      table.insert("title".to_string(), toml::Value::String(title.clone()));
+    }
     if let Some(description) = &tool.description {
       table.insert(
         "description".to_string(),
@@ -297,6 +302,11 @@ fn tools_array(tools: &[Tool]) -> toml::Value {
         }
       }
     }
+    if let Some(annotations) = &tool.annotations
+      && let Some(value) = annotations_value(annotations)
+    {
+      table.insert("annotations".to_string(), value);
+    }
     array.push(toml::Value::Table(table));
   }
   toml::Value::Array(array)
@@ -311,6 +321,9 @@ fn resource_list_array(resources: &[ResourceInfo]) -> toml::Value {
       "name".to_string(),
       toml::Value::String(resource.name.clone()),
     );
+    if let Some(title) = &resource.title {
+      table.insert("title".to_string(), toml::Value::String(title.clone()));
+    }
     if let Some(description) = &resource.description {
       table.insert(
         "description".to_string(),
@@ -322,6 +335,16 @@ fn resource_list_array(resources: &[ResourceInfo]) -> toml::Value {
         "mime_type".to_string(),
         toml::Value::String(mime_type.clone()),
       );
+    }
+    if let Some(size) = resource.size
+      && let Ok(size) = i64::try_from(size)
+    {
+      table.insert("size".to_string(), toml::Value::Integer(size));
+    }
+    if let Some(annotations) = &resource.annotations
+      && let Some(value) = annotations_value(annotations)
+    {
+      table.insert("annotations".to_string(), value);
     }
     array.push(toml::Value::Table(table));
   }
@@ -337,12 +360,26 @@ fn string_array(values: &[String]) -> toml::Value {
   )
 }
 
-fn string_map(map: &BTreeMap<String, String>) -> toml::Value {
+fn string_map(map: &BTreeMap<String, Vec<String>>) -> toml::Value {
   let mut table = toml::Table::new();
-  for (key, value) in map {
-    table.insert(key.clone(), toml::Value::String(value.clone()));
+  for (key, values) in map {
+    table.insert(key.clone(), string_array(values));
   }
   toml::Value::Table(table)
+}
+
+/// Serialize an optional annotation struct to a TOML value, omitting it when
+/// it cannot be represented.
+fn annotations_value<T: serde::Serialize>(
+  annotations: &T,
+) -> Option<toml::Value> {
+  match serde_json::to_value(annotations).map_err(anyhow::Error::from) {
+    Ok(value) => json_to_toml(&value).ok(),
+    Err(error) => {
+      tracing::warn!(error = %error, "could not represent annotations as TOML");
+      None
+    }
+  }
 }
 
 /// Convert a JSON value to TOML, failing on shapes TOML cannot represent
@@ -453,6 +490,7 @@ mod tests {
     async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
       Ok(vec![Tool {
         name: "echo".to_string(),
+        title: None,
         description: Some("echoes".to_string()),
         input_schema: json!({
           "type": "object",
@@ -462,6 +500,7 @@ mod tests {
           "type": "object",
           "properties": { "echoed": { "type": "string" } },
         })),
+        annotations: None,
       }])
     }
 
@@ -473,6 +512,7 @@ mod tests {
       Ok(ToolCallResult {
         content: json!([]),
         structured_content: None,
+        is_error: false,
       })
     }
 
@@ -480,20 +520,23 @@ mod tests {
       Ok(vec![ResourceInfo {
         uri: "mem://notes".to_string(),
         name: "notes".to_string(),
+        title: None,
         description: None,
         mime_type: Some("text/plain".to_string()),
+        size: None,
+        annotations: None,
       }])
     }
 
     async fn read_resource(
       &self,
       uri: &str,
-    ) -> anyhow::Result<ResourceContent> {
-      Ok(ResourceContent {
+    ) -> anyhow::Result<Vec<ResourceContent>> {
+      Ok(vec![ResourceContent {
         uri: uri.to_string(),
         mime_type: Some("text/plain".to_string()),
         content: "v1".to_string(),
-      })
+      }])
     }
 
     async fn subscribe_resource_list(
@@ -557,7 +600,7 @@ mod tests {
     async fn read_resource(
       &self,
       _uri: &str,
-    ) -> anyhow::Result<ResourceContent> {
+    ) -> anyhow::Result<Vec<ResourceContent>> {
       anyhow::bail!("nope")
     }
 
@@ -670,7 +713,7 @@ mod tests {
     );
     assert_eq!(
       parsed.tooling["docs"].params["initial_resource_contents"]["mem://notes"],
-      "v1"
+      json!(["v1"])
     );
     assert_eq!(
       parsed.tooling["docs"].params["initial_resource_list"][0]["uri"],

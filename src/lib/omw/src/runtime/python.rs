@@ -342,7 +342,7 @@ omw.host.memory_set("out", out + "|" + tool_res.content[0].text)
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].model, "gpt-test");
     assert_eq!(calls[0].messages.len(), 1);
-    assert_eq!(calls[0].messages[0].role, crate::provider::Role::User);
+    assert_eq!(calls[0].messages[0].role, "user");
     assert_eq!(calls[0].messages[0].content.as_deref(), Some("hi"));
     assert!(calls[0].tools.is_empty());
 
@@ -607,7 +607,7 @@ str(t.list_resources())"#,
       &path,
       r#"t = omw.tooling.get("mock-tooling")
 c = t.read_resource("file:///a")
-c.uri + "|" + c.content"#,
+c[0].uri + "|" + c[0].content"#,
     )?;
     let ctx = test_ctx(path, HashMap::new(), tooling_map)?;
 

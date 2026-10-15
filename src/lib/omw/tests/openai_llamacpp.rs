@@ -20,7 +20,7 @@ use testcontainers::{
   ContainerAsync, GenericImage, ImageExt, runners::AsyncRunner,
 };
 
-use omw::provider::{ChatMessage, Role};
+use omw::provider::ChatMessage;
 
 fn enabled() -> bool {
   std::env::var_os("OMW_TEST_OPENAI_LLAMACPP").is_some_and(|value| value != "0")
@@ -105,18 +105,20 @@ async fn llamacpp_streams_real_inference() -> anyhow::Result<()> {
     }),
   )?;
   let system_msg = ChatMessage {
-    role: Role::System,
+    role: "system".to_string(),
     content: Some(
       "You are a helpful assistant that does what the user says.".to_string(),
     ),
     reasoning: None,
-    tool_call: None,
+    tool_calls: Vec::new(),
+    tool_call_id: None,
   };
   let user_msg = ChatMessage {
-    role: Role::User,
+    role: "user".to_string(),
     content: Some("Reply with exactly the single word: 'pong'.".to_string()),
     reasoning: None,
-    tool_call: None,
+    tool_calls: Vec::new(),
+    tool_call_id: None,
   };
   let mut stream = entry
     .inner()

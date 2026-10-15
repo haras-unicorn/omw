@@ -984,7 +984,7 @@ mod tests {
     Event::ChatDelta(ChatDelta {
       content: Some(content.to_string()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     })
@@ -1350,6 +1350,7 @@ mod tests {
       arguments: "{}".to_string(),
       content: "sunny".to_string(),
       structured_content: None,
+      is_error: false,
     }))];
     assert_check(
       "alice",

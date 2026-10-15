@@ -88,3 +88,9 @@ ignoreWords:
   - snake
   - ints
   - mypy
+  - MRTR
+  - ttl
+  - workstream
+  - workstreams
+  - idempotent
+  - dumpable

@@ -3,7 +3,6 @@
 //! Cancellation is by dropping the returned stream: dropping it drops the
 //! in-flight `reqwest` response and closes the connection.
 
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -15,7 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{ChatDelta, ChatMessage, Provider, Role, ToolCall, Usage};
+use super::{ChatDelta, ChatMessage, Provider, ToolCallDelta};
 use crate::secret::Secret;
 use crate::tooling::Tool;
 
@@ -223,29 +222,32 @@ fn to_wire_tool(tool: &Tool) -> serde_json::Value {
 }
 
 fn to_wire_message(msg: &ChatMessage) -> serde_json::Value {
-  let role = match msg.role {
-    Role::System => "system",
-    Role::User => "user",
-    Role::Assistant => "assistant",
-    Role::Tool => "tool",
-  };
-  let mut m = serde_json::json!({ "role": role });
+  let mut m = serde_json::json!({ "role": msg.role });
   if let Some(content) = &msg.content {
     m["content"] = serde_json::Value::String(content.clone());
   }
   if let Some(reasoning) = &msg.reasoning {
     m["reasoning"] = serde_json::Value::String(reasoning.clone());
   }
-  if let Some(tool_call) = &msg.tool_call {
-    let tc = serde_json::json!({
-        "id": tool_call.id,
-        "type": "function",
-        "function": {
-            "name": tool_call.name,
-            "arguments": tool_call.arguments,
-        },
-    });
-    m["tool_calls"] = serde_json::json!([tc]);
+  if !msg.tool_calls.is_empty() {
+    let calls = msg
+      .tool_calls
+      .iter()
+      .map(|tool_call| {
+        serde_json::json!({
+            "id": tool_call.id,
+            "type": "function",
+            "function": {
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+            },
+        })
+      })
+      .collect::<Vec<_>>();
+    m["tool_calls"] = serde_json::Value::Array(calls);
+  }
+  if let Some(tool_call_id) = &msg.tool_call_id {
+    m["tool_call_id"] = serde_json::Value::String(tool_call_id.clone());
   }
   m
 }
@@ -255,19 +257,10 @@ fn to_wire_message(msg: &ChatMessage) -> serde_json::Value {
 struct WireChunk {
   #[serde(default)]
   choices: Vec<WireChoice>,
+  /// The wire's token accounting, kept as opaque JSON so every provider's
+  /// shape (including a growing `*_tokens_details` breakdown) passes through.
   #[serde(default)]
-  usage: Option<WireUsage>,
-}
-
-/// Token accounting as the wire reports it.
-#[derive(Debug, Deserialize)]
-struct WireUsage {
-  #[serde(default)]
-  prompt_tokens: Option<u64>,
-  #[serde(default)]
-  completion_tokens: Option<u64>,
-  #[serde(default)]
-  total_tokens: Option<u64>,
+  usage: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,14 +298,12 @@ struct WireFunction {
   arguments: Option<String>,
 }
 
-/// Decodes SSE `data:` lines into [`ChatDelta`]s, reassembling tool calls
-/// (whose `arguments` may be fragmented across many chunks) per tool index.
+/// Decodes SSE `data:` lines into [`ChatDelta`]s, surfacing each chunk's
+/// tool-call fragments verbatim (tagged with their index) so consumers
+/// reassemble parallel calls themselves.
 struct SseDeltas<S> {
   inner: S,
   buffer: String,
-  /// Accumulated tool-call fragments, keyed by tool index. `BTreeMap` keeps
-  /// iteration order deterministic (lowest index first) across chunks.
-  tool_calls: BTreeMap<u64, (String, String, String)>,
 }
 
 impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
@@ -320,7 +311,6 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
     Self {
       inner,
       buffer: String::new(),
-      tool_calls: BTreeMap::new(),
     }
   }
 
@@ -333,99 +323,45 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
   }
 
   fn decode_chunk(&mut self, chunk: &WireChunk) -> Option<ChatDelta> {
-    let usage = chunk.usage.as_ref().map(to_usage);
+    let usage = chunk.usage.as_ref().map(serde_json::Value::to_string);
     let Some(choice) = chunk.choices.first() else {
       // A usage-only trailing chunk carries no choices.
       return usage.map(|usage| ChatDelta {
         content: None,
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
         finish_reason: None,
         usage: Some(usage),
       });
     };
     let content = choice.delta.content.clone();
     let reasoning = choice.delta.reasoning.clone();
-    let mut tool_call = None;
-
-    for tc in &choice.delta.tool_calls {
-      let index = tc.index.unwrap_or(0);
-      let entry = self.tool_calls.entry(index).or_insert_with(|| {
-        (
-          tc.id.clone().unwrap_or_default(),
-          tc.function
-            .as_ref()
-            .and_then(|f| f.name.clone())
-            .unwrap_or_default(),
-          String::new(),
-        )
-      });
-      if let Some(name) = tc.function.as_ref().and_then(|f| f.name.clone()) {
-        entry.1 = name;
-      }
-      if let Some(args) = tc.function.as_ref().and_then(|f| f.arguments.clone())
-      {
-        entry.2.push_str(&args);
-      }
-    }
-
-    // Surface a partially-reassembled tool call once its name is known.
-    if tool_call.is_none() {
-      tool_call = self.tool_calls.values().find_map(|(id, name, args)| {
-        if id.is_empty() || name.is_empty() {
-          None
-        } else {
-          Some(ToolCall {
-            id: id.clone(),
-            name: name.clone(),
-            arguments: args.clone(),
-          })
-        }
-      });
-    }
+    let tool_calls = choice
+      .delta
+      .tool_calls
+      .iter()
+      .map(|tc| ToolCallDelta {
+        index: u32::try_from(tc.index.unwrap_or(0)).unwrap_or(u32::MAX),
+        id: tc.id.clone(),
+        name: tc.function.as_ref().and_then(|f| f.name.clone()),
+        arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+      })
+      .collect::<Vec<_>>();
 
     tracing::trace!(
       content_len = content.as_ref().map_or(0, String::len),
       reasoning_len = reasoning.as_ref().map_or(0, String::len),
-      tool_call = tool_call.as_ref().map(|t| t.name.as_str()),
+      tool_calls = tool_calls.len(),
       finish_reason = choice.finish_reason.as_deref(),
       "openai chat delta"
     );
     Some(ChatDelta {
       content,
       reasoning,
-      tool_call,
+      tool_calls,
       finish_reason: choice.finish_reason.clone(),
       usage,
     })
-  }
-
-  /// Emit a final delta carrying the lowest-index accumulated tool call.
-  fn flush_tool_calls(&mut self) -> Option<ChatDelta> {
-    let (id, name, args) = self.tool_calls.pop_first()?.1;
-    if id.is_empty() && name.is_empty() {
-      return None;
-    }
-    Some(ChatDelta {
-      content: None,
-      reasoning: None,
-      tool_call: Some(ToolCall {
-        id,
-        name,
-        arguments: args,
-      }),
-      finish_reason: None,
-      usage: None,
-    })
-  }
-}
-
-/// Map a wire usage block onto the host [`Usage`].
-fn to_usage(usage: &WireUsage) -> Usage {
-  Usage {
-    prompt_tokens: usage.prompt_tokens,
-    completion_tokens: usage.completion_tokens,
-    total_tokens: usage.total_tokens,
   }
 }
 
@@ -442,12 +378,7 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> Stream for SseDeltas<S> {
         if let Some(data) = line.strip_prefix("data:") {
           let data = data.trim();
           if data == "[DONE]" {
-            let tail = this.flush_tool_calls();
-            return if let Some(ev) = tail {
-              Poll::Ready(Some(Ok(ev)))
-            } else {
-              Poll::Ready(None)
-            };
+            return Poll::Ready(None);
           }
           match serde_json::from_str::<WireChunk>(data) {
             Ok(chunk) => {
@@ -470,8 +401,7 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> Stream for SseDeltas<S> {
           continue;
         }
         Poll::Ready(Some(Err(_))) => {
-          let tail = this.flush_tool_calls();
-          return Poll::Ready(tail.map(Ok));
+          return Poll::Ready(None);
         }
         Poll::Ready(None) => {
           // Drain a final buffered line that ended without a newline.
@@ -489,18 +419,18 @@ impl<S: Stream<Item = Result<String, String>> + Unpin> Stream for SseDeltas<S> {
 impl<S: Stream<Item = Result<String, String>> + Unpin> SseDeltas<S> {
   fn decoded_rest(&mut self) -> Option<ChatDelta> {
     if self.buffer.is_empty() {
-      return self.flush_tool_calls();
+      return None;
     }
     let line = std::mem::take(&mut self.buffer);
     if let Some(data) = line.strip_prefix("data:").map(str::trim) {
       if data == "[DONE]" {
-        return self.flush_tool_calls();
+        return None;
       }
       if let Ok(chunk) = serde_json::from_str::<WireChunk>(data) {
         return self.decode_chunk(&chunk);
       }
     }
-    self.flush_tool_calls()
+    None
   }
 }
 
@@ -509,7 +439,7 @@ mod tests {
   use futures_util::StreamExt;
 
   use super::*;
-  use crate::provider::{Role, ToolCall};
+  use crate::provider::ToolCall;
   use crate::tooling::Tool;
 
   /// Build a single SSE `data:` line, newline-terminated.
@@ -535,20 +465,16 @@ mod tests {
 
   #[test]
   fn to_wire_message_maps_roles() {
-    for (role, expected) in [
-      (Role::System, "system"),
-      (Role::User, "user"),
-      (Role::Assistant, "assistant"),
-      (Role::Tool, "tool"),
-    ] {
+    for role in ["system", "developer", "user", "assistant", "tool"] {
       let msg = ChatMessage {
-        role,
+        role: role.to_string(),
         content: Some("hi".to_string()),
         reasoning: None,
-        tool_call: None,
+        tool_calls: Vec::new(),
+        tool_call_id: None,
       };
       let wire = to_wire_message(&msg);
-      assert_eq!(wire["role"], expected);
+      assert_eq!(wire["role"], role);
       assert_eq!(wire["content"], "hi");
       assert!(wire.get("tool_calls").is_none());
     }
@@ -557,36 +483,61 @@ mod tests {
   #[test]
   fn to_wire_message_without_content_omits_the_key() {
     let msg = ChatMessage {
-      role: Role::User,
+      role: "user".to_string(),
       content: None,
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     };
     let wire = to_wire_message(&msg);
     assert!(wire.get("content").is_none());
   }
 
   #[test]
-  fn to_wire_message_serializes_tool_call() -> anyhow::Result<()> {
+  fn to_wire_message_serializes_parallel_tool_calls() -> anyhow::Result<()> {
     let msg = ChatMessage {
-      role: Role::Assistant,
+      role: "assistant".to_string(),
       content: None,
       reasoning: None,
-      tool_call: Some(ToolCall {
-        id: "call_1".to_string(),
-        name: "get_weather".to_string(),
-        arguments: r#"{"city":"Paris"}"#.to_string(),
-      }),
+      tool_calls: vec![
+        ToolCall {
+          id: "call_1".to_string(),
+          name: "get_weather".to_string(),
+          arguments: r#"{"city":"Paris"}"#.to_string(),
+        },
+        ToolCall {
+          id: "call_2".to_string(),
+          name: "get_time".to_string(),
+          arguments: "{}".to_string(),
+        },
+      ],
+      tool_call_id: None,
     };
     let wire = to_wire_message(&msg);
     let calls = wire["tool_calls"]
       .as_array()
       .ok_or_else(|| anyhow::anyhow!("missing tool_calls"))?;
-    assert_eq!(calls.len(), 1);
+    assert_eq!(calls.len(), 2);
     assert_eq!(calls[0]["type"], "function");
     assert_eq!(calls[0]["id"], "call_1");
     assert_eq!(calls[0]["function"]["name"], "get_weather");
     assert_eq!(calls[0]["function"]["arguments"], r#"{"city":"Paris"}"#);
+    assert_eq!(calls[1]["id"], "call_2");
+    Ok(())
+  }
+
+  #[test]
+  fn to_wire_message_emits_tool_call_id_for_tool_role() -> anyhow::Result<()> {
+    let msg = ChatMessage {
+      role: "tool".to_string(),
+      content: Some("18 degrees".to_string()),
+      reasoning: None,
+      tool_calls: Vec::new(),
+      tool_call_id: Some("call_1".to_string()),
+    };
+    let wire = to_wire_message(&msg);
+    assert_eq!(wire["role"], "tool");
+    assert_eq!(wire["tool_call_id"], "call_1");
     Ok(())
   }
 
@@ -594,9 +545,11 @@ mod tests {
   fn to_wire_tool_serializes_schema_and_optional_description() {
     let tool = Tool {
       name: "weather".to_string(),
+      title: None,
       description: Some("gets the weather".to_string()),
       input_schema: serde_json::json!({ "type": "object" }),
       output_schema: None,
+      annotations: None,
     };
     let wire = to_wire_tool(&tool);
     assert_eq!(wire["type"], "function");
@@ -609,9 +562,11 @@ mod tests {
 
     let bare = Tool {
       name: "bare".to_string(),
+      title: None,
       description: None,
       input_schema: serde_json::json!({}),
       output_schema: None,
+      annotations: None,
     };
     let wire = to_wire_tool(&bare);
     assert!(wire["function"].get("description").is_none());
@@ -631,13 +586,13 @@ mod tests {
     assert_eq!(deltas.len(), 2);
     assert_eq!(deltas[0].content.as_deref(), Some("Hello"));
     assert_eq!(deltas[1].content.as_deref(), Some(", world"));
-    assert!(deltas[0].tool_call.is_none());
+    assert!(deltas[0].tool_calls.is_empty());
     assert_eq!(deltas[0].finish_reason, None);
     Ok(())
   }
 
   #[test]
-  fn sse_done_terminates_and_flushes_pending_tool_call() -> anyhow::Result<()> {
+  fn sse_surfaces_tool_call_fragments_verbatim() -> anyhow::Result<()> {
     let body = format!(
       "{}data: [DONE]\n\n",
       data(
@@ -645,21 +600,19 @@ mod tests {
       )
     );
     let deltas = collect_deltas(&body)?;
-    assert_eq!(deltas.len(), 2);
-    for delta in &deltas {
-      let tc = delta
-        .tool_call
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("missing tool call"))?;
-      assert_eq!(tc.id, "c");
-      assert_eq!(tc.name, "n");
-      assert_eq!(tc.arguments, "{}");
-    }
+    // The fragment is surfaced as-is; the `[DONE]` marker adds nothing.
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].tool_calls.len(), 1);
+    let tc = &deltas[0].tool_calls[0];
+    assert_eq!(tc.index, 0);
+    assert_eq!(tc.id.as_deref(), Some("c"));
+    assert_eq!(tc.name.as_deref(), Some("n"));
+    assert_eq!(tc.arguments.as_deref(), Some("{}"));
     Ok(())
   }
 
   #[test]
-  fn sse_fragmented_tool_call_arguments_reassemble() -> anyhow::Result<()> {
+  fn sse_fragmented_arguments_stay_fragments() -> anyhow::Result<()> {
     let body = format!(
       "{}data: [DONE]\n\n",
       [
@@ -670,24 +623,20 @@ mod tests {
       .concat()
     );
     let deltas = collect_deltas(&body)?;
-    assert_eq!(deltas.len(), 4);
-    let args: Vec<Option<String>> = deltas
+    // No reassembly at the codec level: each chunk surfaces its own fragment.
+    assert_eq!(deltas.len(), 3);
+    let args: Vec<Option<&str>> = deltas
       .iter()
-      .map(|d| d.tool_call.as_ref().map(|t| t.arguments.clone()))
+      .map(|d| d.tool_calls.first().and_then(|t| t.arguments.as_deref()))
       .collect();
-    assert_eq!(args[0].as_deref(), Some(""));
-    assert_eq!(args[1].as_deref(), Some(r#"{"city":"#));
-    assert_eq!(args[2].as_deref(), Some(r#"{"city":"Paris"}"#));
-    // The final `[DONE]` flush carries the fully reassembled arguments.
-    assert_eq!(args[3].as_deref(), Some(r#"{"city":"Paris"}"#));
+    assert_eq!(args[0], Some(""));
+    assert_eq!(args[1], Some(r#"{"city":"#));
+    assert_eq!(args[2], Some(r#""Paris"}"#));
     Ok(())
   }
 
   #[test]
-  fn sse_multiple_tool_calls_surface_lowest_index_first() -> anyhow::Result<()>
-  {
-    // Index 1 completes before index 0; once both are present, the lowest
-    // index wins (BTreeMap determinism, not HashMap random order).
+  fn sse_surfaces_each_parallel_call_with_its_index() -> anyhow::Result<()> {
     let body = format!(
       "{}data: [DONE]\n\n",
       [
@@ -697,18 +646,11 @@ mod tests {
       .concat()
     );
     let deltas = collect_deltas(&body)?;
-    // In-chunk surfacing picks index 1 while it is the only known call, then
-    // flips to the lowest index once both are present; the `[DONE]` flush and
-    // the end-of-stream flush each pop the lowest remaining index (0, then 1).
-    assert_eq!(deltas.len(), 4);
-    let ids: Vec<Option<String>> = deltas
-      .iter()
-      .map(|d| d.tool_call.as_ref().map(|t| t.id.clone()))
-      .collect();
-    assert_eq!(ids[0].as_deref(), Some("c1"));
-    assert_eq!(ids[1].as_deref(), Some("c0"));
-    assert_eq!(ids[2].as_deref(), Some("c0"));
-    assert_eq!(ids[3].as_deref(), Some("c1"));
+    assert_eq!(deltas.len(), 2);
+    assert_eq!(deltas[0].tool_calls[0].index, 1);
+    assert_eq!(deltas[0].tool_calls[0].id.as_deref(), Some("c1"));
+    assert_eq!(deltas[1].tool_calls[0].index, 0);
+    assert_eq!(deltas[1].tool_calls[0].id.as_deref(), Some("c0"));
     Ok(())
   }
 
@@ -752,9 +694,10 @@ mod tests {
       .usage
       .as_ref()
       .ok_or_else(|| anyhow::anyhow!("missing usage"))?;
-    assert_eq!(usage.prompt_tokens, Some(3));
-    assert_eq!(usage.completion_tokens, Some(5));
-    assert_eq!(usage.total_tokens, Some(8));
+    let usage: serde_json::Value = serde_json::from_str(usage)?;
+    assert_eq!(usage["prompt_tokens"], 3);
+    assert_eq!(usage["completion_tokens"], 5);
+    assert_eq!(usage["total_tokens"], 8);
     Ok(())
   }
 

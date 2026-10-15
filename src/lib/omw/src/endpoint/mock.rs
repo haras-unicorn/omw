@@ -18,7 +18,7 @@ use super::{Endpoint, EndpointInjections, Factory};
 use crate::host::bus::{Injection, MessageBus};
 use crate::host::endpoint::{EndpointRegistry, Outbound, SessionRx};
 use crate::host::trace::TraceEvent;
-use crate::provider::{ChatDelta, ChatMessage, Role};
+use crate::provider::{ChatDelta, ChatMessage};
 use crate::shutdown::Shutdown;
 use crate::testing::After;
 use crate::tooling::Tool;
@@ -42,15 +42,11 @@ fn default_role() -> String {
 impl InboundMessage {
   fn into_chat_message(self) -> ChatMessage {
     ChatMessage {
-      role: match self.role.as_str() {
-        "system" => Role::System,
-        "assistant" => Role::Assistant,
-        "tool" => Role::Tool,
-        _ => Role::User,
-      },
+      role: self.role,
       content: self.content,
       reasoning: self.reasoning,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     }
   }
 }
@@ -363,7 +359,7 @@ mod tests {
     ChatDelta {
       content: content.map(str::to_string),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: finish_reason.map(str::to_string),
       usage: None,
     }

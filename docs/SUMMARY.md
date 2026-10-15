@@ -28,3 +28,4 @@
   - [Docker](./deployment/docker.md)
   - [NixOS module](./deployment/nixos/module.md)
     - [NixOS module options](./deployment/nixos/options.md)
+- [Compliance](./compliance.md)
