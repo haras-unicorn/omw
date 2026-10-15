@@ -145,11 +145,11 @@ mod tests {
     assert_eq!(envelope.id, uuid);
     assert_eq!(
       envelope.event,
-      Event::ResourceUpdated(ResourceContent {
+      Event::ResourceUpdated(vec![ResourceContent {
         uri: "file:///a".to_string(),
         mime_type: Some("text/plain".to_string()),
         content: "hello".to_string(),
-      })
+      }])
     );
     Ok(())
   }
@@ -207,8 +207,11 @@ mod tests {
     let resources = vec![ResourceInfo {
       uri: "file:///a".to_string(),
       name: "a".to_string(),
+      title: None,
       description: None,
       mime_type: None,
+      size: None,
+      annotations: None,
     }];
     let tooling: Arc<dyn Tooling> =
       MockTooling::with_resources(resources.clone());
@@ -247,7 +250,7 @@ mod tests {
       "t",
       &serde_json::json!({
         "resource_content_updates": [
-          { "uri": "file:///a", "content": "x", "pending": true },
+          { "uri": "file:///a", "contents": ["x"], "pending": true },
         ],
       }),
       crate::config::Tunables::default(),

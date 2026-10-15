@@ -9,8 +9,8 @@ second = provider.chat(
   "gpt-test",
   [
     {"role": "user", "content": "use echo"},
-    {"role": "assistant", "tool_call": call},
-    {"role": "tool", "content": result.content[0].text},
+    {"role": "assistant", "tool_calls": [call]},
+    {"role": "tool", "tool_call_id": call.id, "content": result.content[0].text},
   ],
   [],
 )

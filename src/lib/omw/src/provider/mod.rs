@@ -6,6 +6,7 @@
 //! [`ProviderEntry`], which is what the host hands the guest as a `provider`
 //! resource handle.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures_util::StreamExt as _;
@@ -19,16 +20,6 @@ pub(crate) mod mock;
 #[cfg(feature = "provider-openai")]
 mod openai;
 
-/// A single chat participant role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-  System,
-  User,
-  Assistant,
-  Tool,
-}
-
 /// A tool invocation the model asked for.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ToolCall {
@@ -37,24 +28,33 @@ pub struct ToolCall {
   pub arguments: String,
 }
 
+/// One incremental fragment of a streaming tool call, exactly as the provider
+/// emits it. `id` and `name` appear on a call's first fragment; `arguments` is
+/// a raw fragment of the opaque JSON string, to be concatenated across
+/// fragments that share an `index`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ToolCallDelta {
+  pub index: u32,
+  pub id: Option<String>,
+  pub name: Option<String>,
+  pub arguments: Option<String>,
+}
+
 /// A single message in the chat history.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ChatMessage {
-  pub role: Role,
+  /// The sender, as an opaque role string (`"system"`, `"developer"`,
+  /// `"user"`, `"assistant"`, `"tool"`, `"function"`, …).
+  pub role: String,
   pub content: Option<String>,
   /// Reasoning/thinking content the model produced for this message. Sent
   /// back to the provider on assistant messages when present.
   pub reasoning: Option<String>,
-  pub tool_call: Option<ToolCall>,
-}
-
-/// Token accounting for one chat response. Every field is optional because not
-/// every provider reports every count.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Usage {
-  pub prompt_tokens: Option<u64>,
-  pub completion_tokens: Option<u64>,
-  pub total_tokens: Option<u64>,
+  /// The tool calls this message carries (an assistant message may carry
+  /// several in parallel).
+  pub tool_calls: Vec<ToolCall>,
+  /// For a `"tool"` message, the assistant tool call this message answers.
+  pub tool_call_id: Option<String>,
 }
 
 /// A streaming delta of model output.
@@ -63,10 +63,11 @@ pub struct ChatDelta {
   pub content: Option<String>,
   /// Reasoning/thinking content produced by this chunk.
   pub reasoning: Option<String>,
-  pub tool_call: Option<ToolCall>,
+  /// The tool-call fragments this chunk carries, each tagged with its index.
+  pub tool_calls: Vec<ToolCallDelta>,
   pub finish_reason: Option<String>,
-  /// Token accounting reported by this chunk, if any.
-  pub usage: Option<Usage>,
+  /// Token accounting reported by this chunk, as opaque JSON, if any.
+  pub usage: Option<String>,
 }
 
 /// The in-band result of a blocking `chat` call: the concatenated text, the
@@ -78,8 +79,8 @@ pub struct ChatResult {
   pub reasoning: Option<String>,
   pub tool_calls: Vec<ToolCall>,
   pub finish_reason: Option<String>,
-  /// Token accounting for the response, when the provider reported it.
-  pub usage: Option<Usage>,
+  /// Token accounting for the response, as opaque JSON, when reported.
+  pub usage: Option<String>,
 }
 
 /// A configured provider instance: the impl plus its config-derived name and
@@ -157,7 +158,7 @@ pub trait Provider: Send + Sync {
     let mut stream = self.chat_stream(model, messages, tools, params).await?;
     let mut content = String::new();
     let mut reasoning = String::new();
-    let mut tool_calls = Vec::new();
+    let mut tool_calls: BTreeMap<u32, ToolCall> = BTreeMap::new();
     let mut finish_reason = None;
     let mut usage = None;
     while let Some(delta) = stream.next().await {
@@ -168,9 +169,7 @@ pub trait Provider: Send + Sync {
       if let Some(chunk) = delta.reasoning {
         reasoning.push_str(&chunk);
       }
-      if let Some(tc) = delta.tool_call {
-        merge_tool_call(&mut tool_calls, tc);
-      }
+      merge_tool_call_deltas(&mut tool_calls, delta.tool_calls);
       if delta.finish_reason.is_some() {
         finish_reason = delta.finish_reason;
       }
@@ -189,7 +188,7 @@ pub trait Provider: Send + Sync {
       } else {
         Some(reasoning)
       },
-      tool_calls,
+      tool_calls: tool_calls.into_values().collect(),
       finish_reason,
       usage,
     })
@@ -218,20 +217,29 @@ pub trait Provider: Send + Sync {
   }
 }
 
-/// Merge one streaming ToolCall (whose arguments may be fragmented or
-/// repeated across chunks) into the accumulated list, keyed by id in
-/// first-seen order. A delta whose arguments extend the previous ones replaces
-/// them; any other non-empty fragment is appended.
-fn merge_tool_call(tool_calls: &mut Vec<ToolCall>, incoming: ToolCall) {
-  if let Some(existing) = tool_calls.iter_mut().find(|c| c.id == incoming.id) {
-    let args = &incoming.arguments;
-    if args.starts_with(&existing.arguments) {
-      existing.arguments = args.clone();
-    } else if !args.is_empty() {
-      existing.arguments.push_str(args);
+/// Reassemble streamed tool-call fragments into complete calls, keyed by each
+/// fragment's `index` so parallel calls stay distinct. An `id`/`name` lands on
+/// a call's first fragment; `arguments` fragments are concatenated in arrival
+/// order.
+pub(crate) fn merge_tool_call_deltas(
+  calls: &mut BTreeMap<u32, ToolCall>,
+  fragments: Vec<ToolCallDelta>,
+) {
+  for fragment in fragments {
+    let entry = calls.entry(fragment.index).or_insert_with(|| ToolCall {
+      id: String::new(),
+      name: String::new(),
+      arguments: String::new(),
+    });
+    if let Some(id) = fragment.id {
+      entry.id = id;
     }
-  } else {
-    tool_calls.push(incoming);
+    if let Some(name) = fragment.name {
+      entry.name = name;
+    }
+    if let Some(arguments) = fragment.arguments {
+      entry.arguments.push_str(&arguments);
+    }
   }
 }
 

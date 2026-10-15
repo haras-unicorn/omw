@@ -25,7 +25,7 @@ use crate::host::ctx::AgentContext;
 use crate::host::events::Event;
 use crate::host::trace::{CloseReason, SourceKind, TraceEvent};
 use crate::provider::{
-  ChatDelta, ChatMessage, ProviderEntry, Role, ToolCall, Usage,
+  ChatDelta, ChatMessage, ProviderEntry, ToolCall, ToolCallDelta,
 };
 use crate::tooling::{ResourceContent, ResourceInfo, Tool, ToolingEntry};
 
@@ -364,6 +364,7 @@ impl tooling_bindings::HostTooling for Host {
       arguments,
       content,
       structured_content: result.structured_content.map(|v| v.to_string()),
+      is_error: result.is_error,
     })
   }
 
@@ -382,11 +383,33 @@ impl tooling_bindings::HostTooling for Host {
       .map_err(|e| e.to_string())
   }
 
+  fn list_resource_templates(
+    &mut self,
+    self_: Resource<ToolingEntry>,
+  ) -> Result<Vec<tooling_bindings::ResourceTemplate>, String> {
+    let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
+    let tooling = Arc::clone(entry.inner());
+    self
+      .ctx
+      .trace_call("list_resource_templates", serde_json::json!({}));
+    let list = async move { tooling.list_resource_templates().await };
+    self
+      .ctx
+      .block_on_reload(list)?
+      .map(|templates| {
+        templates
+          .into_iter()
+          .map(tooling_bindings::ResourceTemplate::from)
+          .collect()
+      })
+      .map_err(|e| e.to_string())
+  }
+
   fn read_resource(
     &mut self,
     self_: Resource<ToolingEntry>,
     uri: String,
-  ) -> Result<tooling_bindings::ResourceContent, String> {
+  ) -> Result<Vec<tooling_bindings::ResourceContent>, String> {
     let entry = self.table.get(&self_).map_err(|e| e.to_string())?;
     let tooling = Arc::clone(entry.inner());
     self
@@ -396,7 +419,12 @@ impl tooling_bindings::HostTooling for Host {
     self
       .ctx
       .block_on_reload(read)?
-      .map(tooling_bindings::ResourceContent::from)
+      .map(|contents| {
+        contents
+          .into_iter()
+          .map(tooling_bindings::ResourceContent::from)
+          .collect()
+      })
       .map_err(|e| e.to_string())
   }
 
@@ -1000,6 +1028,7 @@ fn out_event(event: Event) -> types_bindings::Event {
         arguments: r.arguments,
         content: r.content,
         structured_content: r.structured_content,
+        is_error: r.is_error,
       })
     }
     Event::ResourceListUpdated(resources) => {
@@ -1007,9 +1036,12 @@ fn out_event(event: Event) -> types_bindings::Event {
         resources.into_iter().map(ResourceInfo::into).collect(),
       )
     }
-    Event::ResourceUpdated(content) => {
-      types_bindings::Event::ResourceUpdated(content.into())
-    }
+    Event::ResourceUpdated(contents) => types_bindings::Event::ResourceUpdated(
+      contents
+        .into_iter()
+        .map(types_bindings::ResourceContent::from)
+        .collect(),
+    ),
     Event::EndpointMessage(m) => {
       types_bindings::Event::EndpointMessage(types_bindings::EndpointMessage {
         session: m.session,
@@ -1029,19 +1061,19 @@ fn out_event(event: Event) -> types_bindings::Event {
 
 fn in_msg(m: provider_bindings::ChatMessage) -> ChatMessage {
   ChatMessage {
-    role: match m.role {
-      provider_bindings::Role::System => Role::System,
-      provider_bindings::Role::User => Role::User,
-      provider_bindings::Role::Assistant => Role::Assistant,
-      provider_bindings::Role::Tool => Role::Tool,
-    },
+    role: m.role,
     content: m.content,
     reasoning: m.reasoning,
-    tool_call: m.tool_call.map(|tc| ToolCall {
-      id: tc.id,
-      name: tc.name,
-      arguments: tc.arguments,
-    }),
+    tool_calls: m
+      .tool_calls
+      .into_iter()
+      .map(|tc| ToolCall {
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+      })
+      .collect(),
+    tool_call_id: m.tool_call_id,
   }
 }
 
@@ -1049,19 +1081,19 @@ fn in_msg(m: provider_bindings::ChatMessage) -> ChatMessage {
 /// endpoint-message event payload.
 fn out_chat_msg(m: ChatMessage) -> provider_bindings::ChatMessage {
   provider_bindings::ChatMessage {
-    role: match m.role {
-      Role::System => provider_bindings::Role::System,
-      Role::User => provider_bindings::Role::User,
-      Role::Assistant => provider_bindings::Role::Assistant,
-      Role::Tool => provider_bindings::Role::Tool,
-    },
+    role: m.role,
     content: m.content,
     reasoning: m.reasoning,
-    tool_call: m.tool_call.map(|tc| provider_bindings::ToolCall {
-      id: tc.id,
-      name: tc.name,
-      arguments: tc.arguments,
-    }),
+    tool_calls: m
+      .tool_calls
+      .into_iter()
+      .map(|tc| provider_bindings::ToolCall {
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+      })
+      .collect(),
+    tool_call_id: m.tool_call_id,
   }
 }
 
@@ -1071,25 +1103,28 @@ fn in_delta(d: types_bindings::ChatDelta) -> ChatDelta {
   ChatDelta {
     content: d.content,
     reasoning: d.reasoning,
-    tool_call: d.tool_call.map(|tc| ToolCall {
-      id: tc.id,
-      name: tc.name,
-      arguments: tc.arguments,
-    }),
+    tool_calls: d.tool_calls.into_iter().map(in_tool_call_delta).collect(),
     finish_reason: d.finish_reason,
-    usage: d.usage.map(in_usage),
+    usage: d.usage,
   }
 }
 
 fn in_tool(t: tooling_bindings::Tool) -> Tool {
   Tool {
     name: t.name,
+    title: t.title,
     description: t.description,
     input_schema: serde_json::from_str(&t.input_schema)
       .unwrap_or(serde_json::Value::Null),
     output_schema: t
       .output_schema
       .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+    annotations: t.annotations.map(|a| crate::tooling::ToolAnnotations {
+      read_only_hint: a.read_only_hint,
+      destructive_hint: a.destructive_hint,
+      idempotent_hint: a.idempotent_hint,
+      open_world_hint: a.open_world_hint,
+    }),
   }
 }
 
@@ -1097,13 +1132,9 @@ fn out_msg(d: ChatDelta) -> types_bindings::ChatDelta {
   types_bindings::ChatDelta {
     content: d.content,
     reasoning: d.reasoning,
-    tool_call: d.tool_call.map(|tc| types_bindings::ToolCall {
-      id: tc.id,
-      name: tc.name,
-      arguments: tc.arguments,
-    }),
+    tool_calls: d.tool_calls.into_iter().map(out_tool_call_delta).collect(),
     finish_reason: d.finish_reason,
-    usage: d.usage.map(out_usage),
+    usage: d.usage,
   }
 }
 
@@ -1115,7 +1146,7 @@ fn out_chat_result(
     reasoning: r.reasoning,
     tool_calls: r.tool_calls.into_iter().map(out_tool_call).collect(),
     finish_reason: r.finish_reason,
-    usage: r.usage.map(out_usage),
+    usage: r.usage,
   }
 }
 
@@ -1140,19 +1171,21 @@ fn out_params(params: Option<serde_json::Value>) -> Option<String> {
   })
 }
 
-fn in_usage(u: types_bindings::Usage) -> Usage {
-  Usage {
-    prompt_tokens: u.prompt_tokens,
-    completion_tokens: u.completion_tokens,
-    total_tokens: u.total_tokens,
+fn in_tool_call_delta(d: types_bindings::ToolCallDelta) -> ToolCallDelta {
+  ToolCallDelta {
+    index: d.index,
+    id: d.id,
+    name: d.name,
+    arguments: d.arguments,
   }
 }
 
-fn out_usage(u: Usage) -> types_bindings::Usage {
-  types_bindings::Usage {
-    prompt_tokens: u.prompt_tokens,
-    completion_tokens: u.completion_tokens,
-    total_tokens: u.total_tokens,
+fn out_tool_call_delta(d: ToolCallDelta) -> types_bindings::ToolCallDelta {
+  types_bindings::ToolCallDelta {
+    index: d.index,
+    id: d.id,
+    name: d.name,
+    arguments: d.arguments,
   }
 }
 
@@ -1168,12 +1201,37 @@ impl From<crate::tooling::Tool> for tooling_bindings::Tool {
   fn from(t: crate::tooling::Tool) -> Self {
     Self {
       name: t.name,
+      title: t.title,
       description: t.description,
       input_schema: serde_json::to_string(&t.input_schema)
         .unwrap_or_else(|_| "null".into()),
       output_schema: t
         .output_schema
         .map(|s| serde_json::to_string(&s).unwrap_or_else(|_| "null".into())),
+      annotations: t.annotations.map(Into::into),
+    }
+  }
+}
+
+impl From<crate::tooling::ToolAnnotations> for types_bindings::ToolAnnotations {
+  fn from(a: crate::tooling::ToolAnnotations) -> Self {
+    Self {
+      read_only_hint: a.read_only_hint,
+      destructive_hint: a.destructive_hint,
+      idempotent_hint: a.idempotent_hint,
+      open_world_hint: a.open_world_hint,
+    }
+  }
+}
+
+impl From<crate::tooling::ResourceAnnotations>
+  for types_bindings::ResourceAnnotations
+{
+  fn from(a: crate::tooling::ResourceAnnotations) -> Self {
+    Self {
+      audience: a.audience,
+      priority: a.priority,
+      last_modified: a.last_modified,
     }
   }
 }
@@ -1183,8 +1241,25 @@ impl From<crate::tooling::ResourceInfo> for tooling_bindings::ResourceInfo {
     Self {
       uri: r.uri,
       name: r.name,
+      title: r.title,
       description: r.description,
       mime_type: r.mime_type,
+      size: r.size,
+      annotations: r.annotations.map(Into::into),
+    }
+  }
+}
+
+impl From<crate::tooling::ResourceTemplate>
+  for tooling_bindings::ResourceTemplate
+{
+  fn from(t: crate::tooling::ResourceTemplate) -> Self {
+    Self {
+      uri_template: t.uri_template,
+      name: t.name,
+      title: t.title,
+      description: t.description,
+      mime_type: t.mime_type,
     }
   }
 }
@@ -1268,7 +1343,7 @@ mod tests {
     let delta = out_msg(ChatDelta {
       content: Some("hi".to_string()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     });
@@ -1304,7 +1379,7 @@ mod tests {
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: None,
           usage: None,
         }),
@@ -1330,7 +1405,7 @@ mod tests {
         out_msg(ChatDelta {
           content: Some("hi".to_string()),
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: None,
           usage: None,
         }),
@@ -1348,7 +1423,7 @@ mod tests {
         out_msg(ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: Some("stop".to_string()),
           usage: None,
         }),
@@ -1370,7 +1445,7 @@ mod tests {
         out_msg(ChatDelta {
           content: None,
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: None,
           usage: None,
         }),
@@ -1380,12 +1455,13 @@ mod tests {
     Ok(())
   }
 
-  fn in_msg_with(role: provider_bindings::Role) -> ChatMessage {
+  fn in_msg_with(role: &str) -> ChatMessage {
     in_msg(provider_bindings::ChatMessage {
-      role,
+      role: role.to_string(),
       content: Some("hi".to_string()),
       reasoning: None,
-      tool_call: None,
+      tool_calls: Vec::new(),
+      tool_call_id: None,
     })
   }
 
@@ -1471,34 +1547,36 @@ mod tests {
   }
 
   #[test]
-  fn in_msg_maps_each_role() {
-    let system = in_msg_with(provider_bindings::Role::System);
-    assert_eq!(system.role, Role::System);
-    let user = in_msg_with(provider_bindings::Role::User);
-    assert_eq!(user.role, Role::User);
-    let assistant = in_msg_with(provider_bindings::Role::Assistant);
-    assert_eq!(assistant.role, Role::Assistant);
-    let tool = in_msg_with(provider_bindings::Role::Tool);
-    assert_eq!(tool.role, Role::Tool);
+  fn in_msg_carries_the_role_string() {
+    let system = in_msg_with("system");
+    assert_eq!(system.role, "system");
+    let user = in_msg_with("developer");
+    assert_eq!(user.role, "developer");
+    let assistant = in_msg_with("assistant");
+    assert_eq!(assistant.role, "assistant");
+    let tool = in_msg_with("tool");
+    assert_eq!(tool.role, "tool");
     assert_eq!(user.content.as_deref(), Some("hi"));
-    assert!(user.tool_call.is_none());
+    assert!(user.tool_calls.is_empty());
   }
 
   #[test]
-  fn in_msg_roundtrips_tool_call() -> anyhow::Result<()> {
+  fn in_msg_roundtrips_tool_calls() -> anyhow::Result<()> {
     let wire_tc = provider_bindings::ToolCall {
       id: "call_1".to_string(),
       name: "get_weather".to_string(),
       arguments: "{}".to_string(),
     };
     let out = in_msg(provider_bindings::ChatMessage {
-      role: provider_bindings::Role::Assistant,
+      role: "assistant".to_string(),
       content: None,
       reasoning: None,
-      tool_call: Some(wire_tc),
+      tool_calls: vec![wire_tc],
+      tool_call_id: None,
     });
     let tc = out
-      .tool_call
+      .tool_calls
+      .first()
       .ok_or_else(|| anyhow::anyhow!("missing tool call"))?;
     assert_eq!(tc.id, "call_1");
     assert_eq!(tc.name, "get_weather");
@@ -1511,29 +1589,27 @@ mod tests {
     let delta = ChatDelta {
       content: Some("x".to_string()),
       reasoning: Some("because".to_string()),
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: Some("stop".to_string()),
-      usage: Some(Usage {
-        prompt_tokens: Some(1),
-        completion_tokens: Some(2),
-        total_tokens: Some(3),
-      }),
+      usage: Some(r#"{"total_tokens":3}"#.to_string()),
     };
     let wire = out_msg(delta);
     assert_eq!(wire.content.as_deref(), Some("x"));
     assert_eq!(wire.reasoning.as_deref(), Some("because"));
     assert_eq!(wire.finish_reason.as_deref(), Some("stop"));
-    assert!(wire.tool_call.is_none());
-    assert_eq!(wire.usage.as_ref().and_then(|u| u.total_tokens), Some(3));
+    assert!(wire.tool_calls.is_empty());
+    assert_eq!(wire.usage.as_deref(), Some(r#"{"total_tokens":3}"#));
   }
 
   #[test]
   fn in_tool_parses_input_schema_and_handles_malformed() {
     let malformed = tooling_bindings::Tool {
       name: "t".to_string(),
+      title: None,
       description: None,
       input_schema: "not json".to_string(),
       output_schema: Some("not json".to_string()),
+      annotations: None,
     };
     let out = in_tool(malformed);
     assert_eq!(out.input_schema, serde_json::Value::Null);
@@ -1541,9 +1617,11 @@ mod tests {
 
     let valid = tooling_bindings::Tool {
       name: "t".to_string(),
+      title: None,
       description: Some("does things".to_string()),
       input_schema: r#"{"type":"object"}"#.to_string(),
       output_schema: Some(r#"{"type":"string"}"#.to_string()),
+      annotations: None,
     };
     let out = in_tool(valid);
     assert_eq!(out.input_schema, serde_json::json!({ "type": "object" }));
@@ -1558,9 +1636,11 @@ mod tests {
   fn tool_into_wire_serializes_input_schema() {
     let tool = Tool {
       name: "t".to_string(),
+      title: None,
       description: None,
       input_schema: serde_json::json!({ "type": "object" }),
       output_schema: Some(serde_json::json!({ "type": "string" })),
+      annotations: None,
     };
     let wire: tooling_bindings::Tool = tool.into();
     assert_eq!(wire.input_schema, r#"{"type":"object"}"#);
@@ -1568,9 +1648,11 @@ mod tests {
 
     let null = Tool {
       name: "n".to_string(),
+      title: None,
       description: None,
       input_schema: serde_json::Value::Null,
       output_schema: None,
+      annotations: None,
     };
     let wire: tooling_bindings::Tool = null.into();
     assert_eq!(wire.input_schema, "null");

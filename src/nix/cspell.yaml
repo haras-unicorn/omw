@@ -34,3 +34,5 @@ ignoreWords:
   - datamodel
   - jsonschema
   - conint
+  - isort
+  - pythonwarnings

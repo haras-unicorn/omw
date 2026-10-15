@@ -28,6 +28,10 @@ pub(crate) fn tooling_get(name: &str) -> Result<Map, Box<EvalAltResult>> {
     method("tooling_read_resource")?.into(),
   );
   m.insert(
+    "list_resource_templates".into(),
+    method("tooling_list_resource_templates")?.into(),
+  );
+  m.insert(
     "subscribe_resource_list".into(),
     method("tooling_subscribe_resource_list")?.into(),
   );
@@ -56,16 +60,7 @@ pub(crate) fn tooling_list_tools(
     .map_err(to_error)?;
   let mut arr = Array::new();
   for t in tools {
-    let mut m = Map::new();
-    m.insert("name".into(), t.name.into());
-    if let Some(desc) = t.description {
-      m.insert("description".into(), desc.into());
-    }
-    m.insert("input_schema".into(), json_to_dynamic(&t.input_schema));
-    if let Some(output_schema) = t.output_schema {
-      m.insert("output_schema".into(), json_to_dynamic(&output_schema));
-    }
-    arr.push(m.into());
+    arr.push(crate::host::tool_to_map(t).into());
   }
   Ok(arr)
 }
@@ -133,33 +128,105 @@ pub(crate) fn tooling_list_resources(
 pub(crate) fn tooling_read_resource(
   handle: Map,
   uri: &str,
-) -> Result<Map, Box<EvalAltResult>> {
+) -> Result<Array, Box<EvalAltResult>> {
   let name = handle_name(&handle)?;
-  let content = tooling::get(&name)
+  let contents = tooling::get(&name)
     .map_err(to_error)?
     .read_resource(uri)
     .map_err(to_error)?;
-  Ok(resource_content_to_map(content))
+  let mut arr = Array::new();
+  for c in contents {
+    arr.push(resource_content_to_map(c).into());
+  }
+  Ok(arr)
+}
+
+pub(crate) fn tooling_list_resource_templates(
+  handle: Map,
+) -> Result<Array, Box<EvalAltResult>> {
+  let name = handle_name(&handle)?;
+  let templates = tooling::get(&name)
+    .map_err(to_error)?
+    .list_resource_templates()
+    .map_err(to_error)?;
+  let mut arr = Array::new();
+  for t in templates {
+    arr.push(resource_template_to_map(t).into());
+  }
+  Ok(arr)
 }
 
 /// Map one `types::ResourceInfo` into a rhai map so scripts can read `uri`,
-/// `name`, `description`, and `mime_type` off a resource.
+/// `name`, `title`, `description`, `mime_type`, `size` and `annotations` off
+/// a resource.
 pub(crate) fn resource_to_map(r: types::ResourceInfo) -> Map {
   let mut m = Map::new();
   m.insert("uri".into(), r.uri.into());
   m.insert("name".into(), r.name.into());
+  if let Some(title) = r.title {
+    m.insert("title".into(), title.into());
+  }
   if let Some(desc) = r.description {
     m.insert("description".into(), desc.into());
   }
   if let Some(mime) = r.mime_type {
     m.insert("mime_type".into(), mime.into());
   }
+  if let Some(size) = r.size.and_then(|s| i64::try_from(s).ok()) {
+    m.insert("size".into(), size.into());
+  }
+  if let Some(annotations) = r.annotations {
+    m.insert(
+      "annotations".into(),
+      resource_annotations_to_map(annotations).into(),
+    );
+  }
+  m
+}
+
+/// Map `types::ResourceAnnotations` into a rhai map with `audience`,
+/// `priority` and `last_modified`.
+pub(crate) fn resource_annotations_to_map(
+  a: types::ResourceAnnotations,
+) -> Map {
+  let mut m = Map::new();
+  let mut audience = Array::new();
+  for role in a.audience {
+    audience.push(role.into());
+  }
+  m.insert("audience".into(), audience.into());
+  if let Some(priority) = a.priority {
+    m.insert("priority".into(), priority.into());
+  }
+  if let Some(last_modified) = a.last_modified {
+    m.insert("last_modified".into(), last_modified.into());
+  }
+  m
+}
+
+/// Map one `types::ResourceTemplate` into a rhai map so scripts can read
+/// `uri_template`, `name`, `title`, `description` and `mime_type` off a
+/// resource template.
+pub(crate) fn resource_template_to_map(t: types::ResourceTemplate) -> Map {
+  let mut m = Map::new();
+  m.insert("uri_template".into(), t.uri_template.into());
+  m.insert("name".into(), t.name.into());
+  if let Some(title) = t.title {
+    m.insert("title".into(), title.into());
+  }
+  if let Some(desc) = t.description {
+    m.insert("description".into(), desc.into());
+  }
+  if let Some(mime) = t.mime_type {
+    m.insert("mime_type".into(), mime.into());
+  }
   m
 }
 
 /// Map one `types::ToolResult` into a rhai map so scripts can read `name`,
-/// `arguments`, `content` and `structured_content` off a tool-call result.
-/// `arguments`/`content`/`structured_content` are parsed as JSON when possible.
+/// `arguments`, `content`, `structured_content` and `is_error` off a tool-call
+/// result. `arguments`/`content`/`structured_content` are parsed as JSON when
+/// possible.
 pub(crate) fn tool_result_to_map(r: types::ToolResult) -> Map {
   let mut m = Map::new();
   m.insert("name".into(), r.name.into());
@@ -168,6 +235,7 @@ pub(crate) fn tool_result_to_map(r: types::ToolResult) -> Map {
   if let Some(structured) = r.structured_content {
     m.insert("structured_content".into(), json_to_dynamic(&structured));
   }
+  m.insert("is_error".into(), r.is_error.into());
   m
 }
 
@@ -191,31 +259,7 @@ pub(crate) fn chat_result_to_map(r: types::ChatResult) -> Map {
     m.insert("finish_reason".into(), finish_reason.into());
   }
   if let Some(usage) = r.usage {
-    m.insert("usage".into(), usage_to_map(usage).into());
-  }
-  m
-}
-
-/// Map a `types::Usage` into a rhai map of token counts.
-pub(crate) fn usage_to_map(usage: types::Usage) -> Map {
-  let mut m = Map::new();
-  if let Some(prompt) = usage.prompt_tokens {
-    m.insert(
-      "prompt_tokens".into(),
-      i64::try_from(prompt).unwrap_or(i64::MAX).into(),
-    );
-  }
-  if let Some(completion) = usage.completion_tokens {
-    m.insert(
-      "completion_tokens".into(),
-      i64::try_from(completion).unwrap_or(i64::MAX).into(),
-    );
-  }
-  if let Some(total) = usage.total_tokens {
-    m.insert(
-      "total_tokens".into(),
-      i64::try_from(total).unwrap_or(i64::MAX).into(),
-    );
+    m.insert("usage".into(), json_to_dynamic(&usage));
   }
   m
 }

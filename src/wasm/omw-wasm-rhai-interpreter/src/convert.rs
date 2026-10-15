@@ -1,6 +1,6 @@
 use rhai_rt::{Array, Dynamic, EvalAltResult, FnPtr, Map, Position};
 
-use crate::omw::omw::provider;
+use crate::omw::omw::{provider, types};
 
 /// A method function pointer stored on a handle map.
 pub(crate) fn method(name: &str) -> Result<FnPtr, Box<EvalAltResult>> {
@@ -31,44 +31,54 @@ pub(crate) fn msg_from_dynamic(
   let reasoning = map
     .get("reasoning")
     .and_then(|r| r.clone().try_cast::<String>());
-  let role_enum = match role.as_str() {
-    "system" => provider::Role::System,
-    "assistant" => provider::Role::Assistant,
-    "tool" => provider::Role::Tool,
-    _ => provider::Role::User,
+  let tool_calls = match map.get("tool_calls") {
+    Some(value) => tool_calls_from_dynamic(value.clone())?,
+    None => Vec::new(),
   };
-  let tool_call = match map.get("tool_call") {
-    Some(tc) => {
-      let tc = tc
-        .clone()
-        .try_cast::<Map>()
-        .ok_or_else(|| "tool_call must be a map".to_string())?;
-      let id = tc
-        .get("id")
-        .and_then(|v| v.clone().try_cast::<String>())
-        .ok_or_else(|| "tool_call missing id".to_string())?;
-      let name = tc
-        .get("name")
-        .and_then(|v| v.clone().try_cast::<String>())
-        .ok_or_else(|| "tool_call missing name".to_string())?;
-      let arguments =
-        tc.get("arguments")
-          .map(arguments_to_json)
-          .transpose()?
-          .ok_or_else(|| "tool_call missing arguments".to_string())?;
-      Some(provider::ToolCall {
-        id,
-        name,
-        arguments,
-      })
-    }
-    None => None,
-  };
+  let tool_call_id = map
+    .get("tool_call_id")
+    .and_then(|v| v.clone().try_cast::<String>());
   Ok(provider::ChatMessage {
-    role: role_enum,
+    role,
     content,
     reasoning,
-    tool_call,
+    tool_calls,
+    tool_call_id,
+  })
+}
+
+fn tool_calls_from_dynamic(
+  value: Dynamic,
+) -> Result<Vec<provider::ToolCall>, String> {
+  let arr = value
+    .try_cast::<Array>()
+    .ok_or_else(|| "tool_calls must be an array".to_string())?;
+  arr.into_iter().map(tool_call_from_dynamic).collect()
+}
+
+fn tool_call_from_dynamic(
+  value: Dynamic,
+) -> Result<provider::ToolCall, String> {
+  let tc = value
+    .try_cast::<Map>()
+    .ok_or_else(|| "tool_call must be a map".to_string())?;
+  let id = tc
+    .get("id")
+    .and_then(|v| v.clone().try_cast::<String>())
+    .ok_or_else(|| "tool_call missing id".to_string())?;
+  let name = tc
+    .get("name")
+    .and_then(|v| v.clone().try_cast::<String>())
+    .ok_or_else(|| "tool_call missing name".to_string())?;
+  let arguments = tc
+    .get("arguments")
+    .map(arguments_to_json)
+    .transpose()?
+    .ok_or_else(|| "tool_call missing arguments".to_string())?;
+  Ok(provider::ToolCall {
+    id,
+    name,
+    arguments,
   })
 }
 
@@ -80,6 +90,9 @@ pub(crate) fn tool_from_dynamic(d: Dynamic) -> Result<provider::Tool, String> {
     .get("name")
     .and_then(|n| n.clone().try_cast::<String>())
     .ok_or_else(|| "tool missing name".to_string())?;
+  let title = map
+    .get("title")
+    .and_then(|t| t.clone().try_cast::<String>());
   let description = map
     .get("description")
     .and_then(|d| d.clone().try_cast::<String>());
@@ -91,11 +104,43 @@ pub(crate) fn tool_from_dynamic(d: Dynamic) -> Result<provider::Tool, String> {
     Some(schema) => Some(arguments_to_json(schema)?),
     None => None,
   };
+  let annotations = match map.get("annotations") {
+    Some(value) => Some(tool_annotations_from_dynamic(value.clone())?),
+    None => None,
+  };
   Ok(provider::Tool {
     name,
+    title,
     description,
     input_schema,
     output_schema,
+    annotations,
+  })
+}
+
+fn tool_annotations_from_dynamic(
+  value: Dynamic,
+) -> Result<types::ToolAnnotations, String> {
+  let map = value
+    .try_cast::<Map>()
+    .ok_or_else(|| "tool annotations must be a map".to_string())?;
+  let read_only_hint = map
+    .get("read_only_hint")
+    .and_then(|v| v.clone().try_cast::<bool>());
+  let destructive_hint = map
+    .get("destructive_hint")
+    .and_then(|v| v.clone().try_cast::<bool>());
+  let idempotent_hint = map
+    .get("idempotent_hint")
+    .and_then(|v| v.clone().try_cast::<bool>());
+  let open_world_hint = map
+    .get("open_world_hint")
+    .and_then(|v| v.clone().try_cast::<bool>());
+  Ok(types::ToolAnnotations {
+    read_only_hint,
+    destructive_hint,
+    idempotent_hint,
+    open_world_hint,
   })
 }
 

@@ -63,9 +63,11 @@ impl Tooling for EchoTooling {
   async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
     Ok(vec![Tool {
       name: "echo".to_string(),
+      title: None,
       description: Some("Echoes the canned value.".to_string()),
       input_schema: serde_json::json!({ "type": "object" }),
       output_schema: None,
+      annotations: None,
     }])
   }
 
@@ -81,6 +83,7 @@ impl Tooling for EchoTooling {
     Ok(ToolCallResult {
       content: serde_json::json!([{ "type": "text", "text": self.value }]),
       structured_content: None,
+      is_error: false,
     })
   }
 
@@ -88,7 +91,10 @@ impl Tooling for EchoTooling {
     Ok(Vec::new())
   }
 
-  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
+  async fn read_resource(
+    &self,
+    uri: &str,
+  ) -> anyhow::Result<Vec<ResourceContent>> {
     anyhow::bail!("echo has no content for resource {uri:?}")
   }
 

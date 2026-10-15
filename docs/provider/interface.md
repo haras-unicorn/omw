@@ -50,8 +50,12 @@ carries it explicitly:
   `usage` field (many providers report token counts only on the final chunk).
 - `chat-result` concatenates `reasoning` and carries the response's `usage`.
 
-`usage` reports `prompt-tokens`, `completion-tokens`, and `total-tokens`, each
-optional because not every provider reports every count.
+`usage` is an **opaque JSON string** in the contract and the library: the
+provider passes whatever the wire reported straight through, without parsing it,
+and the interpreters and the Rust guest SDK parse it into a typed shape. The
+common shape is `prompt_tokens`, `completion_tokens`, and `total_tokens`, each
+optional and often joined by provider-specific `*_tokens_details`; a brain reads
+exactly the keys its provider sends.
 
 ## The streaming contract
 
@@ -63,6 +67,13 @@ host bridge at once:
 - **Consume in the inbox.** The pump delivers each chunk as a `chat-delta`
   event, then a `chat-end` event, all tagged with the returned UUID. The brain
   collects them with `recv`/`try-recv`.
+
+The deltas are wire-faithful for tool calls: a provider does not reassemble
+them. Each `chat-delta` carries `tool-calls`, a list of raw fragments shaped
+`{ index, id?, name?, arguments? }`, exactly as the wire emitted them. `id` and
+`name` arrive on a call's first fragment and `arguments` is a raw fragment of
+the opaque JSON string, to be concatenated across the fragments that share an
+`index`. A consumer groups fragments by `index` to reconstruct complete calls.
 
 Two contracts matter when writing or using a provider implementation:
 
@@ -79,4 +90,6 @@ conversation, but collects every delta to completion itself, and returns the
 accumulated result instead of delivering events. A brain that wants a simple
 round-trip without stream bookkeeping can use `chat` and read
 `content`/`reasoning`/`tool_calls`/`finish_reason`/`usage` off the returned
-[`chat-result`].
+[`chat-result`]. Because it is inherently a full result, `chat` reassembles the
+streamed tool-call fragments — grouping them by `index` and concatenating
+`arguments` — so `chat-result.tool_calls` holds complete calls.

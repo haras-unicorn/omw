@@ -59,9 +59,9 @@ the WIT interfaces to the script:
   defaults.
 - `omw.tooling.get(name)` — returns a tooling handle object whose `listTools`,
   `callTool`, `isOpen`, `cancel`, `callToolBlocking`, `listResources`,
-  `readResource`, `subscribeResourceList`, `subscribeResource`,
-  `unsubscribeResourceList`, `unsubscribeResource`, and `kind` entries are
-  methods.
+  `readResource`, `listResourceTemplates`, `subscribeResourceList`,
+  `subscribeResource`, `unsubscribeResourceList`, `unsubscribeResource`, and
+  `kind` entries are methods.
 - `omw.host.*` — the host helpers: `log`, `timeNow`, `timeFormat`, `waitUntil`,
   `waitFor`, `waitCron`, `cancelTimer`, `subscribeAgent`, `unsubscribeAgent`,
   `subscribeLifecycle`, `unsubscribeLifecycle`, `subscribeEndpoint`,
@@ -130,20 +130,23 @@ Events come back as objects shaped `{ id, kind, payload }`:
   `tool-result`, `resource-list-updated`, `resource-updated`,
   `endpoint-message`, `endpoint-session-end`;
 - `payload` — the text for `message`/`error`, an object for `chat-delta` (with
-  `content`, `reasoning`, `toolCall` `{ id, name, arguments }`, `finishReason`,
-  and `usage` `{ promptTokens?, completionTokens?, totalTokens? }`), an object
-  for `tool-result` (`{ name, arguments, content, structuredContent? }`), a list
-  of resource objects (`{ uri, name, description?, mimeType? }`) for
-  `resource-list-updated`, a resource-content object
+  `content`, `reasoning`, `toolCalls` (a list of raw fragments
+  `{ index, id?, name?, arguments? }`), `finishReason`, and `usage`, the token
+  counts parsed from the delta's opaque JSON string), an object for
+  `tool-result` (`{ name, arguments, content, structuredContent?, isError }`), a
+  list of resource objects
+  (`{ uri, name, title?, description?, mimeType?, size?, annotations? }`) for
+  `resource-list-updated`, a list of resource-content objects
   (`{ uri, mimeType?, content }`) for `resource-updated`, an object for
   `endpoint-message` (`{ session, messages, tools, params? }`, with `messages` a
-  list of `{ role, content?, reasoning?, toolCall? }` objects, `tools` a list of
-  `{ name, description?, inputSchema, outputSchema? }`, and `params` the
-  generation params the client submitted), an object for `endpoint-session-end`
-  (`{ session, error? }`), and `null` otherwise. The `content` field holds
-  actual text for textual formats and base64 for anything else — match on
-  `mimeType` to tell which. Decode binary payloads with `omw.host.base64Decode`
-  (which returns an array of bytes) and encode back with
+  list of `{ role, content?, reasoning?, toolCalls, toolCallId? }` objects —
+  `toolCalls` a list of `{ id, name, arguments }` — `tools` a list of
+  `{ name, title?, description?, inputSchema, outputSchema?, annotations? }`,
+  and `params` the generation params the client submitted), an object for
+  `endpoint-session-end` (`{ session, error? }`), and `null` otherwise. The
+  `content` field holds actual text for textual formats and base64 for anything
+  else — match on `mimeType` to tell which. Decode binary payloads with
+  `omw.host.base64Decode` (which returns an array of bytes) and encode back with
   `omw.host.base64Encode`.
 
 Opaque JSON fields are parsed in place: `arguments`, `inputSchema`,
@@ -152,6 +155,10 @@ surface as objects/arrays when the stored text is valid JSON and as the raw
 string otherwise. `content` is the MCP content-block array, so a text result's
 text is `result.content[0].text`. Passing one of these values back into
 `chat`/`chatStream`/`callTool` re-serializes it, so events round-trip.
+
+A `chat-delta`'s tool-call fragments keep their `arguments` as raw strings: each
+is only a partial JSON document. Group the fragments by `index` and concatenate
+their `arguments` before parsing.
 
 The script's completion value becomes its terminal message, stringified as JSON:
 a string result is returned as-is, while arrays and objects surface as `[...]`.

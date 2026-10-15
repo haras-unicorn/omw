@@ -213,7 +213,7 @@ pub fn spawn_pump(
               agent,
               uuid = %uuid,
               content_len = delta.content.as_ref().map_or(0, String::len),
-              tool_call = delta.tool_call.as_ref().map(|t| t.name.as_str()),
+              tool_calls = delta.tool_calls.len(),
               finish_reason = delta.finish_reason.as_deref(),
               "chat delta delivered"
             );

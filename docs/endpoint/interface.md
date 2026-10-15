@@ -50,7 +50,9 @@ with `host.stream-endpoint(session, delta)`, non-blocking; a delta carrying a
 `finish-reason` ends the session. Sessions end exactly once: normally when the
 reply completes, or abruptly on client disconnect or unsubscribe. Each end fires
 exactly one `endpoint-session-end` event into the owning agent's inbox. Errors
-on unknown, foreign-agent, or ended sessions are reported in-band.
+on unknown, foreign-agent, or ended sessions are reported in-band. Inbound
+assistant tool calls (all of them) and each `tool_call_id` are carried through
+to the brain, and streamed tool-call fragments keep their wire `index`.
 
 ## Session lifecycle
 

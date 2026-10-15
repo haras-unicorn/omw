@@ -20,5 +20,5 @@ t.unsubscribeResourceList(subList);
 t.unsubscribeResource(subNote);
 omw.host.log(
   "info",
-  e1.kind + "|" + e2.kind + "|" + e3.kind + "|" + content2.content,
+  e1.kind + "|" + e2.kind + "|" + e3.kind + "|" + content2[0].content,
 );

@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{ChatDelta, ChatMessage, Factory, Provider, ToolCall, Usage};
+use super::{ChatDelta, ChatMessage, Factory, Provider, ToolCallDelta};
 use crate::tooling::Tool;
 
 /// Impl-specific configuration for the mock provider.
@@ -45,9 +45,10 @@ pub struct Turn {
   /// Reasoning/thinking content emitted as its own delta.
   #[serde(default)]
   pub reasoning: Option<String>,
-  /// A tool call, which makes the terminal finish reason `"tool_calls"`.
+  /// Tool calls, emitted as one fragment per call (each tagged with its
+  /// index) and a terminal `"tool_calls"` finish reason.
   #[serde(default)]
-  pub tool_call: Option<ToolCallSpec>,
+  pub tool_calls: Vec<ToolCallSpec>,
   /// Token accounting attached to the terminal delta.
   #[serde(default)]
   pub usage: Option<UsageSpec>,
@@ -284,48 +285,66 @@ impl Provider for MockProvider {
 }
 
 /// Expand one scripted turn into the deltas the mock streams: reasoning first
-/// (when present), then a terminal delta carrying the content or tool call plus
-/// the turn's usage.
+/// (when present), then a terminal delta carrying the content plus one
+/// tool-call fragment per scripted call and the turn's usage.
 fn turn_to_deltas(turn: Option<Turn>) -> Vec<ChatDelta> {
   let Some(turn) = turn else {
     return Vec::new();
   };
-  let usage = turn.usage.as_ref().map(|usage| Usage {
-    prompt_tokens: usage.prompt_tokens,
-    completion_tokens: usage.completion_tokens,
-    total_tokens: usage.total_tokens,
-  });
+  let usage = turn.usage.as_ref().map(usage_to_json);
   let mut deltas = Vec::new();
   if let Some(reasoning) = turn.reasoning {
     deltas.push(ChatDelta {
       content: None,
       reasoning: Some(reasoning),
-      tool_call: None,
+      tool_calls: Vec::new(),
       finish_reason: None,
       usage: None,
     });
   }
-  match turn.tool_call {
-    Some(tool_call) => deltas.push(ChatDelta {
-      content: turn.content,
-      reasoning: None,
-      tool_call: Some(ToolCall {
-        id: tool_call.id,
-        name: tool_call.name,
-        arguments: tool_call.arguments,
-      }),
-      finish_reason: Some("tool_calls".to_string()),
-      usage,
-    }),
-    None => deltas.push(ChatDelta {
-      content: turn.content,
-      reasoning: None,
-      tool_call: None,
-      finish_reason: Some("stop".to_string()),
-      usage,
-    }),
-  }
+  let tool_calls = turn
+    .tool_calls
+    .iter()
+    .enumerate()
+    .map(|(index, spec)| ToolCallDelta {
+      index: u32::try_from(index).unwrap_or(u32::MAX),
+      id: Some(spec.id.clone()),
+      name: Some(spec.name.clone()),
+      arguments: Some(spec.arguments.clone()),
+    })
+    .collect::<Vec<_>>();
+  let finish_reason = if tool_calls.is_empty() {
+    "stop"
+  } else {
+    "tool_calls"
+  };
+  deltas.push(ChatDelta {
+    content: turn.content,
+    reasoning: None,
+    tool_calls,
+    finish_reason: Some(finish_reason.to_string()),
+    usage,
+  });
   deltas
+}
+
+/// Serialize a turn's scripted token counts as the opaque JSON string a delta
+/// carries, omitting absent counts.
+fn usage_to_json(usage: &UsageSpec) -> String {
+  let mut map = serde_json::Map::new();
+  if let Some(prompt) = usage.prompt_tokens {
+    map.insert("prompt_tokens".into(), serde_json::Value::from(prompt));
+  }
+  if let Some(completion) = usage.completion_tokens {
+    map.insert(
+      "completion_tokens".into(),
+      serde_json::Value::from(completion),
+    );
+  }
+  if let Some(total) = usage.total_tokens {
+    map.insert("total_tokens".into(), serde_json::Value::from(total));
+  }
+  serde_json::Value::Object(map).to_string()
 }
 
 #[cfg(test)]
@@ -339,7 +358,7 @@ mod tests {
       &serde_json::json!({
         "turns": [
           { "content": "one" },
-          { "tool_call": { "id": "c1", "name": "t", "arguments": "{}" } },
+          { "tool_calls": [{ "id": "c1", "name": "t", "arguments": "{}" }] },
         ],
       }),
     )?;
@@ -363,18 +382,22 @@ mod tests {
       &serde_json::json!({
         "turns": [
           {
-            "tool_call": {
-              "id": "c1",
-              "name": "echo",
-              "arguments": "{\"input\":\"hi\"}",
-            },
+            "tool_calls": [
+              {
+                "id": "c1",
+                "name": "echo",
+                "arguments": "{\"input\":\"hi\"}",
+              },
+            ],
           },
           {
-            "tool_call": {
-              "id": "c2",
-              "name": "add",
-              "arguments": { "a": 1, "b": [2, 3] },
-            },
+            "tool_calls": [
+              {
+                "id": "c2",
+                "name": "add",
+                "arguments": { "a": 1, "b": [2, 3] },
+              },
+            ],
           },
         ],
       }),
@@ -410,9 +433,10 @@ mod tests {
       .usage
       .as_ref()
       .ok_or_else(|| anyhow::anyhow!("missing usage"))?;
-    assert_eq!(usage.prompt_tokens, Some(2));
-    assert_eq!(usage.completion_tokens, Some(4));
-    assert_eq!(usage.total_tokens, None);
+    let usage: serde_json::Value = serde_json::from_str(usage)?;
+    assert_eq!(usage["prompt_tokens"], 2);
+    assert_eq!(usage["completion_tokens"], 4);
+    assert!(usage.get("total_tokens").is_none());
 
     let calls = provider.calls().await;
     assert_eq!(calls[0].params.as_ref(), Some(&params));

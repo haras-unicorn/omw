@@ -67,6 +67,7 @@ pub fn spawn_pump(
                 arguments,
                 content,
                 structured_content: result.structured_content.map(|v| v.to_string()),
+                is_error: result.is_error,
               }),
             );
             CloseReason::Ended
@@ -137,6 +138,7 @@ mod tests {
           serde_json::json!([{ "type": "text", "text": "ok" }])
         );
         assert!(result.structured_content.is_none());
+        assert!(!result.is_error);
       }
       other => assert!(false, "unexpected event: {other:?}"),
     }

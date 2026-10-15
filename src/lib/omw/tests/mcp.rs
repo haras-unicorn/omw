@@ -130,3 +130,76 @@ async fn call_tool_without_object_arguments_sends_no_arguments()
   );
   Ok(())
 }
+
+/// A tools-only server that paginates `tools/list` across two pages.
+#[derive(Clone)]
+struct PaginatedServer;
+
+impl ServerHandler for PaginatedServer {
+  fn get_info(&self) -> ServerInfo {
+    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+  }
+
+  async fn list_tools(
+    &self,
+    request: Option<rmcp::model::PaginatedRequestParams>,
+    _context: RequestContext<RoleServer>,
+  ) -> Result<ListToolsResult, McpError> {
+    let page = match request.and_then(|params| params.cursor) {
+      None => serde_json::json!({
+        "tools": [
+          { "name": "one", "description": "first", "inputSchema": { "type": "object" } },
+        ],
+        "nextCursor": "page2",
+      }),
+      Some(cursor) if cursor == "page2" => serde_json::json!({
+        "tools": [
+          { "name": "two", "description": "second", "inputSchema": { "type": "object" } },
+        ],
+      }),
+      Some(other) => {
+        return Err(McpError::invalid_params(
+          format!("unexpected cursor {other:?}"),
+          None,
+        ));
+      }
+    };
+    serde_json::from_value(page)
+      .map_err(|error| McpError::internal_error(error.to_string(), None))
+  }
+}
+
+async fn in_memory_paginated_tooling() -> anyhow::Result<ToolingEntry> {
+  let (client_io, server_io) = tokio::io::duplex(4096);
+  let (client_r, client_w) = tokio::io::split(client_io);
+  let (server_r, server_w) = tokio::io::split(server_io);
+  let _server = tokio::spawn(async move {
+    #[expect(unused_variables, reason = "held alive to keep the server open")]
+    let running =
+      rmcp::service::serve_server(PaginatedServer, (server_r, server_w))
+        .await?;
+    std::future::pending::<()>().await;
+    Ok::<(), anyhow::Error>(())
+  });
+  let running =
+    ().serve((client_r, client_w))
+      .await
+      .map_err(anyhow::Error::msg)?;
+  Ok(ToolingEntry::new(
+    "in-memory-paginated",
+    Arc::new(MCPTooling::new(running)),
+  ))
+}
+
+#[tokio::test]
+async fn list_tools_walks_all_pages() -> anyhow::Result<()> {
+  let entry = in_memory_paginated_tooling().await?;
+  let tools: Vec<OmwTool> = entry.inner().list_tools().await?;
+  let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+  assert_eq!(
+    names,
+    vec!["one", "two"],
+    "every page's tools should be listed"
+  );
+  Ok(())
+}

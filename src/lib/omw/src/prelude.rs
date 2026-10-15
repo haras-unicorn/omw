@@ -23,7 +23,7 @@ pub use crate::host::trace::{
 };
 pub use crate::provider::{
   ChatDelta, ChatMessage, ChatResult, Factory as ProviderFactory, Provider,
-  ProviderEntry, Role, ToolCall,
+  ProviderEntry, ToolCall,
 };
 pub use crate::runtime::{
   Factory as RuntimeFactory, RunOutcome, Runtime, RuntimeEntry,

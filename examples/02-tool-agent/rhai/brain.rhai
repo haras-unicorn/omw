@@ -13,8 +13,8 @@ let second = provider.chat(
   "gpt-test",
   [
     #{ role: "user", content: "use echo" },
-    #{ role: "assistant", tool_call: invocation },
-    #{ role: "tool", content: result.content[0].text },
+    #{ role: "assistant", tool_calls: [invocation] },
+    #{ role: "tool", tool_call_id: invocation.id, content: result.content[0].text },
   ],
   []
 );

@@ -13,7 +13,7 @@ delay_ms = 10
 initial_resource_list = [
   { uri = "mem://notes", name = "notes", mime_type = "text/plain" },
 ]
-initial_resource_contents = { "mem://notes" = "v1" }
+initial_resource_contents = { "mem://notes" = ["v1"] }
 
 # Two full-replacement list updates, each gated on a trace event. The mock logs
 # the trace, so `after` fires once the named call has been observed (even if it
@@ -38,7 +38,7 @@ resource_list_updates = [
 resource_content_updates = [
   {
     uri = "mem://notes",
-    content = "v2",
+    contents = ["v2"],
     after = { kind = "call", op = "read_resource" },
   },
 ]
@@ -62,7 +62,7 @@ events = [
   {
     kind = "inbound",
     event = "resource-updated",
-    payload = { data = { uri = "mem://notes", content = "v2" } },
+    payload = { data = [{ uri = "mem://notes", content = "v2" }] },
   },
   {
     kind = "call",

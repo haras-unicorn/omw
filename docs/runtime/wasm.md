@@ -94,11 +94,22 @@ into `T` (returning `Some(Err(raw))` when it is not JSON for `T`) and
 `host::memory_set_as(key, &value)` JSON-encodes any `Serialize` value. Opaque
 JSON fields on the generated records have `_as<T>()` accessors — for example
 `ToolCall::arguments_as`, `Tool::input_schema_as`, `ToolResult::content_as` /
-`structured_content_as`, and `EndpointMessage::params_as`. The typed handles
-take a `serde_json::Value` directly for JSON inputs (`Provider::chat` /
+`structured_content_as`, and `EndpointMessage::params_as`. The tooling handle
+mirrors the interface: `read_resource` returns a `Vec<ResourceContent>` (a
+single read may yield several), and `list_resource_templates` returns the
+tooling's `ResourceTemplate`s, while `ToolResult` carries an `is_error` flag
+(MCP `isError`), and the `Tool`, `ResourceInfo` and `ResourceTemplate` records
+carry their MCP metadata (`title`, resource `size`, and `annotations`). The
+message and delta records carry the tool-call shapes directly: `ChatMessage` has
+`tool_calls: Vec<ToolCall>` plus an optional `tool_call_id` (with
+`with_tool_call` / `with_tool_call_id` builders), and `ChatDelta` carries
+`tool_calls: Vec<ToolCallDelta>` — raw `{ index, id?, name?, arguments? }`
+fragments to group by `index` — while `usage` stays an opaque JSON string that
+`ChatDelta::usage_as` / `ChatResult::usage_as` parse on demand. The typed
+handles take a `serde_json::Value` directly for JSON inputs (`Provider::chat` /
 `chat_stream`'s `params`, `Tooling::call_tool` / `call_tool_blocking`'s
 `arguments`), so there is no separate string form. The SDK re-exports `serde`
-and `serde_json` so brains can build values with `json!` and derive
+and `serde_json`, so brains can build values with `json!` and derive
 `Deserialize` for the accessors.
 
 ## The engine

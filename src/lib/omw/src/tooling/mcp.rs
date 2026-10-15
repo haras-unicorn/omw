@@ -37,7 +37,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-  Factory, ResourceContent, ResourceInfo, ResourceNotification, Tool,
+  Factory, ResourceAnnotations, ResourceContent, ResourceInfo,
+  ResourceNotification, ResourceTemplate, Tool, ToolAnnotations,
   ToolCallResult, Tooling,
 };
 use crate::config::Tunables;
@@ -244,19 +245,26 @@ impl Tooling for MCPTooling {
   async fn list_tools(&self) -> anyhow::Result<Vec<Tool>> {
     tracing::debug!("mcp tools/list");
     let peer = self.peer().await?;
-    let result = peer
-      .list_tools(None)
+    let tools = peer
+      .list_all_tools()
       .await
       .context("MCP tools/list failed")?;
     let mut out = Vec::new();
-    for t in result.tools {
+    for t in tools {
       out.push(Tool {
         name: t.name.into_owned(),
+        title: t.title,
         description: t.description.map(|d| d.into_owned()),
         input_schema: Value::Object(t.input_schema.as_ref().clone()),
         output_schema: t
           .output_schema
           .map(|s| Value::Object(s.as_ref().clone())),
+        annotations: t.annotations.map(|a| ToolAnnotations {
+          read_only_hint: a.read_only_hint,
+          destructive_hint: a.destructive_hint,
+          idempotent_hint: a.idempotent_hint,
+          open_world_hint: a.open_world_hint,
+        }),
       });
     }
     tracing::debug!(count = out.len(), "mcp tools/list returned");
@@ -284,15 +292,18 @@ impl Tooling for MCPTooling {
     let content = serde_json::to_value(&result.content)
       .context("serializing MCP tool content")?;
     let structured_content = result.structured_content.clone();
+    let is_error = result.is_error.unwrap_or(false);
     tracing::trace!(
       name,
       result_bytes = content.to_string().len(),
       structured = structured_content.is_some(),
+      is_error,
       "mcp tools/call returned"
     );
     Ok(ToolCallResult {
       content,
       structured_content,
+      is_error,
     })
   }
 
@@ -308,54 +319,82 @@ impl Tooling for MCPTooling {
       .map(|r| ResourceInfo {
         uri: r.uri,
         name: r.name,
+        title: r.title,
         description: r.description,
         mime_type: r.mime_type,
+        size: r.size,
+        annotations: r.annotations.map(resource_annotations),
       })
       .collect();
     tracing::debug!(count = resources.len(), "mcp resources/list returned");
     Ok(resources)
   }
 
-  async fn read_resource(&self, uri: &str) -> anyhow::Result<ResourceContent> {
+  async fn list_resource_templates(
+    &self,
+  ) -> anyhow::Result<Vec<ResourceTemplate>> {
+    tracing::debug!("mcp resources/templates/list");
+    let peer = self.peer().await?;
+    let templates = peer
+      .list_all_resource_templates()
+      .await
+      .context("MCP resources/templates/list failed")?;
+    let templates: Vec<ResourceTemplate> = templates
+      .into_iter()
+      .map(|t| ResourceTemplate {
+        uri_template: t.uri_template,
+        name: t.name,
+        title: t.title,
+        description: t.description,
+        mime_type: t.mime_type,
+      })
+      .collect();
+    tracing::debug!(
+      count = templates.len(),
+      "mcp resources/templates/list returned"
+    );
+    Ok(templates)
+  }
+
+  async fn read_resource(
+    &self,
+    uri: &str,
+  ) -> anyhow::Result<Vec<ResourceContent>> {
     tracing::debug!(uri, "mcp resources/read");
     let peer = self.peer().await?;
     let result = peer
       .read_resource(ReadResourceRequestParams::new(uri.to_string()))
       .await
       .context("MCP resources/read failed")?;
-    let mut content = Vec::new();
-    let mut mime_type = None;
-    for c in &result.contents {
-      match c {
+    let contents = result
+      .contents
+      .iter()
+      .filter_map(|c| match c {
         ResourceContents::TextResourceContents {
+          uri,
+          mime_type,
           text,
-          mime_type: mt,
           ..
-        }
-        | ResourceContents::BlobResourceContents {
-          blob: text,
-          mime_type: mt,
+        } => Some(ResourceContent {
+          uri: uri.clone(),
+          mime_type: mime_type.clone(),
+          content: text.clone(),
+        }),
+        ResourceContents::BlobResourceContents {
+          uri,
+          mime_type,
+          blob,
           ..
-        } => {
-          content.push(text.clone());
-          if mime_type.is_none() {
-            mime_type = mt.clone();
-          }
-        }
-        _ => {}
-      }
-    }
-    let content = content.join("\n");
-    tracing::trace!(
-      uri,
-      content_bytes = content.len(),
-      "mcp resources/read returned"
-    );
-    Ok(ResourceContent {
-      uri: uri.to_string(),
-      mime_type,
-      content,
-    })
+        } => Some(ResourceContent {
+          uri: uri.clone(),
+          mime_type: mime_type.clone(),
+          content: blob.clone(),
+        }),
+        _ => None,
+      })
+      .collect::<Vec<_>>();
+    tracing::trace!(uri, count = contents.len(), "mcp resources/read returned");
+    Ok(contents)
   }
 
   async fn subscribe_resource_list(
@@ -421,6 +460,23 @@ fn resource_stream(
   Box::pin(futures_util::stream::unfold(rx, |mut rx| async move {
     rx.recv().await.map(|item| (item, rx))
   }))
+}
+
+/// Map an rmcp resource `Annotations` onto our [`ResourceAnnotations`].
+fn resource_annotations(a: rmcp::model::Annotations) -> ResourceAnnotations {
+  ResourceAnnotations {
+    audience: a
+      .audience
+      .unwrap_or_default()
+      .into_iter()
+      .map(|role| match role {
+        rmcp::model::Role::User => "user".to_string(),
+        rmcp::model::Role::Assistant => "assistant".to_string(),
+      })
+      .collect(),
+    priority: a.priority.map(f64::from),
+    last_modified: a.last_modified,
+  }
 }
 
 #[cfg(test)]

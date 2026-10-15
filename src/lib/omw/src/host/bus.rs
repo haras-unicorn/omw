@@ -775,10 +775,11 @@ mod tests {
         "gpt-4o",
         "session-1",
         vec![ChatMessage {
-          role: crate::provider::Role::User,
+          role: "user".to_string(),
           content: Some("hi".to_string()),
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
+          tool_call_id: None,
         }],
         Vec::new(),
         None,

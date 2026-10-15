@@ -3,7 +3,8 @@ use boa_engine::{
 };
 
 use crate::convert::{
-  handle_name, js_err, json_or_string, json_string_from_js, str_arg,
+  handle_name, js_err, json_string_from_js, resource_content_to_json,
+  resource_to_json, str_arg, tool_result_to_json, tool_to_json,
   value_from_json,
 };
 
@@ -46,6 +47,12 @@ fn tooling_handle(name: &str, ctx: &mut Context) -> JsResult<JsValue> {
   method(
     &obj,
     ctx,
+    "listResourceTemplates",
+    tooling_list_resource_templates,
+  )?;
+  method(
+    &obj,
+    ctx,
     "subscribeResourceList",
     tooling_subscribe_resource_list,
   )?;
@@ -63,22 +70,6 @@ fn tooling_handle(name: &str, ctx: &mut Context) -> JsResult<JsValue> {
     tooling_unsubscribe_resource,
   )?;
   Ok(handle)
-}
-
-fn tool_to_json(t: crate::omw::omw::types::Tool) -> serde_json::Value {
-  let mut o = serde_json::Map::new();
-  o.insert("name".to_string(), serde_json::Value::String(t.name));
-  if let Some(description) = t.description {
-    o.insert(
-      "description".to_string(),
-      serde_json::Value::String(description),
-    );
-  }
-  o.insert("inputSchema".to_string(), json_or_string(&t.input_schema));
-  if let Some(output_schema) = t.output_schema {
-    o.insert("outputSchema".to_string(), json_or_string(&output_schema));
-  }
-  serde_json::Value::Object(o)
 }
 
 fn tooling_list_tools(
@@ -108,19 +99,6 @@ fn tooling_call_tool(
   let arguments = json_string_from_js(args.get_or_undefined(1), ctx)?;
   let id = t.call_tool(&tool, &arguments).map_err(js_err)?;
   Ok(JsValue::from(js_string!(id.as_str())))
-}
-
-fn tool_result_to_json(
-  r: crate::omw::omw::types::ToolResult,
-) -> serde_json::Value {
-  let mut o = serde_json::Map::new();
-  o.insert("name".to_string(), serde_json::Value::String(r.name));
-  o.insert("arguments".to_string(), json_or_string(&r.arguments));
-  o.insert("content".to_string(), json_or_string(&r.content));
-  if let Some(structured) = r.structured_content {
-    o.insert("structuredContent".to_string(), json_or_string(&structured));
-  }
-  serde_json::Value::Object(o)
 }
 
 fn tooling_call_tool_blocking(
@@ -174,33 +152,27 @@ fn tooling_kind(
   Ok(JsValue::from(js_string!(kind.as_str())))
 }
 
-fn resource_to_json(
-  r: crate::omw::omw::types::ResourceInfo,
+fn resource_template_to_json(
+  t: crate::omw::omw::types::ResourceTemplate,
 ) -> serde_json::Value {
   let mut o = serde_json::Map::new();
-  o.insert("uri".to_string(), serde_json::Value::String(r.uri));
-  o.insert("name".to_string(), serde_json::Value::String(r.name));
-  if let Some(description) = r.description {
+  o.insert(
+    "uriTemplate".to_string(),
+    serde_json::Value::String(t.uri_template),
+  );
+  o.insert("name".to_string(), serde_json::Value::String(t.name));
+  if let Some(title) = t.title {
+    o.insert("title".to_string(), serde_json::Value::String(title));
+  }
+  if let Some(description) = t.description {
     o.insert(
       "description".to_string(),
       serde_json::Value::String(description),
     );
   }
-  if let Some(mime_type) = r.mime_type {
+  if let Some(mime_type) = t.mime_type {
     o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
   }
-  serde_json::Value::Object(o)
-}
-
-fn resource_content_to_json(
-  c: crate::omw::omw::types::ResourceContent,
-) -> serde_json::Value {
-  let mut o = serde_json::Map::new();
-  o.insert("uri".to_string(), serde_json::Value::String(c.uri));
-  if let Some(mime_type) = c.mime_type {
-    o.insert("mimeType".to_string(), serde_json::Value::String(mime_type));
-  }
-  o.insert("content".to_string(), serde_json::Value::String(c.content));
   serde_json::Value::Object(o)
 }
 
@@ -227,11 +199,33 @@ fn tooling_read_resource(
 ) -> JsResult<JsValue> {
   let name = handle_name(this, ctx)?;
   let uri = str_arg(args, 0, "uri")?;
-  let content = crate::omw::omw::tooling::get(&name)
+  let contents = crate::omw::omw::tooling::get(&name)
     .map_err(js_err)?
     .read_resource(&uri)
     .map_err(js_err)?;
-  value_from_json(&resource_content_to_json(content), ctx)
+  let json = serde_json::Value::Array(
+    contents.into_iter().map(resource_content_to_json).collect(),
+  );
+  value_from_json(&json, ctx)
+}
+
+fn tooling_list_resource_templates(
+  this: &JsValue,
+  _args: &[JsValue],
+  ctx: &mut Context,
+) -> JsResult<JsValue> {
+  let name = handle_name(this, ctx)?;
+  let templates = crate::omw::omw::tooling::get(&name)
+    .map_err(js_err)?
+    .list_resource_templates()
+    .map_err(js_err)?;
+  let json = serde_json::Value::Array(
+    templates
+      .into_iter()
+      .map(resource_template_to_json)
+      .collect(),
+  );
+  value_from_json(&json, ctx)
 }
 
 fn tooling_subscribe_resource_list(

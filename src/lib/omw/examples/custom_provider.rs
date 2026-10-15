@@ -84,7 +84,7 @@ impl Provider for EchoProvider {
         Ok(ChatDelta {
           content: Some(content),
           reasoning: None,
-          tool_call: None,
+          tool_calls: Vec::new(),
           finish_reason: None,
           usage: None,
         })
@@ -123,10 +123,11 @@ responses = ["hello from echo"]
     <EchoProvider as omw::provider::Factory>::build("echo", &params)?;
 
   let messages = vec![ChatMessage {
-    role: Role::User,
+    role: "user".to_string(),
     content: Some("say hi".to_string()),
     reasoning: None,
-    tool_call: None,
+    tool_calls: Vec::new(),
+    tool_call_id: None,
   }];
   let result = provider
     .chat("echo-model", messages.clone(), Vec::new(), None)

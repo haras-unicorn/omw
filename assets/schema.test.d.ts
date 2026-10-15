@@ -192,6 +192,10 @@ declare namespace OmwTestConfig {
    * via the `definition` "Tool".
    */
   export interface Tool {
+    /**
+     * Optional behavioral hints the tool declares (MCP `annotations`).
+     */
+    annotations?: ToolAnnotations | null;
     description?: string | null;
     /**
      * JSON Schema for the tool's arguments.
@@ -207,6 +211,23 @@ declare namespace OmwTestConfig {
     output_schema?: {
       [k: string]: unknown;
     };
+    /**
+     * Optional human-readable display title (MCP `title`).
+     */
+    title?: string | null;
+    [k: string]: unknown;
+  }
+  /**
+   * Behavioral hints a tool declares about itself (MCP `ToolAnnotations`).
+   *
+   * This interface was referenced by `Config`'s JSON-Schema
+   * via the `definition` "ToolAnnotations".
+   */
+  export interface ToolAnnotations {
+    destructive_hint?: boolean | null;
+    idempotent_hint?: boolean | null;
+    open_world_hint?: boolean | null;
+    read_only_hint?: boolean | null;
     [k: string]: unknown;
   }
   /**
@@ -276,9 +297,10 @@ declare namespace OmwTestConfig {
      */
     reasoning?: string | null;
     /**
-     * A tool call, which makes the terminal finish reason `"tool_calls"`.
+     * Tool calls, emitted as one fragment per call (each tagged with its
+     * index) and a terminal `"tool_calls"` finish reason.
      */
-    tool_call?: MockToolCallSpec | null;
+    tool_calls?: MockToolCallSpec[];
     /**
      * Token accounting attached to the terminal delta.
      */
@@ -484,10 +506,11 @@ declare namespace OmwTestConfig {
      */
     delay_ms?: number;
     /**
-     * Canned resource content keyed by URI, returned by `read-resource`.
+     * Canned resource contents keyed by URI, returned by `read-resource`. Each
+     * value is the ordered list of content items a read yields.
      */
     initial_resource_contents?: {
-      [k: string]: string;
+      [k: string]: string[];
     };
     /**
      * The resource list `list-resources` starts from.
@@ -503,6 +526,10 @@ declare namespace OmwTestConfig {
      */
     resource_list_updates?: ResourceListUpdate[];
     /**
+     * Resource templates `list-resource-templates` returns.
+     */
+    resource_templates?: ResourceTemplate[];
+    /**
      * Ordered `call-tool` results; consumed one per call and name-verified.
      */
     tool_calls?: ScriptedToolCall[];
@@ -517,10 +544,44 @@ declare namespace OmwTestConfig {
    * via the `definition` "ResourceInfo".
    */
   export interface ResourceInfo {
+    /**
+     * Optional hints about the resource's audience and freshness.
+     */
+    annotations?: ResourceAnnotations | null;
     description?: string | null;
     mime_type?: string | null;
     name: string;
+    /**
+     * Raw content size in bytes, when known.
+     */
+    size?: number | null;
+    /**
+     * Optional human-readable display title (MCP `title`).
+     */
+    title?: string | null;
     uri: string;
+    [k: string]: unknown;
+  }
+  /**
+   * Hints a resource declares about its audience and freshness (MCP resource
+   * `annotations`). Not `Eq`: `priority` is a float.
+   *
+   * This interface was referenced by `Config`'s JSON-Schema
+   * via the `definition` "ResourceAnnotations".
+   */
+  export interface ResourceAnnotations {
+    /**
+     * Intended audience roles; empty means any.
+     */
+    audience: string[];
+    /**
+     * The resource's last-modified time as an ISO 8601 string, when known.
+     */
+    last_modified?: string | null;
+    /**
+     * Relative importance in `[0, 1]`, when the server expresses one.
+     */
+    priority?: number | null;
     [k: string]: unknown;
   }
   /**
@@ -531,7 +592,10 @@ declare namespace OmwTestConfig {
    */
   export interface ResourceContentUpdate {
     after?: After;
-    content: string;
+    /**
+     * The ordered content items the resource holds after this step.
+     */
+    contents: string[];
     /**
      * Yield this error for the step instead of an `Updated`.
      */
@@ -563,6 +627,23 @@ declare namespace OmwTestConfig {
     [k: string]: unknown;
   }
   /**
+   * A parameterized resource (MCP `ResourceTemplate`).
+   *
+   * This interface was referenced by `Config`'s JSON-Schema
+   * via the `definition` "ResourceTemplate".
+   */
+  export interface ResourceTemplate {
+    description?: string | null;
+    mime_type?: string | null;
+    name: string;
+    title?: string | null;
+    /**
+     * An RFC 6570 URI template for constructing resource URIs.
+     */
+    uri_template: string;
+    [k: string]: unknown;
+  }
+  /**
    * One scripted `call-tool` result. `result` is a text convenience that
    * becomes a single MCP text content block; `structured_content` is passed
    * through verbatim.
@@ -576,6 +657,11 @@ declare namespace OmwTestConfig {
      * Fail the call with this error (after the gate and delay).
      */
     error?: string | null;
+    /**
+     * Succeed, but mark the result a tool-execution error (MCP `isError`);
+     * `result` still supplies the content text.
+     */
+    is_error?: boolean;
     name: string;
     /**
      * Never complete: the call stays pending forever (for cancellation tests).

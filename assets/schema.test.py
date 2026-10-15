@@ -53,9 +53,25 @@ class Preopen(BaseModel):
     perms: FsPerms | None = None
 
 
+class ResourceAnnotations(BaseModel):
+    audience: list[str] = Field(
+        ..., description='Intended audience roles; empty means any.'
+    )
+    last_modified: str | None = Field(
+        None,
+        description="The resource's last-modified time as an ISO 8601 string, when known.",
+    )
+    priority: float | None = Field(
+        None,
+        description='Relative importance in `[0, 1]`, when the server expresses one.',
+    )
+
+
 class ResourceContentUpdate(BaseModel):
     after: After | None = None
-    content: str
+    contents: list[str] = Field(
+        ..., description='The ordered content items the resource holds after this step.'
+    )
     error: str | None = Field(
         None, description='Yield this error for the step instead of an `Updated`.'
     )
@@ -67,9 +83,18 @@ class ResourceContentUpdate(BaseModel):
 
 
 class ResourceInfo(BaseModel):
+    annotations: ResourceAnnotations | None = Field(
+        None, description="Optional hints about the resource's audience and freshness."
+    )
     description: str | None = None
     mime_type: str | None = None
     name: str
+    size: conint(ge=0) | None = Field(
+        None, description='Raw content size in bytes, when known.'
+    )
+    title: str | None = Field(
+        None, description='Optional human-readable display title (MCP `title`).'
+    )
     uri: str
 
 
@@ -85,10 +110,24 @@ class ResourceListUpdate(BaseModel):
     resources: list[ResourceInfo]
 
 
+class ResourceTemplate(BaseModel):
+    description: str | None = None
+    mime_type: str | None = None
+    name: str
+    title: str | None = None
+    uri_template: str = Field(
+        ..., description='An RFC 6570 URI template for constructing resource URIs.'
+    )
+
+
 class ScriptedToolCall(BaseModel):
     after: After | None = None
     error: str | None = Field(
         None, description='Fail the call with this error (after the gate and delay).'
+    )
+    is_error: bool | None = Field(
+        False,
+        description='Succeed, but mark the result a tool-execution error (MCP `isError`);\n`result` still supplies the content text.',
     )
     name: str
     pending: bool | None = Field(
@@ -108,14 +147,11 @@ class SessionEnd(BaseModel):
     close: conint(ge=0) | None = None
 
 
-class Tool(BaseModel):
-    description: str | None = None
-    input_schema: Any = Field(..., description="JSON Schema for the tool's arguments.")
-    name: str
-    output_schema: Any | None = Field(
-        None,
-        description="Optional JSON Schema for the tool's structured output (MCP\n`outputSchema`). Absent when the tool declares no output shape.",
-    )
+class ToolAnnotations(BaseModel):
+    destructive_hint: bool | None = None
+    idempotent_hint: bool | None = None
+    open_world_hint: bool | None = None
+    read_only_hint: bool | None = None
 
 
 class Tunables(BaseModel):
@@ -193,34 +229,6 @@ class UsageSpec(BaseModel):
     completion_tokens: conint(ge=0) | None = None
     prompt_tokens: conint(ge=0) | None = None
     total_tokens: conint(ge=0) | None = None
-
-
-class Config2(BaseModel):
-    delay_ms: conint(ge=0) | None = Field(
-        10, description='How long each scripted step waits before firing.'
-    )
-    initial_resource_contents: dict[str, str] | None = Field(
-        {},
-        description='Canned resource content keyed by URI, returned by `read-resource`.',
-    )
-    initial_resource_list: list[ResourceInfo] | None = Field(
-        [],
-        description='The resource list `list-resources` starts from.',
-        validate_default=True,
-    )
-    resource_content_updates: list[ResourceContentUpdate] | None = Field(
-        None,
-        description='Ordered, one-by-one content updates driven by `subscribe-resource`.',
-    )
-    resource_list_updates: list[ResourceListUpdate] | None = Field(
-        None,
-        description='Ordered, full-replacement resource-list updates driven by\n`subscribe-resource-list`.',
-    )
-    tool_calls: list[ScriptedToolCall] | None = Field(
-        None,
-        description='Ordered `call-tool` results; consumed one per call and name-verified.',
-    )
-    tools: list[Tool] | None = Field([], validate_default=True)
 
 
 class Config3(BaseModel):
@@ -306,32 +314,6 @@ class Config6(BaseModel):
     preopens: list[Preopen] | None = None
 
 
-class Request(BaseModel):
-    after: After | None = Field(
-        None,
-        description='Ordering gate: absent or `"start"` fires as soon as the model is\nsubscribed; a `call`/`inbound` pattern waits for a matching trace event.',
-    )
-    messages: list[InboundMessage] | None = None
-    model: str
-    params: Any | None = Field(
-        None,
-        description='Opaque generation params the client submitted (temperature, …).',
-    )
-    session_end: SessionEnd | None = Field(
-        None,
-        description='Opt-in scripted ending: `{ close = N }` ends the session normally after\n`N` received deltas, `{ abort = N }` aborts it. Absent, the mock drains\nsilently as before.',
-    )
-    session_id: str = Field(
-        ...,
-        description='A user-written label for the session, so concurrent sessions can be told\napart. The mock correlates it with the opaque session UUID the host and\nbrain see and records both in the snapshot; it is never asserted or\nmatched. Reusing a label after its session closed is a new session with a\nnew UUID.',
-    )
-    stream: bool | None = Field(
-        False,
-        description='Whether the client asked for SSE. Informational only; the mock drains\nthe same session either way.',
-    )
-    tools: list[Tool] | None = Field([], validate_default=True)
-
-
 class RuntimeImpls1(Config3):
     kind: Literal['wasm']
 
@@ -361,12 +343,21 @@ class RuntimeImpls(
     ]
 
 
-class ToolingImpls1(Config2):
-    kind: Literal['mock']
-
-
-class ToolingImpls(RootModel[dict[str, ToolingImpls1 | ImplConfig]]):
-    root: dict[str, ToolingImpls1 | ImplConfig]
+class Tool(BaseModel):
+    annotations: ToolAnnotations | None = Field(
+        None,
+        description='Optional behavioral hints the tool declares (MCP `annotations`).',
+    )
+    description: str | None = None
+    input_schema: Any = Field(..., description="JSON Schema for the tool's arguments.")
+    name: str
+    output_schema: Any | None = Field(
+        None,
+        description="Optional JSON Schema for the tool's structured output (MCP\n`outputSchema`). Absent when the tool declares no output shape.",
+    )
+    title: str | None = Field(
+        None, description='Optional human-readable display title (MCP `title`).'
+    )
 
 
 class Turn(BaseModel):
@@ -384,9 +375,9 @@ class Turn(BaseModel):
     reasoning: str | None = Field(
         None, description='Reasoning/thinking content emitted as its own delta.'
     )
-    tool_call: MockToolCallSpec | None = Field(
+    tool_calls: list[MockToolCallSpec] | None = Field(
         None,
-        description='A tool call, which makes the terminal finish reason `"tool_calls"`.',
+        description='Tool calls, emitted as one fragment per call (each tagged with its\nindex) and a terminal `"tool_calls"` finish reason.',
     )
     usage: UsageSpec | None = Field(
         None, description='Token accounting attached to the terminal delta.'
@@ -404,6 +395,81 @@ class Config1(BaseModel):
     )
 
 
+class Config2(BaseModel):
+    delay_ms: conint(ge=0) | None = Field(
+        10, description='How long each scripted step waits before firing.'
+    )
+    initial_resource_contents: dict[str, list[str]] | None = Field(
+        {},
+        description='Canned resource contents keyed by URI, returned by `read-resource`. Each\nvalue is the ordered list of content items a read yields.',
+    )
+    initial_resource_list: list[ResourceInfo] | None = Field(
+        [],
+        description='The resource list `list-resources` starts from.',
+        validate_default=True,
+    )
+    resource_content_updates: list[ResourceContentUpdate] | None = Field(
+        None,
+        description='Ordered, one-by-one content updates driven by `subscribe-resource`.',
+    )
+    resource_list_updates: list[ResourceListUpdate] | None = Field(
+        None,
+        description='Ordered, full-replacement resource-list updates driven by\n`subscribe-resource-list`.',
+    )
+    resource_templates: list[ResourceTemplate] | None = Field(
+        [],
+        description='Resource templates `list-resource-templates` returns.',
+        validate_default=True,
+    )
+    tool_calls: list[ScriptedToolCall] | None = Field(
+        None,
+        description='Ordered `call-tool` results; consumed one per call and name-verified.',
+    )
+    tools: list[Tool] | None = Field([], validate_default=True)
+
+
+class ProviderImpls1(Config1):
+    kind: Literal['mock']
+
+
+class ProviderImpls(RootModel[dict[str, ProviderImpls1 | ImplConfig]]):
+    root: dict[str, ProviderImpls1 | ImplConfig]
+
+
+class Request(BaseModel):
+    after: After | None = Field(
+        None,
+        description='Ordering gate: absent or `"start"` fires as soon as the model is\nsubscribed; a `call`/`inbound` pattern waits for a matching trace event.',
+    )
+    messages: list[InboundMessage] | None = None
+    model: str
+    params: Any | None = Field(
+        None,
+        description='Opaque generation params the client submitted (temperature, …).',
+    )
+    session_end: SessionEnd | None = Field(
+        None,
+        description='Opt-in scripted ending: `{ close = N }` ends the session normally after\n`N` received deltas, `{ abort = N }` aborts it. Absent, the mock drains\nsilently as before.',
+    )
+    session_id: str = Field(
+        ...,
+        description='A user-written label for the session, so concurrent sessions can be told\napart. The mock correlates it with the opaque session UUID the host and\nbrain see and records both in the snapshot; it is never asserted or\nmatched. Reusing a label after its session closed is a new session with a\nnew UUID.',
+    )
+    stream: bool | None = Field(
+        False,
+        description='Whether the client asked for SSE. Informational only; the mock drains\nthe same session either way.',
+    )
+    tools: list[Tool] | None = Field([], validate_default=True)
+
+
+class ToolingImpls1(Config2):
+    kind: Literal['mock']
+
+
+class ToolingImpls(RootModel[dict[str, ToolingImpls1 | ImplConfig]]):
+    root: dict[str, ToolingImpls1 | ImplConfig]
+
+
 class Config7(BaseModel):
     requests: list[Request] | None = None
 
@@ -414,14 +480,6 @@ class EndpointImpls1(Config7):
 
 class EndpointImpls(RootModel[EndpointImpls1 | ImplConfig | None]):
     root: EndpointImpls1 | ImplConfig | None
-
-
-class ProviderImpls1(Config1):
-    kind: Literal['mock']
-
-
-class ProviderImpls(RootModel[dict[str, ProviderImpls1 | ImplConfig]]):
-    root: dict[str, ProviderImpls1 | ImplConfig]
 
 
 class Config(BaseModel):

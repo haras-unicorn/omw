@@ -10,7 +10,7 @@ deterministic and inspectable.
 kind = "mock"
 turns = [
   { content = "first reply" },
-  { tool_call = { id = "call-1", name = "echo", arguments = '{"input":"hi"}' } },
+  { tool_calls = [{ id = "call-1", name = "echo", arguments = '{"input":"hi"}' }] },
   { reasoning = "let me think", content = "the answer", usage = { prompt_tokens = 12, completion_tokens = 5 } },
 ]
 models = ["gpt-test"]
@@ -23,10 +23,11 @@ models = ["gpt-test"]
   - `content = "..."` — text; the mock emits it and a terminal `stop` finish
     reason.
   - `reasoning = "..."` — reasoning/thinking text; emitted as its own delta
-    before the content/tool-call delta.
-  - `tool_call = { id, name, arguments }` — a tool call; the mock emits the call
-    and a terminal `tool_calls` finish reason. `arguments` is the raw JSON
-    string the model would have produced. Write it as a TOML string
+    before the content/tool-calls delta.
+  - `tool_calls = [{ id, name, arguments }, ...]` — tool calls; the mock emits
+    one raw fragment per call, each tagged with its `index`, and a terminal
+    `tool_calls` finish reason. `arguments` is the raw JSON string the model
+    would have produced. Write it as a TOML string
     (`arguments = '{"input":"hi"}'`) or, more readably, as the inline JSON value
     (`arguments = { input = "hi" }`); an inline value is stringified when the
     mock is built, so the guest always sees the wire string.
@@ -41,6 +42,10 @@ models = ["gpt-test"]
     chat, so a looping brain keeps working without re-listing the script.
 - `models` — the model names `list-models` returns. Defaults to
   `["mock-model"]`.
+
+Because the provider stream is wire-faithful, the mock surfaces each scripted
+call as a fragment tagged with its `index`; a listed call is emitted whole in a
+single fragment, which is enough for a scripted turn.
 
 A bare `kind = "mock"` with no `turns` emits an empty stream, which is useful
 for tests that only assert the call itself. Because the recorded call includes

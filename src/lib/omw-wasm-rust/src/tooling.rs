@@ -1,7 +1,9 @@
 //! Typed handle over a configured tooling instance plus RAII guards.
 
 use crate::omw::omw::tooling as raw;
-use crate::omw::omw::types::{ResourceContent, ResourceInfo, Tool, ToolResult};
+use crate::omw::omw::types::{
+  ResourceContent, ResourceInfo, ResourceTemplate, Tool, ToolResult,
+};
 use serde_json::Value;
 
 /// JSON-encode tool `arguments`.
@@ -63,9 +65,20 @@ impl Tooling {
     self.inner.list_resources()
   }
 
-  /// Read one resource's current content.
-  pub fn read_resource(&self, uri: &str) -> Result<ResourceContent, String> {
+  /// Read one resource's current contents (a single read may yield
+  /// several).
+  pub fn read_resource(
+    &self,
+    uri: &str,
+  ) -> Result<Vec<ResourceContent>, String> {
     self.inner.read_resource(uri)
+  }
+
+  /// Enumerate every resource template this tooling exposes.
+  pub fn list_resource_templates(
+    &self,
+  ) -> Result<Vec<ResourceTemplate>, String> {
+    self.inner.list_resource_templates()
   }
 
   /// Subscribe to the resource list changing. Dropping the guard
