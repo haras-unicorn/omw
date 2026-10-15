@@ -3916,7 +3916,7 @@ dependencies = [
 
 [[package]]
 name = "omw"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "omw-build"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "brotli",
@@ -3972,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "omw-cli"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3993,7 +3993,7 @@ dependencies = [
 
 [[package]]
 name = "omw-output"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -4006,35 +4006,35 @@ dependencies = [
 
 [[package]]
 name = "omw-runtime-js"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-mock"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-python"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-runtime-rhai"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "omw-build",
 ]
 
 [[package]]
 name = "omw-test"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4095,7 +4095,7 @@ dependencies = [
 
 [[package]]
 name = "omw-wasm-rust"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
